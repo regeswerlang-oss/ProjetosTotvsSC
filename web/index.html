@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projetos · TOTVS SC</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  // Paleta e tipografia oficiais TOTVS (https://marca.totvs.com/)
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          totvs: {
+            blue: '#00DBFF', purple: '#A44DFF', petroleo: '#002233',
+            verde: '#00FFD4', limao: '#D9FF65', laranja: '#FF8900', rosa: '#FF009E',
+            yellow: '#FFB800', black: '#002B33', gray: '#545454',
+            graylight: '#9C9C9C', white: '#ECECEC', beige: '#E6E6E6',
+          },
+        },
+        fontFamily: {
+          totvs: ['TOTVS', 'Inter', 'Segoe UI', 'system-ui', 'sans-serif'],
+        },
+      },
+    },
+  };
+</script>
+<style>
+  /* Fonte oficial TOTVS — só peso Bold, reservada a títulos/destaques */
+  @font-face {
+    font-family: 'TOTVS';
+    src: url('assets/fonte/TOTVS-Bold.ttf') format('truetype');
+    font-weight: 700; font-style: normal; font-display: swap;
+  }
+  :root {
+    --totvs-blue: #00DBFF; --totvs-purple: #A44DFF; --totvs-petroleo: #002233;
+    --totvs-verde: #00FFD4; --totvs-gradient: linear-gradient(135deg, #00DBFF, #A44DFF);
+  }
+  body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; }
+  .font-totvs { font-family: 'TOTVS', 'Inter', sans-serif; font-weight: 700; letter-spacing: -0.01em; }
+
+  .bar-track { background: #e6edf0; height: 0.5rem; border-radius: 999px; overflow: hidden; position: relative; }
+  .bar-fill { height: 100%; border-radius: 999px; }
+  /* Barras de progresso — Executado (Blue) sobre Planejado (Purple claro) */
+  .fill-exec { background: var(--totvs-blue); }
+  .fill-plan { background: #d8bdff; }
+
+  details > summary { list-style: none; cursor: pointer; }
+  details > summary::-webkit-details-marker { display: none; }
+  details > summary .chev { transition: transform 0.15s; display: inline-block; }
+  details[open] > summary .chev { transform: rotate(90deg); }
+
+  /* Grafismo institucional de hexágonos TOTVS — sutil, atrás do conteúdo */
+  .totvs-hex { position: relative; overflow: hidden; }
+  .totvs-hex::after {
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background-image: url('assets/grafismos/hexagonos-3d.svg');
+    background-repeat: no-repeat; background-position: right -40px center;
+    background-size: auto 240%;
+    opacity: 0.10;
+  }
+  .totvs-hex > * { position: relative; z-index: 1; }
+</style>
+</head>
+<body class="bg-totvs-beige text-totvs-petroleo">
+
+<header class="bg-totvs-petroleo text-totvs-white sticky top-0 z-10 shadow-sm totvs-hex">
+  <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+    <div class="flex items-center gap-4">
+      <span id="nav-back" class="hidden cursor-pointer text-totvs-graylight hover:text-totvs-blue text-xl leading-none">←</span>
+      <img src="assets/logos/logo-totvs-branco.svg" alt="TOTVS" class="h-7 w-auto select-none" draggable="false">
+      <div class="border-l border-white/15 pl-4">
+        <h1 class="font-totvs text-lg text-white leading-tight">Gestão de Projetos</h1>
+        <p id="subtitle" class="text-xs text-totvs-graylight mt-0.5">Carregando…</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-4 text-xs">
+      <label class="flex items-center gap-1.5 text-totvs-white/80 cursor-pointer" style="display:none">
+        <input type="checkbox" id="toggle-all" class="rounded accent-totvs-blue">
+        Mostrar todos os clientes
+      </label>
+      <button id="btn-sync" class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base">⟳ Sincronizar API</button>
+      <button id="btn-refresh" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde transition-colors">↻ Atualizar</button>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-6">
+  <!-- VIEW 1: LISTA -->
+  <section id="view-lista">
+    <div id="filtro-bar" class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+      <input id="busca" type="search" placeholder="Buscar projeto, cliente ou coordenador…"
+             class="flex-1 min-w-[280px] px-3 py-2 border border-slate-300 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-totvs-blue/40">
+      <select id="filtro-status" class="px-3 py-2 border border-slate-300 rounded-md bg-white">
+        <option value="">Todos status</option>
+      </select>
+      <select id="filtro-tipo" class="px-3 py-2 border border-slate-300 rounded-md bg-white">
+        <option value="">Todos tipos</option>
+      </select>
+    </div>
+    <div id="resumo" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
+    <div id="grupos" class="space-y-6"></div>
+  </section>
+
+  <!-- VIEW 2: DETALHE -->
+  <section id="view-detalhe" class="hidden">
+    <div id="detalhe-loading" class="text-center py-12 text-slate-400">Carregando projeto…</div>
+    <div id="detalhe-conteudo" class="hidden">
+      <!-- Cabeçalho -->
+      <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+        <div class="flex items-start justify-between flex-wrap gap-3">
+          <div>
+            <p class="text-xs text-totvs-blue uppercase tracking-wide font-semibold" id="d-cliente"></p>
+            <h2 class="text-xl font-totvs text-totvs-petroleo mt-0.5" id="d-titulo"></h2>
+            <p class="text-sm text-slate-600 mt-1" id="d-codigo"></p>
+          </div>
+          <div class="flex flex-col items-end gap-2">
+            <span id="d-status" class="px-3 py-1 rounded-full text-xs font-medium"></span>
+            <p class="text-xs text-slate-500" id="d-contrato"></p>
+          </div>
+        </div>
+        <div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div><p class="text-xs text-slate-500">Coordenador</p><p class="font-medium" id="d-coord"></p></div>
+          <div><p class="text-xs text-slate-500">Coord. Auxiliar</p><p class="font-medium" id="d-coord2"></p></div>
+          <div><p class="text-xs text-slate-500">Vigência</p><p class="font-medium" id="d-vigencia"></p></div>
+          <div><p class="text-xs text-slate-500">Tipo</p><p class="font-medium" id="d-tipo"></p></div>
+        </div>
+      </div>
+
+      <!-- KPIs -->
+      <div id="d-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+
+      <!-- Horas detalhadas -->
+      <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">Apontamentos por tipo</h3>
+        <div id="d-horas" class="space-y-2"></div>
+      </div>
+
+      <!-- Tabs: Cronograma | Por Módulo -->
+      <div class="bg-white rounded-lg border border-slate-200">
+        <div class="flex items-center justify-between px-5 pt-4 border-b border-slate-200">
+          <div class="flex gap-1 -mb-px">
+            <button data-tab="crono"    class="tab-btn px-4 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Cronograma</button>
+            <button data-tab="modulos"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
+            <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
+          </div>
+          <div class="flex items-center gap-2 text-xs pb-2">
+            <button data-act="expand-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Expandir</button>
+            <button data-act="collapse-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Recolher</button>
+          </div>
+        </div>
+
+        <!-- Aba Cronograma (existente) -->
+        <div id="tab-crono" class="p-5">
+          <div id="d-crono-loading" class="text-slate-400 text-sm py-4">Carregando cronograma…</div>
+          <div id="d-crono"></div>
+        </div>
+
+        <!-- Aba Por Módulo (novo) -->
+        <div id="tab-modulos" class="p-5 hidden">
+          <div id="d-modulos-loading" class="text-slate-400 text-sm py-4">Carregando…</div>
+          <div id="d-modulos"></div>
+        </div>
+
+        <!-- Aba Por Etapa (novo) -->
+        <div id="tab-etapas" class="p-5 hidden">
+          <div id="d-etapas-loading" class="text-slate-400 text-sm py-4">Carregando…</div>
+          <div id="d-etapas"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+// ============================================================================
+//  STATE
+// ============================================================================
+const state = {
+  projetos: [],
+  clientes: [],
+  view: 'lista',                       // 'lista' | 'detalhe'
+  selected: null,                      // { cli, cod, ver, loja, projeto }
+  showAll: false,
+  cronograma: null,                    // último cronograma carregado
+  tab: 'crono',                        // 'crono' | 'modulos'
+};
+
+// Mapeamentos de status — PALPITES (ajustar conforme uso real)
+const STATUS_PROJETO_CLASS = {
+  'Em Execução':   'bg-emerald-100 text-emerald-700',
+  'Em Andamento':  'bg-emerald-100 text-emerald-700',
+  'Bloqueado':     'bg-amber-100 text-amber-700',
+  'Concluido':     'bg-blue-100 text-blue-700',
+  'Concluído':     'bg-blue-100 text-blue-700',
+  'Cancelado':     'bg-rose-100 text-rose-700',
+};
+
+const STATUS_IBL = {
+  'BM': { label: 'Bloqueado', cls: 'bg-amber-100 text-amber-700' },
+  'EX': { label: 'Em Execução', cls: 'bg-emerald-100 text-emerald-700' },
+  'EN': { label: 'Encerrado', cls: 'bg-blue-100 text-blue-700' },
+};
+
+// Status de etapa (na árvore de cronograma)
+const STATUS_IMPLANTACAO = {
+  'I':  { label: 'Em Implantação', cls: 'bg-blue-100 text-blue-700' },
+  'BM': { label: 'Bloqueado',      cls: 'bg-amber-100 text-amber-700' },
+  ' ':  { label: 'Aberto',         cls: 'bg-slate-100 text-slate-600' },
+  '':   { label: 'Aberto',         cls: 'bg-slate-100 text-slate-600' },
+  'C':  { label: 'Concluído',      cls: 'bg-emerald-100 text-emerald-700' },
+};
+const STATUS_OBJETIVO = {
+  'C':  { label: 'Concluído',      cls: 'bg-emerald-100 text-emerald-700' },
+  '':   { label: '—',              cls: 'bg-slate-100 text-slate-500' },
+};
+
+// Status de agenda
+const STATUS_AGENDA = {
+  'ZA': { label: 'Apontado',  cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  'ZV': { label: 'Cancelado', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  'C':  { label: 'Confirmado',cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  'P':  { label: 'Planejado', cls: 'bg-slate-50 text-slate-700 border-slate-200' },
+  'S':  { label: 'Em Espera', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+};
+
+// ============================================================================
+//  UTIL
+// ============================================================================
+const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+
+function fmtPct(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return `${Math.round(v)}%`;
+}
+function fmtH(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+}
+function fmtData(s) {
+  if (!s) return '—';
+  // dd/mm/aaaa já vem formatado; "YYYY-MM-DD" vira pt-BR
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+    const [y,m,d] = s.split('-');
+    return `${d}/${m}/${y}`;
+  }
+  return s.trim();
+}
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (r.status === 401) { location.href = '/login'; throw new Error('Sessão expirada'); }
+  if (!r.ok) {
+    // Tenta extrair a mensagem amigável do corpo JSON ({error: "..."})
+    let msg = `HTTP ${r.status}`;
+    try {
+      const body = await r.json();
+      if (body && body.error) msg = body.error;
+    } catch (_) { /* corpo não-JSON, mantém o HTTP nnn */ }
+    throw new Error(msg);
+  }
+  return r.json();
+}
+function classStatus(map, key, fallback = 'bg-slate-100 text-slate-700') {
+  return (map[key] && (map[key].cls || map[key])) || fallback;
+}
+
+// ============================================================================
+//  VIEW: LISTA
+// ============================================================================
+async function carregaLista() {
+  $('#subtitle').textContent = 'Buscando projetos…';
+  $('#grupos').innerHTML = '<div class="text-center py-12 text-slate-400">Carregando…</div>';
+  $('#resumo').innerHTML = '';
+  try {
+    const url = '/api/projetos' + (state.showAll ? '?all=1' : '');
+    const data = await api(url);
+    state.projetos = data.projetos || [];
+    populaFiltros();
+    renderResumo();
+    renderGrupos();
+    $('#subtitle').textContent = `${state.projetos.length} projeto(s)` + (data.sincronizado_em ? ` · base de ${fmtData(String(data.sincronizado_em).slice(0,10).replace(/-/g,''))}` : '');
+  } catch (e) {
+    $('#grupos').innerHTML = `<div class="text-rose-600 p-4 bg-rose-50 rounded">Erro: ${e.message}</div>`;
+  }
+}
+
+function populaFiltros() {
+  const sel  = $('#filtro-status');
+  const selT = $('#filtro-tipo');
+  const stAnterior = sel.value;      // preserva escolha do usuário entre Atualizar
+  const tpAnterior = selT.value;
+
+  const status = [...new Set(state.projetos.map(p => p.status_projeto).filter(Boolean))].sort();
+  sel.innerHTML  = '<option value="">Todos status</option>' + status.map(s => `<option>${s}</option>`).join('');
+
+  const tipos  = [...new Set(state.projetos.map(p => p.tipo_projeto).filter(Boolean))].sort();
+  selT.innerHTML = '<option value="">Todos tipos</option>' + tipos.map(s => `<option>${s}</option>`).join('');
+
+  // Filtros padrão na primeira carga: "Em Execução" + "Implantação".
+  // Em recargas posteriores, mantém o que o usuário tiver escolhido.
+  if (!state.filtrosInicializados) {
+    if (status.includes('Em Execução')) sel.value  = 'Em Execução';
+    if (tipos.includes('Implantação'))  selT.value = 'Implantação';
+    state.filtrosInicializados = true;
+  } else {
+    sel.value  = stAnterior;
+    selT.value = tpAnterior;
+  }
+}
+
+function aplicarFiltros() {
+  const q = $('#busca').value.trim().toLowerCase();
+  const st = $('#filtro-status').value;
+  const tp = $('#filtro-tipo').value;
+  return state.projetos.filter(p => {
+    if (st && p.status_projeto !== st) return false;
+    if (tp && p.tipo_projeto !== tp) return false;
+    if (q) {
+      const blob = `${p.codigo_projeto} ${p.descricao_projeto} ${p.nome_cliente_projeto} ${p.nome_coordenador_projeto || ''}`.toLowerCase();
+      if (!blob.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderResumo() {
+  const filtrados = aplicarFiltros();
+  const total = filtrados.length;
+  const ativos = filtrados.filter(p => p.status_projeto === 'Em Execução').length;
+  const bloqueados = filtrados.filter(p => p.status_projeto === 'Bloqueado').length;
+  const clientes = new Set(filtrados.map(p => p.codigo_cliente_projeto)).size;
+  $('#resumo').innerHTML = `
+    ${kpi('Projetos', total, 'bg-totvs-petroleo text-white')}
+    ${kpi('Em Execução', ativos, 'bg-totvs-blue text-totvs-petroleo')}
+    ${kpi('Bloqueados', bloqueados, 'bg-totvs-yellow text-totvs-petroleo')}
+    ${kpi('Clientes', clientes, 'bg-totvs-purple text-white')}
+  `;
+}
+function kpi(label, valor, cls) {
+  return `<div class="${cls} rounded-lg px-4 py-3">
+    <p class="text-xs opacity-80">${label}</p>
+    <p class="text-2xl font-totvs mt-0.5">${valor}</p>
+  </div>`;
+}
+
+function renderGrupos() {
+  const filtrados = aplicarFiltros();
+  // agrupar por cliente
+  const grupos = {};
+  for (const p of filtrados) {
+    const k = p.codigo_cliente_projeto;
+    if (!grupos[k]) grupos[k] = { nome: p._nome_cliente_local || p.nome_cliente_projeto, codigo: k, projetos: [] };
+    grupos[k].projetos.push(p);
+  }
+  const ordenado = Object.values(grupos).sort((a,b) => a.nome.localeCompare(b.nome));
+  if (!ordenado.length) {
+    $('#grupos').innerHTML = '<div class="text-center py-12 text-slate-400">Nenhum projeto.</div>';
+    return;
+  }
+  $('#grupos').innerHTML = ordenado.map(g => `
+    <details open class="bg-white rounded-lg border border-slate-200">
+      <summary class="px-5 py-3 flex items-center justify-between border-b border-slate-100">
+        <div>
+          <span class="chev mr-2 text-slate-400">▶</span>
+          <span class="font-semibold text-slate-900">${escapeHtml(g.nome)}</span>
+          <span class="ml-2 text-xs text-slate-500">${g.codigo}</span>
+        </div>
+        <span class="text-xs text-slate-500">${g.projetos.length} projeto(s)</span>
+      </summary>
+      <div class="divide-y divide-slate-100">
+        ${g.projetos.map(cardProjeto).join('')}
+      </div>
+    </details>
+  `).join('');
+  // bind clicks
+  $$('#grupos [data-projeto]').forEach(el => {
+    el.addEventListener('click', () => {
+      const d = el.dataset;
+      abrirDetalhe({
+        cli: d.cli, cod: d.cod, ver: d.ver, loja: d.loja,
+        projeto: state.projetos.find(p => p.codigo_projeto === d.cod),
+      });
+    });
+  });
+}
+
+function cardProjeto(p) {
+  const cls = STATUS_PROJETO_CLASS[p.status_projeto] || 'bg-slate-100 text-slate-700';
+  return `
+    <div data-projeto data-cli="${p.codigo_cliente_projeto}" data-cod="${p.codigo_projeto}"
+         data-ver="${p.versao_projeto || ''}" data-loja="${(p.codigo_cliente_projeto || '').slice(-2)}"
+         class="px-5 py-3 hover:bg-slate-50 cursor-pointer flex items-center justify-between gap-4">
+      <div class="min-w-0 flex-1">
+        <p class="font-medium text-slate-900 truncate">${escapeHtml(p.descricao_projeto || '—')}</p>
+        <p class="text-xs text-slate-500 mt-0.5">
+          <span class="font-mono">${p.codigo_projeto}</span> ·
+          ${escapeHtml(p.tipo_projeto || '—')} ·
+          ${escapeHtml(p.nome_coordenador_projeto || '—').trim()}
+        </p>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        <span class="px-2 py-0.5 rounded-full text-xs font-medium ${cls}">${p.status_projeto || '—'}</span>
+        <span class="text-slate-400">›</span>
+      </div>
+    </div>`;
+}
+
+// ============================================================================
+//  VIEW: DETALHE
+// ============================================================================
+async function abrirDetalhe(sel) {
+  state.selected = sel;
+  state.view = 'detalhe';
+  $('#view-lista').classList.add('hidden');
+  $('#view-detalhe').classList.remove('hidden');
+  $('#nav-back').classList.remove('hidden');
+  $('#detalhe-loading').classList.remove('hidden');
+  $('#detalhe-conteudo').classList.add('hidden');
+  $('#d-crono').innerHTML = '';
+  $('#d-crono-loading').classList.remove('hidden');
+  window.scrollTo(0, 0);
+
+  const { cli, cod, ver, loja, projeto } = sel;
+  state.projHorasPrevistas = 0;   // reset — preenchido pelo /mapa deste projeto
+
+  // URL-encode cada componente — clientes como "08872 00" têm espaço
+  const enc = (s) => encodeURIComponent(s || '');
+  const base = `/api/projeto/${enc(cli)}/${enc(cod)}/${enc(ver || '01')}/${enc(loja || 'undefined')}`;
+
+  // 1) Mapa
+  try {
+    const mapa = await api(`${base}/mapa`);
+    preencheMapa(mapa, projeto);
+    $('#detalhe-loading').classList.add('hidden');
+    $('#detalhe-conteudo').classList.remove('hidden');
+  } catch (e) {
+    $('#detalhe-loading').innerHTML = blocoErro('Não foi possível carregar o projeto', e, () => abrirDetalhe(sel));
+    return;
+  }
+
+  // 2) Cronograma
+  try {
+    const crono = await api(`${base}/cronograma`);
+    state.cronograma = crono;
+    renderCronograma(crono);
+    renderPorModulo(crono);
+    renderPorEtapa(crono);
+    $('#d-crono-loading').classList.add('hidden');
+    $('#d-modulos-loading').classList.add('hidden');
+    $('#d-etapas-loading').classList.add('hidden');
+  } catch (e) {
+    const html = blocoErro('Não foi possível carregar o cronograma', e, () => abrirDetalhe(sel));
+    $('#d-crono-loading').innerHTML   = html;
+    $('#d-modulos-loading').innerHTML = html;
+    $('#d-etapas-loading').innerHTML  = html;
+  }
+}
+
+// Bloco de erro amigável + botão "Tentar novamente"
+function blocoErro(titulo, e, retry) {
+  const msg = String(e?.message || e || '');
+  // Detecta indisponibilidade (PCIUnavailable do backend → 503 + api_indisponivel)
+  const indisp = /503|api_indisponivel|indispon|timed out|timeout|ConnectionError/i.test(msg);
+  const hint = indisp
+    ? 'A API da TOTVS está com soluço momentâneo. Geralmente normaliza em alguns segundos.'
+    : 'Tente novamente em instantes.';
+  const id = 'retry-' + Math.random().toString(36).slice(2, 8);
+  setTimeout(() => {
+    const btn = document.getElementById(id);
+    if (btn) btn.addEventListener('click', retry);
+  }, 0);
+  return `<div class="bg-white border border-totvs-yellow/30 rounded-lg p-6 max-w-xl mx-auto text-left">
+    <div class="flex items-start gap-3">
+      <span class="text-totvs-yellow text-2xl leading-none">⚠</span>
+      <div class="flex-1">
+        <p class="font-semibold text-totvs-petroleo">${escapeHtml(titulo)}</p>
+        <p class="text-sm text-totvs-gray mt-1">${hint}</p>
+        <details class="mt-2 text-xs text-totvs-graylight">
+          <summary class="cursor-pointer hover:text-totvs-gray">Detalhes técnicos</summary>
+          <pre class="mt-1 whitespace-pre-wrap break-words">${escapeHtml(msg)}</pre>
+        </details>
+        <button id="${id}" class="mt-3 px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde text-sm">↻ Tentar novamente</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+function voltarLista() {
+  state.view = 'lista';
+  state.selected = null;
+  $('#view-detalhe').classList.add('hidden');
+  $('#view-lista').classList.remove('hidden');
+  $('#nav-back').classList.add('hidden');
+}
+
+function preencheMapa(m, projeto) {
+  // Aviso de dados vindos do cache (API estava fora quando recarregou)
+  if (m._stale) {
+    $('#subtitle').textContent = `⚠ Dados de ~${m._stale_idade_min || 0} min atrás — API Totvs SC instável`;
+    $('#subtitle').className = 'text-xs text-amber-600 mt-0.5 font-medium';
+  } else {
+    $('#subtitle').className = 'text-xs text-slate-500 mt-0.5';
+  }
+  // HORAS_PREVISTAS do projeto — denominador do "% do projeto" no cronograma
+  state.projHorasPrevistas = m.HORAS_PREVISTAS || 0;
+
+  $('#d-cliente').textContent = (m.A1_NREDUZ || projeto?.nome_cliente_projeto || '').trim();
+  $('#d-titulo').textContent = m.IBL_DESCRI || projeto?.descricao_projeto || '—';
+  $('#d-codigo').textContent = `${m.IBL_CODIGO || projeto?.codigo_projeto} · versão ${m.IB7_VERSAO || '—'} · loja ${m.IBL_LOJA || '—'}`;
+  $('#d-coord').textContent = (m.COORD_NOME || projeto?.nome_coordenador_projeto || '—').trim();
+  $('#d-coord2').textContent = (m.COORD2_NOME || projeto?.nome_coordenador_auxiliar || '—').trim();
+  $('#d-vigencia').textContent = `${fmtData(m.IB7_DTVALI)} → ${fmtData(m.IBL_DTFIM)}`;
+  $('#d-tipo').textContent = projeto?.tipo_projeto || (m.IBL_TIPO === 'I' ? 'Implantação' : m.IBL_TIPO || '—');
+
+  const stKey = (m.IBL_STATUS || '').trim();
+  const st = STATUS_IBL[stKey] || { label: m.IBL_STATUS_DESC || stKey || '—', cls: 'bg-slate-100 text-slate-700' };
+  $('#d-status').className = `px-3 py-1 rounded-full text-xs font-medium ${st.cls}`;
+  $('#d-status').textContent = m.IBL_STATUS_DESC?.trim() || st.label;
+  $('#d-contrato').textContent = `Contrato: ${(m.IB7_CONTRA || '—').trim()} · ${(m.IB7_FPAGTO_DESC || '').trim()}`;
+
+  // KPIs
+  const pct = m.MEDICAO_PERCENTUAL || 0;
+  const pctH = m.HORAS_REALIZADAS_PERCENTUAL || 0;
+  $('#d-kpis').innerHTML = `
+    ${kpiDetail('Horas Previstas',  fmtH(m.HORAS_PREVISTAS),  'bg-totvs-petroleo text-white')}
+    ${kpiDetail('Horas Realizadas', fmtH(m.HORAS_REALIZADAS), 'bg-totvs-blue text-totvs-petroleo', `${pctH}% do previsto`)}
+    ${kpiDetail('Medição', `${m.MEDICAO_REALIZADA || 0} / ${m.MEDICAO_PREVISTA || 0}`, 'bg-totvs-purple text-white', fmtPct(pct))}
+    ${kpiDetail('Período Atual', fmtH(m.MEDICAO_PERIODO_REALIZADO) + ' / ' + fmtH(m.MEDICAO_PERIODO_PREVISTO), 'bg-totvs-black text-white', fmtPct(m.MEDICAO_PERIODO_PERCENTUAL))}
+  `;
+
+  // Horas por tipo (horaItems)
+  const items = m.horaItems || [];
+  $('#d-horas').innerHTML = items.length ? items.map(it => `
+    <div class="flex items-center justify-between text-sm">
+      <span class="text-totvs-gray">${escapeHtml(it.descricao)}</span>
+      <span class="font-mono font-semibold text-totvs-petroleo">${it.realizado || '00:00'}</span>
+    </div>
+  `).join('') : '<p class="text-totvs-graylight text-sm">Sem detalhamento.</p>';
+}
+function kpiDetail(label, valor, cls, sub) {
+  return `<div class="${cls} rounded-lg px-4 py-3">
+    <p class="text-xs opacity-80">${label}</p>
+    <p class="text-xl font-totvs mt-0.5">${valor}</p>
+    ${sub ? `<p class="text-xs opacity-80 mt-0.5">${sub}</p>` : ''}
+  </div>`;
+}
+
+// ============================================================================
+//  CRONOGRAMA
+// ============================================================================
+function renderCronograma(arvore) {
+  // Denominador do "% do projeto" = total de horas PREVISTAS do projeto.
+  // Vem do mapa (HORAS_PREVISTAS, definido em preencheMapa). Fallback: horas
+  // previstas da maior fase do cronograma (tipicamente "Execução").
+  if (!state.projHorasPrevistas) {
+    state.projHorasPrevistas = Math.max(
+      0, ...arvore.map(f => somaProp(f, 'horas_previstas'))
+    );
+  }
+  const html = arvore.map(node => renderFase(node)).join('');
+  $('#d-crono').innerHTML = html || '<p class="text-slate-400">Sem cronograma.</p>';
+}
+
+// Dois percentuais por linha do cronograma:
+//   • "plan."     = quanto a linha já consumiu do seu próprio planejado (hr/hp)
+//   • "do projeto"= quanto o realizado da linha representa do total de horas
+//                   previstas do projeto inteiro (hr / HORAS_PREVISTAS)
+function badgesCrono(hr, hp) {
+  const pctPlan = hp > 0 ? (hr / hp) * 100 : 0;
+  const pctProj = state.projHorasPrevistas > 0 ? (hr / state.projHorasPrevistas) * 100 : 0;
+  // cor do "plan." sinaliza estouro de orçamento da linha
+  const planCls = pctPlan > 100 ? 'bg-rose-100 text-rose-700'
+                : pctPlan >= 90 ? 'bg-amber-100 text-amber-700'
+                : 'bg-slate-100 text-slate-600';
+  return `<span class="text-[11px] px-1.5 py-0.5 rounded ${planCls}" title="Consumido do planejado desta linha (realizado ÷ previsto da linha)">${fmtPct(pctPlan)} plan.</span>` +
+         `<span class="text-[11px] px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700" title="Realizado da linha ÷ total de horas previstas do projeto">${fmtPct(pctProj)} do projeto</span>`;
+}
+
+function renderFase(fase) {
+  const totHp = somaProp(fase, 'horas_previstas');
+  const totHr = somaProp(fase, 'horas_realizadas');
+  const totAg = somaProp(fase, 'horas_agendadas');
+  return `<details open class="mb-2">
+    <summary class="px-3 py-2 bg-slate-100 rounded-md flex items-center gap-2 hover:bg-slate-200">
+      <span class="chev text-slate-500">▶</span>
+      <span class="font-semibold text-slate-800">${escapeHtml(fase.descricao)}</span>
+      <span class="ml-auto flex items-center gap-2">
+        <span class="text-xs text-slate-600">${fmtH(totHr)} / ${fmtH(totHp)} h · agendado ${fmtH(totAg)} h</span>
+        ${badgesCrono(totHr, totHp)}
+      </span>
+    </summary>
+    <div class="pl-4 mt-2 space-y-1">
+      ${(fase.items || []).map(renderEtapa).join('')}
+    </div>
+  </details>`;
+}
+
+function renderEtapa(etapa) {
+  return `<details class="mb-1">
+    <summary class="px-3 py-1.5 hover:bg-slate-50 rounded flex items-center gap-2">
+      <span class="chev text-slate-400">▶</span>
+      <span class="text-slate-700 font-medium">${escapeHtml(etapa.descricao)}</span>
+      <span class="ml-auto flex items-center gap-2">
+        <span class="text-xs text-slate-500">${fmtH(etapa.horas_realizadas)} / ${fmtH(etapa.horas_previstas)} h</span>
+        ${badgesCrono(etapa.horas_realizadas || 0, etapa.horas_previstas || 0)}
+      </span>
+    </summary>
+    <div class="pl-4 mt-1 space-y-1">
+      ${(etapa.items || []).map(renderSubetapa).join('')}
+    </div>
+  </details>`;
+}
+
+function renderSubetapa(sub) {
+  return `<details class="mb-1">
+    <summary class="px-3 py-1.5 hover:bg-slate-50 rounded flex items-center gap-2">
+      <span class="chev text-slate-400">▶</span>
+      <span class="text-slate-700">${escapeHtml(sub.descricao)}</span>
+      <span class="ml-auto flex items-center gap-2">
+        <span class="text-xs text-slate-500">${fmtH(sub.horas_realizadas)} / ${fmtH(sub.horas_previstas)} h</span>
+        ${badgesCrono(sub.horas_realizadas || 0, sub.horas_previstas || 0)}
+      </span>
+    </summary>
+    <div class="pl-4 mt-1 space-y-1.5">
+      ${(sub.items || []).map(renderAtividade).join('')}
+    </div>
+  </details>`;
+}
+
+function renderAtividade(at) {
+  const hp = at.horas_previstas || 0;
+  const hr = at.horas_realizadas || 0;
+  const ha = at.horas_agendadas || 0;
+  const pctR = hp > 0 ? Math.min(100, (hr / hp) * 100) : 0;
+  const pctA = hp > 0 ? Math.min(100, (ha / hp) * 100) : 0;
+  const status = STATUS_IMPLANTACAO[at.status_implantacao] || STATUS_IMPLANTACAO[''];
+  const objetivo = STATUS_OBJETIVO[at.status_objetivo] || STATUS_OBJETIVO[''];
+
+  const tem = (at.agendas?.length || 0) + (at.ordem_servico?.length || 0) + (at.tasks?.length || 0);
+
+  return `<details class="border border-slate-200 rounded-md">
+    <summary class="px-3 py-2 hover:bg-slate-50 flex items-center gap-3 rounded-md">
+      <span class="chev text-slate-300">▶</span>
+      <span class="flex-1 min-w-0">
+        <span class="text-sm text-slate-800">${escapeHtml(at.descricao)}</span>
+        <span class="ml-2 text-[11px] px-1.5 py-0.5 rounded ${status.cls}">${status.label}</span>
+        ${objetivo.label !== '—' ? `<span class="ml-1 text-[11px] px-1.5 py-0.5 rounded ${objetivo.cls}">obj: ${objetivo.label}</span>` : ''}
+      </span>
+      <span class="text-xs text-slate-500 shrink-0 hidden sm:inline">${fmtData(at.data_inicio)} → ${fmtData(at.data_fim)}</span>
+      <span class="text-xs font-mono text-slate-600 shrink-0 w-32 text-right">${fmtH(hr)} / ${fmtH(hp)} h</span>
+      <span class="shrink-0 flex items-center gap-1">${badgesCrono(hr, hp)}</span>
+    </summary>
+    <div class="px-3 pb-3 pt-1">
+      <div class="bar-track mb-1">
+        <div class="bar-fill fill-exec" style="width:${pctR}%"></div>
+      </div>
+      <div class="bar-track mb-2">
+        <div class="bar-fill fill-plan" style="width:${pctA}%"></div>
+      </div>
+      <div class="flex justify-between text-[11px] text-totvs-gray mb-3">
+        <span><span class="inline-block w-2 h-2 fill-exec rounded-full mr-1"></span>Realizado ${fmtH(hr)} h (${fmtPct(hp>0 ? hr/hp*100 : 0)})</span>
+        <span><span class="inline-block w-2 h-2 fill-plan rounded-full mr-1"></span>Agendado ${fmtH(ha)} h</span>
+      </div>
+      ${tem === 0 ? '<p class="text-xs text-slate-400">Sem agendas, apontamentos ou tasks.</p>' : ''}
+      ${at.agendas?.length ? renderAgendas(at.agendas) : ''}
+      ${at.ordem_servico?.length ? renderOS(at.ordem_servico) : ''}
+      ${at.tasks?.length ? renderTasks(at.tasks) : ''}
+    </div>
+  </details>`;
+}
+
+function renderAgendas(agendas) {
+  return `<div class="mb-3">
+    <p class="text-xs font-semibold text-slate-600 mb-1">Agendas (${agendas.length})</p>
+    <div class="space-y-1">
+      ${agendas.map(a => {
+        const st = STATUS_AGENDA[a.status] || { label: a.status, cls: 'bg-slate-50 text-slate-700 border-slate-200' };
+        return `<div class="flex items-center gap-2 text-xs">
+          <span class="border ${st.cls} px-1.5 py-0.5 rounded font-mono">${st.label}</span>
+          <span class="text-slate-600">${fmtData(a.data)} ${a.hora_inicio}-${a.hora_fim}</span>
+          <span class="text-slate-700">${escapeHtml((a.recurso_nome || a.recurso || '').trim())}</span>
+          <span class="ml-auto font-mono text-slate-600">${fmtH(a.horas_previstas_agenda)} h ${a.horas_apontadas > 0 ? `(apt ${fmtH(a.horas_apontadas)})` : ''}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+
+function renderOS(oss) {
+  const total = oss.reduce((s,o) => s + (o.horas || 0), 0);
+  return `<div class="mb-3">
+    <p class="text-xs font-semibold text-slate-600 mb-1">Apontamentos (${oss.length}) — total ${fmtH(total)} h</p>
+    <div class="space-y-1">
+      ${oss.map(o => `<div class="flex items-center gap-2 text-xs">
+        <span class="font-mono text-slate-500">${o.numero}</span>
+        <span class="text-slate-600">${fmtData(o.data)}</span>
+        <span class="text-slate-700">${escapeHtml((o.recurso || '').trim())}</span>
+        <span class="text-slate-500">${escapeHtml(o.servico || '')}</span>
+        <span class="ml-auto font-mono">${fmtH(o.horas)} h</span>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function renderTasks(tasks) {
+  return `<div>
+    <p class="text-xs font-semibold text-slate-600 mb-1">Tasks vinculadas (${tasks.length})</p>
+    <div class="space-y-1">
+      ${tasks.map(t => `<div class="text-xs text-slate-700">
+        <span class="font-mono">${t.id || t.codigo || ''}</span> ${escapeHtml(t.titulo || t.title || '')}
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+function somaProp(node, prop) {
+  // Já vem agregado nos níveis 0/1/2 — usa o próprio, se ausente soma filhos
+  if (typeof node[prop] === 'number') return node[prop];
+  if (!node.items) return 0;
+  return node.items.reduce((s, c) => s + somaProp(c, prop), 0);
+}
+
+// ============================================================================
+//  VIEW: POR MÓDULO (matriz drill-down)
+// ============================================================================
+// Estratégia:
+//   1) Coletar todas atividades nivel=3 com sua sub-etapa pai (nivel=2).
+//   2) Para cada atividade: módulo = descricao_atividade - prefixo_subetapa.
+//      Ex.: sub="Levantamento", atv="Levantamento Call Center" → módulo "Call Center".
+//      Se não dá pra remover o prefixo, módulo = "Outros" e tipo = atv.descricao.
+//   3) Agrupar por módulo, somando horas; expansão mostra as sub-etapas.
+
+const SUBETAPAS_PADRAO = [
+  'Levantamento', 'Parametrizacao', 'Capacitacao',
+  'Prototipo Modular', 'Prototipo Integrado',
+];
+const SEM_MODULO = ['Operacao Assistida','Gestao de Projetos','Atendimento Extra Projeto','Encerramento do Projeto','Prototipo de Validacao'];
+
+// Normaliza string p/ comparação tolerante a acentos/maiúsculas
+function _norm(s) {
+  return (s || '').toString().normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+
+function extraiModulo(atividade, subetapaDescricao) {
+  const desc = (atividade.descricao || '').trim();
+  const subNorm = _norm(subetapaDescricao);
+
+  // 0) Sub-etapa "Específicos" — agrupa TODAS as atividades num único módulo
+  //    "Específicos" (códigos numerados, Tecnologia, A Planejar, etc.).
+  //    O drill-down lista cada atividade individual como linha interna.
+  if (subNorm === 'especificos') {
+    return { modulo: 'Específicos', subetapa: desc || 'Específicos' };
+  }
+
+  // 1) Tem prefixo conhecido?
+  for (const pref of SUBETAPAS_PADRAO) {
+    if (desc.toLowerCase().startsWith(pref.toLowerCase() + ' ')) {
+      return { modulo: desc.slice(pref.length).trim(), subetapa: pref };
+    }
+  }
+  // 2) Usa o nome da sub-etapa pai como prefixo
+  if (subetapaDescricao && desc.toLowerCase().startsWith(subetapaDescricao.toLowerCase() + ' ')) {
+    return { modulo: desc.slice(subetapaDescricao.length).trim(), subetapa: subetapaDescricao };
+  }
+  // 3) Atividade sem módulo
+  if (SEM_MODULO.some(s => desc.toLowerCase().includes(s.toLowerCase()))) {
+    return { modulo: desc, subetapa: subetapaDescricao || 'Gerenciamento' };
+  }
+  // 4) Fallback: agrupa por nome literal
+  return { modulo: desc, subetapa: subetapaDescricao || '—' };
+}
+
+function coletaAtividades(arvore) {
+  const out = []; // [{ fase, etapa, subetapa, modulo, atividade }]
+  for (const fase of arvore) {
+    for (const etapa of (fase.items || [])) {
+      for (const sub of (etapa.items || [])) {
+        // sub é nivel=2 (sub-etapa). Suas items são as atividades nivel=3.
+        for (const at of (sub.items || [])) {
+          const { modulo, subetapa } = extraiModulo(at, sub.descricao);
+          out.push({
+            fase: fase.descricao, etapa: etapa.descricao,
+            subetapa, subReal: (sub.descricao || '').trim() || subetapa,
+            modulo, atividade: at,
+          });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function aRealizar(at) {
+  // Soma agendas planejadas/confirmadas que ainda não viraram apontamento.
+  // Status apontado/cancelado = ZA, ZV → exclui. Status restantes = futuras.
+  const ag = at.agendas || [];
+  let total = 0;
+  for (const a of ag) {
+    if (['ZA','ZV'].includes((a.status||'').trim())) continue;
+    total += (a.horas_previstas_agenda || 0);
+  }
+  return total;
+}
+
+function agrega(lista) {
+  // Soma horas; data início = min; data fim = max
+  const acc = { estimadas: 0, executadas: 0, planejadas: 0, inicio: null, fim: null, atividades: [] };
+  for (const item of lista) {
+    const at = item.atividade;
+    acc.estimadas  += (at.horas_previstas || 0);
+    acc.executadas += (at.horas_realizadas || 0);
+    acc.planejadas += aRealizar(at);
+    const di = at.data_inicio || '';
+    const df = at.data_fim || '';
+    if (di && (!acc.inicio || di < acc.inicio)) acc.inicio = di;
+    if (df && (!acc.fim || df > acc.fim))       acc.fim = df;
+    acc.atividades.push(item);
+  }
+  acc.pctExec = acc.estimadas > 0 ? (acc.executadas / acc.estimadas) * 100 : 0;
+  acc.pctTotal = acc.estimadas > 0 ? ((acc.executadas + acc.planejadas) / acc.estimadas) * 100 : 0;
+  return acc;
+}
+
+function pctBar(pctExec, pctTotal) {
+  const e = Math.min(100, Math.max(0, pctExec));
+  const t = Math.min(100, Math.max(0, pctTotal));
+  return `<div class="relative h-2 bg-[#e6edf0] rounded-full overflow-hidden w-32">
+    <div class="absolute top-0 left-0 h-full fill-plan" style="width:${t}%"></div>
+    <div class="absolute top-0 left-0 h-full fill-exec" style="width:${e}%"></div>
+  </div>`;
+}
+
+function renderPorModulo(arvore) {
+  const itens = coletaAtividades(arvore);
+  if (!itens.length) {
+    $('#d-modulos').innerHTML = '<p class="text-slate-400 text-sm">Sem atividades.</p>';
+    return;
+  }
+
+  // 1) Agrupa por módulo
+  const porModulo = {};
+  for (const it of itens) {
+    (porModulo[it.modulo] = porModulo[it.modulo] || []).push(it);
+  }
+  // ordena por horas estimadas desc
+  const linhas = Object.entries(porModulo)
+    .map(([modulo, lista]) => ({ modulo, lista, agg: agrega(lista) }))
+    .sort((a, b) => b.agg.estimadas - a.agg.estimadas);
+
+  // Totais
+  const tot = agrega(itens);
+
+  // 2) Render
+  $('#d-modulos').innerHTML = `
+    <div class="mb-3 flex items-center gap-3 text-xs">
+      <span class="inline-flex items-center gap-1.5"><span class="inline-block w-3 h-2 fill-exec rounded"></span>% Executado</span>
+      <span class="inline-flex items-center gap-1.5"><span class="inline-block w-3 h-2 fill-plan rounded"></span>% Executado + A Realizar</span>
+      <span class="text-slate-400">·</span>
+      <span class="text-slate-500">${linhas.length} módulo(s), ${itens.length} atividade(s)</span>
+    </div>
+    <div class="overflow-x-auto -mx-5 px-5">
+      <table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 border-b border-slate-200">
+          <tr>
+            <th class="text-left  py-2 pr-3 font-medium">Módulo</th>
+            <th class="text-left  py-2 pr-3 font-medium">Início</th>
+            <th class="text-left  py-2 pr-3 font-medium">Fim Plan.</th>
+            <th class="text-right py-2 pr-3 font-medium">Estimadas</th>
+            <th class="text-right py-2 pr-3 font-medium">Executadas</th>
+            <th class="text-right py-2 pr-3 font-medium">A Realizar</th>
+            <th class="text-right py-2 pr-3 font-medium">% Exec</th>
+            <th class="text-right py-2 pr-3 font-medium">% Total</th>
+            <th class="py-2 font-medium">Progresso</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${linhas.map(rowModulo).join('')}
+        </tbody>
+        <tfoot class="border-t-2 border-slate-300 font-semibold bg-slate-50">
+          <tr>
+            <td class="py-2.5 pr-3" colspan="3">Total geral</td>
+            <td class="py-2.5 pr-3 text-right font-mono">${fmtH(tot.estimadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(tot.executadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono text-totvs-purple">${fmtH(tot.planejadas)}</td>
+            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctExec)}</td>
+            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctTotal)}</td>
+            <td class="py-2.5">${pctBar(tot.pctExec, tot.pctTotal)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  `;
+  // bind expansão
+  $$('#d-modulos [data-modulo-row]').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const k = tr.dataset.moduloRow;
+      const sub = document.querySelector(`[data-modulo-children="${CSS.escape(k)}"]`);
+      if (sub) sub.classList.toggle('hidden');
+      tr.querySelector('.chev').classList.toggle('rotate-90');
+    });
+  });
+}
+
+function rowModulo({ modulo, lista, agg }) {
+  // agrupa as atividades dentro do módulo por sub-etapa
+  const porSub = {};
+  for (const it of lista) (porSub[it.subetapa] = porSub[it.subetapa] || []).push(it);
+  const subLinhas = Object.entries(porSub)
+    .map(([sub, ls]) => ({ sub, ls, agg: agrega(ls) }))
+    .sort((a,b) => SUBETAPAS_PADRAO.indexOf(a.sub) - SUBETAPAS_PADRAO.indexOf(b.sub) || a.sub.localeCompare(b.sub));
+
+  const key = modulo;
+  return `
+    <tr data-modulo-row="${escapeAttr(key)}" class="border-b border-slate-100 hover:bg-slate-50 cursor-pointer">
+      <td class="py-2 pr-3 font-medium text-slate-900"><span class="chev inline-block w-3 text-slate-400 transition-transform mr-1">▶</span>${escapeHtml(modulo)}</td>
+      <td class="py-2 pr-3 text-slate-600">${fmtData(agg.inicio)}</td>
+      <td class="py-2 pr-3 text-slate-600">${fmtData(agg.fim)}</td>
+      <td class="py-2 pr-3 text-right font-mono">${fmtH(agg.estimadas)}</td>
+      <td class="py-2 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(agg.executadas)}</td>
+      <td class="py-2 pr-3 text-right font-mono text-totvs-purple">${fmtH(agg.planejadas)}</td>
+      <td class="py-2 pr-3 text-right">${fmtPct(agg.pctExec)}</td>
+      <td class="py-2 pr-3 text-right">${fmtPct(agg.pctTotal)}</td>
+      <td class="py-2">${pctBar(agg.pctExec, agg.pctTotal)}</td>
+    </tr>
+    <tr data-modulo-children="${escapeAttr(key)}" class="hidden bg-slate-50/60">
+      <td colspan="9" class="px-3 py-2">
+        <table class="w-full text-xs">
+          <tbody>
+            ${subLinhas.map(({ sub, ls, agg: a }) => `
+              <tr class="border-b border-slate-100 last:border-0">
+                <td class="py-1.5 pr-3 text-slate-600 w-48 pl-6">${escapeHtml(sub)}</td>
+                <td class="py-1.5 pr-3 text-slate-500">${fmtData(a.inicio)}</td>
+                <td class="py-1.5 pr-3 text-slate-500">${fmtData(a.fim)}</td>
+                <td class="py-1.5 pr-3 text-right font-mono">${fmtH(a.estimadas)}</td>
+                <td class="py-1.5 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(a.executadas)}</td>
+                <td class="py-1.5 pr-3 text-right font-mono text-totvs-purple">${fmtH(a.planejadas)}</td>
+                <td class="py-1.5 pr-3 text-right">${fmtPct(a.pctExec)}</td>
+                <td class="py-1.5 pr-3 text-right">${fmtPct(a.pctTotal)}</td>
+                <td class="py-1.5">${pctBar(a.pctExec, a.pctTotal)}</td>
+              </tr>
+              ${ls.length > 1 ? ls.map(it => `
+                <tr class="text-slate-500">
+                  <td class="py-1 pr-3 pl-12 italic">› ${escapeHtml(it.atividade.descricao)}</td>
+                  <td class="py-1 pr-3">${fmtData(it.atividade.data_inicio)}</td>
+                  <td class="py-1 pr-3">${fmtData(it.atividade.data_fim)}</td>
+                  <td class="py-1 pr-3 text-right font-mono">${fmtH(it.atividade.horas_previstas)}</td>
+                  <td class="py-1 pr-3 text-right font-mono">${fmtH(it.atividade.horas_realizadas)}</td>
+                  <td class="py-1 pr-3 text-right font-mono">${fmtH(aRealizar(it.atividade))}</td>
+                  <td class="py-1 pr-3 text-right">${fmtPct(it.atividade.horas_previstas>0 ? (it.atividade.horas_realizadas/it.atividade.horas_previstas)*100 : 0)}</td>
+                  <td class="py-1 pr-3 text-right">${fmtPct(it.atividade.horas_previstas>0 ? ((it.atividade.horas_realizadas+aRealizar(it.atividade))/it.atividade.horas_previstas)*100 : 0)}</td>
+                  <td></td>
+                </tr>
+              `).join('') : ''}
+            `).join('')}
+          </tbody>
+        </table>
+      </td>
+    </tr>`;
+}
+
+// ============================================================================
+//  VIEW: POR ETAPA (matriz drill-down — transposição da Por Módulo)
+// ============================================================================
+// Linha = sub-etapa do MIT (Levantamento, Parametrização, Capacitação,
+// Protótipo Modular/Integrado, Operação Assistida, Fechamentos, Específicos…).
+// Drill-down = módulos dentro daquela etapa. Mesmas colunas da Por Módulo.
+
+const ORDEM_ETAPAS = [
+  'Levantamento', 'Parametrizacao', 'Capacitacao',
+  'Prototipo Modular', 'Prototipo Integrado',
+  'Operacao Assistida', 'Fechamentos', 'Especificos',
+  'Gestao de Projetos', 'Extra Projeto', 'Atendimento Extra Projeto',
+  'Encerramento do Projeto',
+];
+
+function ordemEtapa(nome) {
+  const i = ORDEM_ETAPAS.indexOf(nome);
+  return i >= 0 ? i : 999;
+}
+
+function renderPorEtapa(arvore) {
+  const itens = coletaAtividades(arvore);
+  if (!itens.length) {
+    $('#d-etapas').innerHTML = '<p class="text-slate-400 text-sm">Sem atividades.</p>';
+    return;
+  }
+
+  // 1) Agrupa por sub-etapa real (nível 2 do cronograma)
+  const porEtapa = {};
+  for (const it of itens) {
+    (porEtapa[it.subReal] = porEtapa[it.subReal] || []).push(it);
+  }
+  // ordena pela sequência natural do MIT; o resto vai por horas estimadas desc
+  const linhas = Object.entries(porEtapa)
+    .map(([etapa, lista]) => ({ etapa, lista, agg: agrega(lista) }))
+    .sort((a, b) => ordemEtapa(a.etapa) - ordemEtapa(b.etapa) || b.agg.estimadas - a.agg.estimadas);
+
+  const tot = agrega(itens);
+
+  $('#d-etapas').innerHTML = `
+    <div class="mb-3 flex items-center gap-3 text-xs">
+      <span class="inline-flex items-center gap-1.5"><span class="inline-block w-3 h-2 fill-exec rounded"></span>% Executado</span>
+      <span class="inline-flex items-center gap-1.5"><span class="inline-block w-3 h-2 fill-plan rounded"></span>% Executado + A Realizar</span>
+      <span class="text-slate-400">·</span>
+      <span class="text-slate-500">${linhas.length} etapa(s), ${itens.length} atividade(s)</span>
+    </div>
+    <div class="overflow-x-auto -mx-5 px-5">
+      <table class="w-full text-sm">
+        <thead class="text-xs text-slate-500 border-b border-slate-200">
+          <tr>
+            <th class="text-left  py-2 pr-3 font-medium">Etapa</th>
+            <th class="text-left  py-2 pr-3 font-medium">Início</th>
+            <th class="text-left  py-2 pr-3 font-medium">Fim Plan.</th>
+            <th class="text-right py-2 pr-3 font-medium">Estimadas</th>
+            <th class="text-right py-2 pr-3 font-medium">Executadas</th>
+            <th class="text-right py-2 pr-3 font-medium">A Realizar</th>
+            <th class="text-right py-2 pr-3 font-medium">% Exec</th>
+            <th class="text-right py-2 pr-3 font-medium">% Total</th>
+            <th class="py-2 font-medium">Progresso</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${linhas.map(rowEtapa).join('')}
+        </tbody>
+        <tfoot class="border-t-2 border-slate-300 font-semibold bg-slate-50">
+          <tr>
+            <td class="py-2.5 pr-3" colspan="3">Total geral</td>
+            <td class="py-2.5 pr-3 text-right font-mono">${fmtH(tot.estimadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(tot.executadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono text-totvs-purple">${fmtH(tot.planejadas)}</td>
+            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctExec)}</td>
+            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctTotal)}</td>
+            <td class="py-2.5">${pctBar(tot.pctExec, tot.pctTotal)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  `;
+  // bind expansão
+  $$('#d-etapas [data-etapa-row]').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const k = tr.dataset.etapaRow;
+      const ch = document.querySelector(`[data-etapa-children="${CSS.escape(k)}"]`);
+      if (ch) ch.classList.toggle('hidden');
+      tr.querySelector('.chev').classList.toggle('rotate-90');
+    });
+  });
+}
+
+function rowEtapa({ etapa, lista, agg }) {
+  // agrupa as atividades dentro da etapa por módulo
+  const porMod = {};
+  for (const it of lista) (porMod[it.modulo] = porMod[it.modulo] || []).push(it);
+  const modLinhas = Object.entries(porMod)
+    .map(([mod, ls]) => ({ mod, ls, agg: agrega(ls) }))
+    .sort((a, b) => b.agg.estimadas - a.agg.estimadas);
+
+  const key = etapa;
+  return `
+    <tr data-etapa-row="${escapeAttr(key)}" class="border-b border-slate-100 hover:bg-slate-50 cursor-pointer">
+      <td class="py-2 pr-3 font-medium text-slate-900"><span class="chev inline-block w-3 text-slate-400 transition-transform mr-1">▶</span>${escapeHtml(etapa)}</td>
+      <td class="py-2 pr-3 text-slate-600">${fmtData(agg.inicio)}</td>
+      <td class="py-2 pr-3 text-slate-600">${fmtData(agg.fim)}</td>
+      <td class="py-2 pr-3 text-right font-mono">${fmtH(agg.estimadas)}</td>
+      <td class="py-2 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(agg.executadas)}</td>
+      <td class="py-2 pr-3 text-right font-mono text-totvs-purple">${fmtH(agg.planejadas)}</td>
+      <td class="py-2 pr-3 text-right">${fmtPct(agg.pctExec)}</td>
+      <td class="py-2 pr-3 text-right">${fmtPct(agg.pctTotal)}</td>
+      <td class="py-2">${pctBar(agg.pctExec, agg.pctTotal)}</td>
+    </tr>
+    <tr data-etapa-children="${escapeAttr(key)}" class="hidden bg-slate-50/60">
+      <td colspan="9" class="px-3 py-2">
+        <table class="w-full text-xs">
+          <tbody>
+            ${modLinhas.map(({ mod, ls, agg: a }) => `
+              <tr class="border-b border-slate-100 last:border-0">
+                <td class="py-1.5 pr-3 text-slate-600 w-48 pl-6">${escapeHtml(mod)}</td>
+                <td class="py-1.5 pr-3 text-slate-500">${fmtData(a.inicio)}</td>
+                <td class="py-1.5 pr-3 text-slate-500">${fmtData(a.fim)}</td>
+                <td class="py-1.5 pr-3 text-right font-mono">${fmtH(a.estimadas)}</td>
+                <td class="py-1.5 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(a.executadas)}</td>
+                <td class="py-1.5 pr-3 text-right font-mono text-totvs-purple">${fmtH(a.planejadas)}</td>
+                <td class="py-1.5 pr-3 text-right">${fmtPct(a.pctExec)}</td>
+                <td class="py-1.5 pr-3 text-right">${fmtPct(a.pctTotal)}</td>
+                <td class="py-1.5">${pctBar(a.pctExec, a.pctTotal)}</td>
+              </tr>
+              ${ls.length > 1 ? ls.map(it => `
+                <tr class="text-slate-500">
+                  <td class="py-1 pr-3 pl-12 italic">› ${escapeHtml(it.atividade.descricao)}</td>
+                  <td class="py-1 pr-3">${fmtData(it.atividade.data_inicio)}</td>
+                  <td class="py-1 pr-3">${fmtData(it.atividade.data_fim)}</td>
+                  <td class="py-1 pr-3 text-right font-mono">${fmtH(it.atividade.horas_previstas)}</td>
+                  <td class="py-1 pr-3 text-right font-mono">${fmtH(it.atividade.horas_realizadas)}</td>
+                  <td class="py-1 pr-3 text-right font-mono">${fmtH(aRealizar(it.atividade))}</td>
+                  <td class="py-1 pr-3 text-right">${fmtPct(it.atividade.horas_previstas>0 ? (it.atividade.horas_realizadas/it.atividade.horas_previstas)*100 : 0)}</td>
+                  <td class="py-1 pr-3 text-right">${fmtPct(it.atividade.horas_previstas>0 ? ((it.atividade.horas_realizadas+aRealizar(it.atividade))/it.atividade.horas_previstas)*100 : 0)}</td>
+                  <td></td>
+                </tr>
+              `).join('') : ''}
+            `).join('')}
+          </tbody>
+        </table>
+      </td>
+    </tr>`;
+}
+
+function escapeAttr(s) { return String(s).replace(/"/g, '&quot;'); }
+
+// ============================================================================
+//  EVENTS / BOOT
+// ============================================================================
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+$('#nav-back').addEventListener('click', voltarLista);
+$('#btn-refresh').addEventListener('click', () => {
+  if (state.view === 'lista') carregaLista();
+  else if (state.selected) abrirDetalhe(state.selected);
+});
+$('#btn-sync').addEventListener('click', async () => {
+  const b = $('#btn-sync');
+  if (b.disabled) return;
+  if (!confirm('Sincronizar a lista de projetos da API PCI? Pode levar alguns segundos.')) return;
+  b.disabled = true;
+  const txt = b.textContent;
+  let page = 1, total = 0;
+  try {
+    while (page <= 50) {
+      b.textContent = `⟳ Sincronizando… pág ${page}`;
+      const j = await api(`/api/sync?page=${page}`, { method: 'POST' });
+      total += j.gravados || 0;
+      if (!j.hasNext) break;
+      page++;
+    }
+    b.textContent = txt; b.disabled = false;
+    alert(`Sincronização concluída: ${total} projeto(s) atualizados.`);
+    carregaLista();
+  } catch (e) {
+    b.textContent = txt; b.disabled = false;
+    alert('Falha ao sincronizar: ' + e.message);
+  }
+});
+$('#toggle-all').addEventListener('change', (e) => {
+  state.showAll = e.target.checked;
+  carregaLista();
+});
+['busca','filtro-status','filtro-tipo'].forEach(id => {
+  $(`#${id}`).addEventListener('input', () => { renderResumo(); renderGrupos(); });
+});
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-act]');
+  if (btn) {
+    const act = btn.dataset.act;
+    if (state.tab === 'crono') {
+      if (act === 'expand-all')   $$('#d-crono details').forEach(d => d.open = true);
+      if (act === 'collapse-all') $$('#d-crono details').forEach(d => d.open = false);
+    } else {
+      const sel = state.tab === 'etapas' ? '#d-etapas [data-etapa-children]' : '#d-modulos [data-modulo-children]';
+      if (act === 'expand-all')   $$(sel).forEach(t => t.classList.remove('hidden'));
+      if (act === 'collapse-all') $$(sel).forEach(t => t.classList.add('hidden'));
+    }
+  }
+  const tab = e.target.closest('.tab-btn');
+  if (tab) {
+    state.tab = tab.dataset.tab;
+    $$('.tab-btn').forEach(b => {
+      const active = b.dataset.tab === state.tab;
+      b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${active ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
+    });
+    $('#tab-crono').classList.toggle('hidden',   state.tab !== 'crono');
+    $('#tab-modulos').classList.toggle('hidden', state.tab !== 'modulos');
+    $('#tab-etapas').classList.toggle('hidden',  state.tab !== 'etapas');
+  }
+});
+
+carregaLista();
+</script>
+</body>
+</html>
