@@ -18,6 +18,7 @@ import base64, hashlib, hmac, json, os, re, time, unicodedata
 from pathlib import Path
 
 import psycopg2, psycopg2.extras, requests
+from psycopg2.extras import execute_values
 from flask import Flask, Response, request, redirect, make_response
 from werkzeug.exceptions import HTTPException
 
@@ -30,6 +31,7 @@ TASKS_BASE = os.environ.get("TASKS_SC_BASE_URL", "https://api.tscst.com.br/restA
 TASKS_USER = os.environ.get("TASKS_USERNAME", "")
 TASKS_PASS = os.environ.get("TASKS_PASSWORD", "")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-insecure-secret")
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
 SESSION_TTL = 12 * 3600
 COOKIE_NAME = "proj_sess"
 
@@ -378,6 +380,76 @@ def api_sync():
               json.dumps(p)))
     return _json({"ok": True, "page": page, "gravados": len(items),
                   "hasNext": bool(data.get("hasNext"))})
+
+
+# ── Sync completo para o CRON (pg_cron + pg_net) ────────────────────────────
+def _upsert_projetos(items):
+    """Upsert em LOTE (execute_values) — muito mais rápido que 1 insert por linha,
+    o que é o que permite sincronizar as ~9 páginas dentro dos 60s da função."""
+    rows = [(p.get("codigo_projeto"), p.get("codigo_cliente_projeto"),
+             p.get("nome_cliente_projeto"), p.get("descricao_projeto"),
+             p.get("nome_coordenador_projeto"), p.get("status_projeto"),
+             p.get("tipo_projeto"), p.get("versao_projeto"), json.dumps(p))
+            for p in items if p.get("codigo_projeto")]
+    if not rows:
+        return 0
+    with db() as c, c.cursor() as cur:
+        execute_values(cur, """
+            insert into cockpit.projetos (codigo_projeto, codigo_cliente_projeto,
+              nome_cliente_projeto, descricao_projeto, nome_coordenador_projeto,
+              status_projeto, tipo_projeto, versao_projeto, raw, synced_at)
+            values %s
+            on conflict (codigo_projeto) do update set
+              codigo_cliente_projeto=excluded.codigo_cliente_projeto,
+              nome_cliente_projeto=excluded.nome_cliente_projeto,
+              descricao_projeto=excluded.descricao_projeto,
+              nome_coordenador_projeto=excluded.nome_coordenador_projeto,
+              status_projeto=excluded.status_projeto,
+              tipo_projeto=excluded.tipo_projeto,
+              versao_projeto=excluded.versao_projeto,
+              raw=excluded.raw, synced_at=now()
+        """, rows, template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,now())", page_size=200)
+    return len(rows)
+
+
+def _cron_autorizado():
+    """O cron não tem sessão: autentica por Authorization: Bearer <CRON_SECRET>.
+    Aceita também ?secret= para facilitar teste manual."""
+    if not CRON_SECRET:
+        return False
+    auth = request.headers.get("Authorization", "")
+    tok = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    return hmac.compare_digest(tok or request.args.get("secret", ""), CRON_SECRET)
+
+
+@app.route("/api/cron/sync", methods=["GET", "POST"])
+def api_cron_sync():
+    """Sincroniza TODAS as páginas da API PCI numa tacada. Disparado de hora em
+    hora pelo pg_cron do Supabase (via pg_net). Não exige login — exige o Bearer."""
+    if not _cron_autorizado():
+        return _err(401, "CRON_SECRET inválido ou ausente.")
+    ini = time.time()
+    page, total, paginas = 1, 0, 0
+    while page <= 50:
+        data = pci_get(LISTA_URL, {"page": page, "pageSize": 200})
+        if not isinstance(data, dict):
+            break
+        items = data.get("items") or []
+        total += _upsert_projetos(items)
+        paginas += 1
+        if not data.get("hasNext"):
+            break
+        page += 1
+    dur = int((time.time() - ini) * 1000)
+    try:
+        execute("""insert into cockpit.sync_log
+                   (source, status, started_at, finished_at, duration_ms,
+                    tickets_processed, tickets_upserted)
+                   values ('projetos-vercel','success', to_timestamp(%s), now(), %s, %s, %s)""",
+                (ini, dur, total, total))
+    except Exception:
+        pass
+    return _json({"ok": True, "paginas": paginas, "projetos": total, "duration_ms": dur})
 
 
 # detalhe AO VIVO (cache curto por instância quente)
