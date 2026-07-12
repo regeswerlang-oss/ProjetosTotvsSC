@@ -98,8 +98,11 @@ def _sign(p):
     return hmac.new(SESSION_SECRET.encode(), p.encode(), hashlib.sha256).hexdigest()
 
 
-def make_session(email, nome):
-    raw = json.dumps({"e": email, "n": nome, "x": int(time.time()) + SESSION_TTL})
+def make_session(email, nome, view_as=None):
+    d = {"e": email, "n": nome, "x": int(time.time()) + SESSION_TTL}
+    if view_as:
+        d["v"] = view_as          # admin simulando a visão de outro usuário
+    raw = json.dumps(d)
     b = base64.urlsafe_b64encode(raw.encode()).decode()
     return f"{b}.{_sign(b)}"
 
@@ -119,12 +122,41 @@ def read_session():
 
 
 def current_user():
+    """Usuário REAL do login (nunca o simulado). Use para auditoria/escrita."""
     s = read_session()
     return s.get("e") if s else None
 
 
+def is_admin(email):
+    if not email:
+        return False
+    r = q("select coalesce(is_admin,false) adm from cockpit.usuarios_login "
+          "where lower(email)=%s", (email.lower(),), one=True)
+    return bool(r and r["adm"])
+
+
+def effective_user():
+    """Usuário cuja VISÃO vale. É o simulado (view_as) somente se quem está
+    logado for admin de verdade — a simulação jamais amplia acesso, só restringe."""
+    s = read_session()
+    if not s:
+        return None
+    alvo = s.get("v")
+    if alvo and is_admin(s.get("e")):
+        return alvo
+    return s.get("e")
+
+
 def require_auth():
     return None if current_user() else _err(401, "Não autenticado.")
+
+
+def require_admin():
+    if not current_user():
+        return _err(401, "Não autenticado.")
+    if not is_admin(current_user()):
+        return _err(403, "Apenas administradores.")
+    return None
 
 
 def verify_scrypt(stored, senha):
@@ -157,7 +189,7 @@ def verify_scrypt(stored, senha):
 
 # ── Acesso por cliente (admin vê tudo; comum só os liberados) ───────────────
 def allowed_customers():
-    email = current_user()
+    email = effective_user()      # respeita o "ver como"
     if not email:
         return set()
     row = q("select coalesce(is_admin,false) adm from cockpit.usuarios_login "
@@ -280,7 +312,46 @@ def api_logout():
 @app.get("/api/me")
 def api_me():
     s = read_session()
-    return _json({"ok": True, "email": s["e"], "nome": s.get("n")}) if s else _err(401, "Não autenticado.")
+    if not s:
+        return _err(401, "Não autenticado.")
+    real = s["e"]
+    adm = is_admin(real)
+    alvo = s.get("v") if (s.get("v") and adm) else None
+    return _json({"ok": True, "email": real, "nome": s.get("n"), "is_admin": adm,
+                  "view_as": alvo, "efetivo": alvo or real})
+
+
+@app.get("/api/usuarios")
+def api_usuarios():
+    """Lista de usuários para o seletor 'ver como' — só admin."""
+    if (r := require_admin()):
+        return r
+    rows = q("""select u.email, u.nome, coalesce(u.is_admin,false) as is_admin, u.ativo,
+                       (select count(*) from cockpit.usuario_clientes uc
+                         where lower(uc.email)=lower(u.email)) as n_clientes
+                from cockpit.usuarios_login u order by u.nome""")
+    return _json({"ok": True, "usuarios": rows})
+
+
+@app.post("/api/view-as")
+def api_view_as():
+    """Liga/desliga a simulação. Só admin. Body: {email} ou {email: null} p/ sair."""
+    if (r := require_admin()):
+        return r
+    body = request.get_json(silent=True) or {}
+    alvo = (body.get("email") or "").strip().lower() or None
+    if alvo:
+        u = q("select email from cockpit.usuarios_login where lower(email)=%s",
+              (alvo,), one=True)
+        if not u:
+            return _err(404, "Usuário não encontrado.")
+        alvo = u["email"]
+    s = read_session()
+    resp = make_response(_json({"ok": True, "view_as": alvo}))
+    resp.set_cookie(COOKIE_NAME, make_session(s["e"], s.get("n"), view_as=alvo),
+                    max_age=SESSION_TTL, httponly=True, secure=True,
+                    samesite="Lax", path="/")
+    return resp
 
 
 @app.get("/api/health")
@@ -350,6 +421,8 @@ def api_sync():
     O front chama page=1,2,3… enquanto hasNext for true (evita timeout)."""
     if (r := require_auth()):
         return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de sincronizar.")
     page = int(request.args.get("page", 1))
     size = int(request.args.get("pageSize", 200))
     data = pci_get(LISTA_URL, {"page": page, "pageSize": size})

@@ -79,11 +79,21 @@
         <input type="checkbox" id="toggle-all" class="rounded accent-totvs-blue">
         Mostrar todos os clientes
       </label>
+      <select id="view-as" title="Ver o dashboard com a visão de outro usuário"
+              class="hidden px-2 py-1.5 rounded-md bg-white/10 text-totvs-white text-xs border border-white/20">
+        <option value="">👁 Ver como…</option>
+      </select>
       <button id="btn-sync" class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base">⟳ Sincronizar API</button>
       <button id="btn-refresh" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde transition-colors">↻ Atualizar</button>
     </div>
   </div>
 </header>
+
+<div id="simulando" class="hidden bg-amber-400 text-amber-950 px-6 py-2 text-sm font-semibold flex items-center gap-3">
+  <span>👁</span>
+  <span id="simulando-txt"></span>
+  <button id="sair-simulacao" class="ml-auto px-3 py-1 rounded-md bg-amber-950 text-amber-50 text-xs font-bold hover:bg-amber-900">Sair da simulação</button>
+</div>
 
 <main class="max-w-7xl mx-auto px-6 py-6">
   <!-- VIEW 1: LISTA -->
@@ -1113,6 +1123,44 @@ function escapeAttr(s) { return String(s).replace(/"/g, '&quot;'); }
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
+
+// ── "Ver como" (só admin): simula a visão de outro usuário, sem trocar de login.
+//    A simulação só restringe o escopo; nunca amplia (garantido no backend).
+async function initViewAs() {
+  let me;
+  try { me = await api('/api/me'); } catch (_) { return; }
+  const sel = $('#view-as');
+  const faixa = $('#simulando');
+
+  if (me.view_as) {
+    faixa.classList.remove('hidden');
+    $('#simulando-txt').textContent = `Você está vendo o dashboard como ${me.view_as} — os dados abaixo são o que ESSE usuário enxerga.`;
+  }
+  if (!me.is_admin) return;             // seletor é privilégio de admin
+
+  try {
+    const { usuarios } = await api('/api/usuarios');
+    sel.classList.remove('hidden');
+    sel.innerHTML = '<option value="">👁 Ver como…</option>' + usuarios.map(u =>
+      `<option value="${u.email}" ${u.email === me.view_as ? 'selected' : ''}>${u.nome || u.email}${u.is_admin ? ' (admin)' : ` · ${u.n_clientes} cliente(s)`}</option>`
+    ).join('');
+    sel.addEventListener('change', async () => {
+      await api('/api/view-as', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: sel.value || null })
+      });
+      location.reload();
+    });
+  } catch (_) { /* não-admin ou falha: segue sem seletor */ }
+}
+$('#sair-simulacao').addEventListener('click', async () => {
+  await api('/api/view-as', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: null })
+  });
+  location.reload();
+});
+initViewAs();
 
 $('#nav-back').addEventListener('click', voltarLista);
 $('#btn-refresh').addEventListener('click', () => {
