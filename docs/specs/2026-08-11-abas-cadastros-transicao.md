@@ -43,10 +43,27 @@ Fonte canônica = `cockpit.monitcad_projetos` / `_medicoes` / `_tabelas`.
   Módulos com carga nascem abertos, os zerados recolhidos; os botões
   **Expandir/Recolher** (`data-act="cad-expandir|cad-recolher"`) agem em todos.
   A ordem dos grupos vem do `modulos` do backend (registros desc).
-- `POST /api/monitcad/<customer>/upload` → carga manual do
-  `historico-semanal.json` (o mesmo do projeto *Monitoramento Cadastros*).
-  Idempotente: regrava a medição inteira quando a data já existe. Bloqueado
-  durante simulação ("ver como") e exige o `customer` em `cockpit.clientes` (FK).
+- `POST /api/monitcad/<customer>/upload` → carga manual em **dois formatos**:
+  o `historico-semanal.json` (projeto *Monitoramento Cadastros*) e o **CSV de
+  status de cadastros** exportado do Protheus. Idempotente: regrava a medição
+  inteira quando a data já existe. Bloqueado durante simulação ("ver como") e
+  exige o `customer` em `cockpit.clientes` (FK).
+
+  O formato é detectado pela extensão, pelo `Content-Type` ou pelo primeiro
+  caractere do conteúdo — não há duas rotas. O CSV vira o mesmo dicionário do
+  JSON (`_csv_para_body`) e segue pelo mesmo caminho de gravação.
+
+  **CSV aceito** — cabeçalho `MODULO, TABELA, DESCRICAO, DT_LEITURA, SEMANA,
+  QTDE`. Tolerâncias que já existem porque o arquivo vem do Protheus:
+  delimitador `,` `;` `TAB` ou `|` (detectado por `csv.Sniffer`); encoding
+  `utf-8`/`utf-8-sig`/**`cp1252`**/`latin-1`; cabeçalho com ou sem acento e em
+  qualquer caixa; `DT_LEITURA` em `dd/mm/aaaa hh:mm`, ISO ou `AAAAMMDD`;
+  `SEMANA` no formato `2026-W33` (só o número entra em `medicoes.semana`).
+  Sinônimos de coluna: `QTDE|QUANTIDADE|REALIZADO|REGISTROS`,
+  `ESTIMATIVA|META`, `DATA_PREV|PREVISAO`, `DT_LEITURA|DATA|DATA_MEDICAO`.
+  Uma medição por data distinta encontrada no arquivo. Colunas opcionais
+  (`ESTIMATIVA`, `ETAPA`, `RESPONSAVEL`, `STATUS`, `FILTRO`, `DATA_PREV`), quando
+  presentes, ligam de volta o modo com % e semáforo.
 
 ### Migração do schema `monitcad` (11/08/2026)
 

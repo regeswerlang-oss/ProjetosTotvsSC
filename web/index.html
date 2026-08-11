@@ -191,8 +191,8 @@
             <span id="cad-cliente-nome" class="font-medium"></span>
             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <label id="cad-upload-wrap" class="ml-auto px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-              ⬆ Subir medição (.json)
-              <input id="cad-file" type="file" accept="application/json" class="hidden">
+              ⬆ Subir medição (.csv / .json)
+              <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
             </label>
           </div>
           <div id="cad-conteudo"></div>
@@ -1477,19 +1477,24 @@ async function enviaMedicao(ev) {
   const f = ev.target.files?.[0];
   ev.target.value = '';
   if (!f) return;
-  if (!cad.customer) { alert('Selecione o cliente antes de subir a medição.'); return; }
-  let payload;
-  try {
-    payload = JSON.parse(await f.text());
-  } catch (e) {
-    alert('Arquivo não é um JSON válido: ' + e.message);
-    return;
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de subir a medição.'); return; }
+  // O backend aceita os dois formatos; o Content-Type é só a dica de qual é
+  const csv = /\.csv$/i.test(f.name);
+  const texto = await f.text();
+  if (!csv) {
+    try { JSON.parse(texto); }
+    catch (e) { alert('Arquivo não é um JSON nem um CSV válido: ' + e.message); return; }
   }
   try {
-    const j = await api(`/api/monitcad/${encodeURIComponent(cad.customer)}/upload`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-    alert(`Medições gravadas: ${j.medicoes} · linhas de tabela: ${j.tabelas}`);
-    carregaCadastros(cad.customer);
+    const j = await api(`/api/monitcad/${encodeURIComponent(cli)}/upload`, {
+      method: 'POST',
+      headers: { 'Content-Type': csv ? 'text/csv; charset=utf-8' : 'application/json' },
+      body: texto,
+    });
+    alert(`Medições gravadas: ${j.medicoes} · linhas de tabela: ${j.tabelas} (${j.formato})`);
+    cad.customer = null;
+    initCadastros();
   } catch (e) {
     alert('Falha ao subir a medição: ' + e.message);
   }

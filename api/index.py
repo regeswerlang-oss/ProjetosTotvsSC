@@ -14,7 +14,7 @@ Porte do Projetos/server.py + pci_client.py para função serverless.
 """
 from __future__ import annotations
 
-import base64, hashlib, hmac, json, os, re, time, unicodedata, urllib.parse
+import base64, csv, hashlib, hmac, io, json, os, re, time, unicodedata, urllib.parse
 from pathlib import Path
 
 import psycopg2, psycopg2.extras, requests
@@ -570,6 +570,84 @@ def _data_iso(v):
     return s if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) else None
 
 
+def _dt_hora(v):
+    """('11/08/2026 11:43') -> ('2026-08-11', '11:43'). Aceita também ISO e AAAAMMDD."""
+    s = str(v or "").strip()
+    if not s:
+        return None, None
+    hora = None
+    if " " in s:
+        s, _, h = s.partition(" ")
+        hora = h.strip()[:8] or None
+    if m := re.fullmatch(r"(\d{2})[/-](\d{2})[/-](\d{4})", s):
+        d, mes, a = m.groups()
+        return f"{a}-{mes}-{d}", hora
+    return _data_iso(s), hora
+
+
+# Nomes de coluna aceitos no CSV (sem acento, maiúsculo, sem espaço/underscore)
+CSV_COLS = {
+    "MODULO": "modulo", "TABELA": "tabela", "DESCRICAO": "descricao",
+    "QTDE": "realizado", "QUANTIDADE": "realizado", "REALIZADO": "realizado",
+    "REGISTROS": "realizado", "ESTIMATIVA": "estimativa", "META": "estimativa",
+    "FILTRO": "filtro", "ETAPA": "etapa", "RESPONSAVEL": "responsavel",
+    "STATUS": "status", "DATAPREV": "data_prev", "PREVISAO": "data_prev",
+    "DTLEITURA": "_dt", "DATA": "_dt", "DATAMEDICAO": "_dt", "SEMANA": "_semana",
+}
+
+
+def _norm_col(s):
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^A-Z0-9]", "", s.upper())
+
+
+def _csv_para_body(texto):
+    """Converte o CSV de status de cadastros no mesmo formato do
+    historico-semanal.json. Uma medição por data encontrada em DT_LEITURA."""
+    amostra = texto[:4096]
+    try:
+        dial = csv.Sniffer().sniff(amostra, delimiters=",;\t|")
+    except csv.Error:
+        dial = csv.excel
+    linhas = list(csv.reader(io.StringIO(texto), dial))
+    if not linhas:
+        raise ValueError("CSV vazio.")
+    cabec = [CSV_COLS.get(_norm_col(c)) for c in linhas[0]]
+    if "tabela" not in cabec:
+        raise ValueError("CSV sem a coluna TABELA. Esperado: MODULO, TABELA, "
+                         "DESCRICAO, DT_LEITURA, SEMANA, QTDE.")
+
+    por_data = {}
+    for linha in linhas[1:]:
+        if not any((c or "").strip() for c in linha):
+            continue
+        reg = {}
+        for col, val in zip(cabec, linha):
+            if col:
+                reg[col] = (val or "").strip()
+        if not reg.get("tabela"):
+            continue
+        dt, hora = _dt_hora(reg.pop("_dt", ""))
+        if not dt:
+            raise ValueError("CSV sem data válida em DT_LEITURA (ex.: 11/08/2026 11:43).")
+        semana = reg.pop("_semana", "")
+        med = por_data.setdefault(dt, {
+            "data_iso": dt, "hora_medicao": hora,
+            "semana": int(re.sub(r"^.*W", "", semana) or 0) or None,
+            "tabelas": [],
+        })
+        for k in ("realizado", "estimativa"):
+            if k in reg:
+                reg[k] = float(str(reg[k]).replace(".", "").replace(",", ".") or 0)
+        if "data_prev" in reg:
+            reg["data_prev"] = _dt_hora(reg["data_prev"])[0]
+        med["tabelas"].append(reg)
+
+    if not por_data:
+        raise ValueError("CSV sem linhas de tabela.")
+    return {"medicoes": [por_data[d] for d in sorted(por_data)]}
+
+
 @app.get("/api/monitcad/<customer>")
 def api_monitcad(customer):
     """Última medição + histórico de carga dos cadastros do cliente.
@@ -620,8 +698,10 @@ def api_monitcad(customer):
 
 @app.post("/api/monitcad/<customer>/upload")
 def api_monitcad_upload(customer):
-    """Carga manual do historico-semanal.json enquanto o job do Protheus não roda.
-    Idempotente: regrava a medição inteira quando a data já existe."""
+    """Carga manual enquanto o job do Protheus não roda. Aceita DOIS formatos:
+    o historico-semanal.json e o CSV de status de cadastros (MODULO, TABELA,
+    DESCRICAO, DT_LEITURA, SEMANA, QTDE). Idempotente: regrava a medição inteira
+    quando a data já existe."""
     if (r := require_auth()):
         return r
     if (d := deny_customer(customer)):
@@ -629,17 +709,40 @@ def api_monitcad_upload(customer):
     if effective_user() != current_user():
         return _err(409, "Saia da simulação ('ver como') antes de subir medições.")
 
-    body = request.get_json(silent=True)
-    if body is None and (f := request.files.get("arquivo")):
+    if (f := request.files.get("arquivo")):
+        bruto, nome = f.read(), (f.filename or "")
+    else:
+        bruto, nome = request.get_data(), ""
+    if not bruto:
+        return _err(400, "Arquivo vazio.")
+    # O Protheus exporta em cp1252 — tenta os encodings na ordem mais provável
+    texto = None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
         try:
-            body = json.loads(f.read().decode("utf-8"))
+            texto = bruto.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
+
+    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
+        or not texto.lstrip().startswith(("{", "["))
+    if ehcsv:
+        try:
+            body = _csv_para_body(texto)
         except Exception as e:
-            return _err(400, f"JSON inválido no arquivo: {e}")
+            return _err(400, f"CSV inválido: {e}")
+    else:
+        try:
+            body = json.loads(texto)
+        except Exception as e:
+            return _err(400, f"JSON inválido: {e}")
+
     if not isinstance(body, dict):
-        return _err(400, "Envie o conteúdo do historico-semanal.json.")
+        return _err(400, "Envie o historico-semanal.json ou o CSV de cadastros.")
     medicoes = body.get("medicoes") or []
     if not isinstance(medicoes, list) or not medicoes:
-        return _err(400, "JSON sem a lista 'medicoes'.")
+        return _err(400, "Arquivo sem medições.")
 
     # FK: o customer precisa existir em cockpit.clientes
     if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
@@ -654,7 +757,7 @@ def api_monitcad_upload(customer):
                  gp_totvs_nome=coalesce(excluded.gp_totvs_nome, cockpit.monitcad_projetos.gp_totvs_nome),
                  gp_cliente_nome=coalesce(excluded.gp_cliente_nome, cockpit.monitcad_projetos.gp_cliente_nome),
                  updated_at=now()""",
-            (customer, _slug(body.get("projeto") or ""), body.get("projeto"),
+            (customer, _slug(body.get("projeto") or "") or None, body.get("projeto"),
              body.get("cliente"), body.get("gp_totvs"), body.get("gp_cliente")))
 
     n_med = n_tab = 0
@@ -701,8 +804,8 @@ def api_monitcad_upload(customer):
     if ultima:
         execute("update cockpit.monitcad_projetos set ultima_medicao=%s, updated_at=now() "
                 "where customer=%s", (ultima, customer))
-    return _json({"ok": True, "customer": customer, "medicoes": n_med,
-                  "tabelas": n_tab, "ultima_medicao": ultima})
+    return _json({"ok": True, "customer": customer, "formato": "csv" if ehcsv else "json",
+                  "medicoes": n_med, "tabelas": n_tab, "ultima_medicao": ultima})
 
 
 # ── Painéis do cliente (aba "Transição") ────────────────────────────────────
