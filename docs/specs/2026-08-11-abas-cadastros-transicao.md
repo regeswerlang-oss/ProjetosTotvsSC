@@ -65,6 +65,32 @@ Fonte canônica = `cockpit.monitcad_projetos` / `_medicoes` / `_tabelas`.
   (`ESTIMATIVA`, `ETAPA`, `RESPONSAVEL`, `STATUS`, `FILTRO`, `DATA_PREV`), quando
   presentes, ligam de volta o modo com % e semáforo.
 
+### Exportar HTML e rascunho no Gmail
+
+`relatorioCadastrosHTML()` monta um relatório **autocontido** a partir dos dados já
+na tela — estilo inline, sem Tailwind e sem `<script>`, porque o mesmo HTML serve
+para três destinos: arquivo solto, corpo de e-mail e impressão. Conteúdo: cabeçalho
+do cliente/projeto, os 4 KPIs, registros por módulo, evolução por medição e todas
+as tabelas agrupadas por módulo.
+
+- **⬇ Exportar HTML** — download via `Blob`, nome
+  `status-cadastros-<customer>-<AAAAMMDD>.html`.
+- **✉ Rascunho no Gmail** — modal com Para/Cc/Assunto (assunto já preenchido) →
+  `POST /api/gmail/rascunho`, que faz **IMAP APPEND** na conta do usuário logado.
+  Nada é enviado: o e-mail nasce em Rascunhos.
+
+A App Password fica cifrada (Fernet) em `cockpit.gmail_credenciais`, com a chave
+derivada do `SESSION_SECRET` da Vercel — **trocar o `SESSION_SECRET` invalida todas
+as credenciais salvas**, e cada usuário salva a sua de novo pela própria tela. A
+senha nunca volta para o front. Rotas: `GET/POST/DELETE /api/gmail/cred` (o POST
+valida fazendo login IMAP de verdade antes de gravar).
+
+Quando não há credencial, `/api/gmail/rascunho` responde **428** e o front abre o
+modal "Conectar o Gmail"; ao salvar, ele reabre o modal de e-mail de onde parou —
+por isso o helper `api()` expõe `erro.status`. A pasta de rascunhos é achada pela
+flag `\Drafts` do IMAP, não pelo nome (`[Gmail]/Drafts` vs `[Gmail]/Rascunhos`
+muda com o idioma da conta). Depende de `cryptography` no `requirements.txt`.
+
 ### Migração do schema `monitcad` (11/08/2026)
 
 Os dados reais estavam no schema **`monitcad`** (`clientes`, `medicoes`,

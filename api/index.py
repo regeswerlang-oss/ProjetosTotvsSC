@@ -14,7 +14,8 @@ Porte do Projetos/server.py + pci_client.py para função serverless.
 """
 from __future__ import annotations
 
-import base64, csv, hashlib, hmac, io, json, os, re, time, unicodedata, urllib.parse
+import base64, csv, email.message, hashlib, hmac, imaplib, io, json, os, re, time, \
+    unicodedata, urllib.parse
 from pathlib import Path
 
 import psycopg2, psycopg2.extras, requests
@@ -806,6 +807,136 @@ def api_monitcad_upload(customer):
                 "where customer=%s", (ultima, customer))
     return _json({"ok": True, "customer": customer, "formato": "csv" if ehcsv else "json",
                   "medicoes": n_med, "tabelas": n_tab, "ultima_medicao": ultima})
+
+
+# ── Gmail: rascunho por IMAP APPEND ─────────────────────────────────────────
+# A App Password fica cifrada (Fernet) em cockpit.gmail_credenciais, com a chave
+# derivada do SESSION_SECRET da Vercel — trocar o SESSION_SECRET invalida todas
+# as credenciais salvas, e cada usuário só precisa salvar de novo pela própria
+# tela. A senha NUNCA volta para o front.
+IMAP_HOST = "imap.gmail.com"
+
+
+def _fernet():
+    from cryptography.fernet import Fernet
+    if SESSION_SECRET == "dev-insecure-secret":
+        raise RuntimeError("SESSION_SECRET não configurado — não dá para cifrar a senha.")
+    chave = base64.urlsafe_b64encode(hashlib.sha256(SESSION_SECRET.encode()).digest())
+    return Fernet(chave)
+
+
+def _imap_login(gmail, senha):
+    m = imaplib.IMAP4_SSL(IMAP_HOST, timeout=25)
+    m.login(gmail, senha)
+    return m
+
+
+def _pasta_rascunhos(m):
+    """O nome da pasta muda com o idioma da conta ([Gmail]/Drafts, /Rascunhos…).
+    Acha pela flag \\Drafts, que é estável."""
+    ok, linhas = m.list()
+    if ok == "OK":
+        for l in linhas:
+            txt = l.decode("utf-8", "replace") if isinstance(l, bytes) else str(l)
+            if "\\Drafts" in txt:
+                return '"' + txt.split(' "/" ')[-1].strip().strip('"') + '"'
+    return '"[Gmail]/Drafts"'
+
+
+def _cred_gmail(usuario):
+    row = q("select gmail_email, senha_cif from cockpit.gmail_credenciais where usuario=%s",
+            (usuario,), one=True)
+    if not row:
+        return None, None
+    try:
+        return row["gmail_email"], _fernet().decrypt(row["senha_cif"].encode()).decode()
+    except Exception:
+        return row["gmail_email"], None      # cifrada com outro SESSION_SECRET
+
+
+@app.get("/api/gmail/cred")
+def api_gmail_cred_get():
+    if (r := require_auth()):
+        return r
+    gmail, senha = _cred_gmail(current_user())
+    return _json({"ok": True, "configurado": bool(gmail and senha), "gmail_email": gmail,
+                  "precisa_resalvar": bool(gmail and not senha)})
+
+
+@app.post("/api/gmail/cred")
+def api_gmail_cred_set():
+    """Valida a App Password fazendo login IMAP de verdade antes de gravar."""
+    if (r := require_auth()):
+        return r
+    b = request.get_json(silent=True) or {}
+    gmail = (b.get("gmail_email") or "").strip().lower()
+    senha = (b.get("app_password") or "").replace(" ", "")
+    if not gmail or not senha:
+        return _err(400, "Informe o e-mail do Gmail e a App Password.")
+    try:
+        m = _imap_login(gmail, senha)
+        m.logout()
+    except Exception as e:
+        return _err(400, f"O Gmail recusou a credencial: {e}")
+    execute("""insert into cockpit.gmail_credenciais
+                 (usuario, gmail_email, senha_cif, validado_em, updated_at)
+               values (%s,%s,%s, now(), now())
+               on conflict (usuario) do update set
+                 gmail_email=excluded.gmail_email, senha_cif=excluded.senha_cif,
+                 validado_em=now(), updated_at=now()""",
+            (current_user(), gmail, _fernet().encrypt(senha.encode()).decode()))
+    return _json({"ok": True, "gmail_email": gmail})
+
+
+@app.delete("/api/gmail/cred")
+def api_gmail_cred_del():
+    if (r := require_auth()):
+        return r
+    execute("delete from cockpit.gmail_credenciais where usuario=%s", (current_user(),))
+    return _json({"ok": True})
+
+
+@app.post("/api/gmail/rascunho")
+def api_gmail_rascunho():
+    """Cria um rascunho HTML na conta do usuário logado (IMAP APPEND)."""
+    if (r := require_auth()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de criar rascunhos.")
+    b = request.get_json(silent=True) or {}
+    assunto = (b.get("assunto") or "").strip()
+    html = b.get("html") or ""
+    para = (b.get("para") or "").strip()
+    if not assunto or not html:
+        return _err(400, "Informe assunto e corpo do e-mail.")
+
+    gmail, senha = _cred_gmail(current_user())
+    if not gmail:
+        return _err(428, "Sem credencial do Gmail. Cadastre uma App Password.")
+    if not senha:
+        return _err(428, "A credencial do Gmail não pôde ser lida (SESSION_SECRET mudou). "
+                         "Cadastre a App Password de novo.")
+
+    msg = email.message.EmailMessage()
+    msg["From"] = gmail
+    if para:
+        msg["To"] = para
+    if cc := (b.get("cc") or "").strip():
+        msg["Cc"] = cc
+    msg["Subject"] = assunto
+    msg.set_content("Este e-mail tem formatação HTML — abra num cliente compatível.")
+    msg.add_alternative(html, subtype="html")
+
+    try:
+        m = _imap_login(gmail, senha)
+        try:
+            m.append(_pasta_rascunhos(m), "\\Draft", imaplib.Time2Internaldate(time.time()),
+                     msg.as_bytes())
+        finally:
+            m.logout()
+    except Exception as e:
+        return _err(502, f"Falha ao criar o rascunho no Gmail: {e}")
+    return _json({"ok": True, "gmail_email": gmail, "assunto": assunto, "para": para})
 
 
 # ── Painéis do cliente (aba "Transição") ────────────────────────────────────

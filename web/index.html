@@ -190,10 +190,14 @@
             <span class="text-xs text-slate-500">Cliente</span>
             <span id="cad-cliente-nome" class="font-medium"></span>
             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
-            <label id="cad-upload-wrap" class="ml-auto px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-              ⬆ Subir medição (.csv / .json)
-              <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
-            </label>
+            <div class="ml-auto flex items-center gap-2">
+              <button id="cad-html" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⬇ Exportar HTML</button>
+              <button id="cad-email" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">✉ Rascunho no Gmail</button>
+              <label id="cad-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+                ⬆ Subir medição (.csv / .json)
+                <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
+              </label>
+            </div>
           </div>
           <div id="cad-conteudo"></div>
         </div>
@@ -298,13 +302,16 @@ async function api(path, opts) {
   const r = await fetch(path, opts);
   if (r.status === 401) { location.href = '/login'; throw new Error('Sessão expirada'); }
   if (!r.ok) {
+    const erro = new Error();
+    erro.status = r.status;      // quem chama precisa distinguir 428 (sem credencial)
     // Tenta extrair a mensagem amigável do corpo JSON ({error: "..."})
     let msg = `HTTP ${r.status}`;
     try {
       const body = await r.json();
       if (body && body.error) msg = body.error;
     } catch (_) { /* corpo não-JSON, mantém o HTTP nnn */ }
-    throw new Error(msg);
+    erro.message = msg;
+    throw erro;
   }
   return r.json();
 }
@@ -1278,7 +1285,7 @@ function setTab(nome) {
 // ============================================================================
 //  ABA CADASTROS (MONITCAD) — status de carga dos cadastros por cliente
 // ============================================================================
-const cad = { customer: null };
+const cad = { customer: null, dados: null };
 
 function initCadastros() {
   const cli = state.selected?.cli;
@@ -1308,6 +1315,7 @@ async function carregaCadastros(customer) {
     box.innerHTML = blocoErro('Não foi possível carregar os cadastros', e, () => carregaCadastros(customer));
     return;
   }
+  cad.dados = j;                        // guardado para o export HTML / e-mail
   if (j.vazio) {
     box.innerHTML = blocoVazioCad(
       'Nenhuma medição publicada para este cliente ainda.',
@@ -1585,6 +1593,264 @@ async function publicaPainel(ev) {
 }
 
 $('#tr-file').addEventListener('change', publicaPainel);
+
+// ============================================================================
+//  CADASTROS — relatório autocontido (export HTML e corpo do e-mail)
+//  Sem Tailwind e sem <script>: estilo inline, para abrir em qualquer lugar
+//  (arquivo solto, anexo, cliente de e-mail).
+// ============================================================================
+function relatorioCadastrosHTML() {
+  const j = cad.dados;
+  if (!j || j.vazio) return null;
+  const t = j.tabelas || [], mods = j.modulos || [], serie = j.serie || [];
+  const p = j.projeto || {}, comEst = !!j.tem_estimativa;
+  const totR = t.reduce((a, x) => a + Number(x.realizado || 0), 0);
+  const totE = t.reduce((a, x) => a + Number(x.estimativa || 0), 0);
+  const comCarga = t.filter(x => Number(x.realizado || 0) > 0).length;
+  const pct = totE > 0 ? (100 * totR / totE) : null;
+  const maxMod = Math.max(1, ...mods.map(m => Number(m.registros || 0)));
+  const cliente = (state.selected?.projeto?.nome_cliente_projeto || p.cliente_nome || '').trim();
+
+  const C = { petroleo: '#002233', blue: '#00DBFF', roxo: '#A44DFF', cinza: '#545454',
+              borda: '#e2e8f0', claro: '#f8fafc' };
+  const cel = 'padding:6px 10px;border-top:1px solid ' + C.borda + ';font-size:13px';
+  const kpi = (rot, val, sub, bg, fg) => `
+    <td style="padding:0 6px 0 0;width:25%;vertical-align:top">
+      <div style="background:${bg};color:${fg};border-radius:8px;padding:14px 16px">
+        <div style="font-size:11px;opacity:.85">${rot}</div>
+        <div style="font-size:24px;font-weight:700;margin-top:2px">${val}</div>
+        <div style="font-size:11px;opacity:.85">${sub}</div>
+      </div></td>`;
+
+  const kpis = comEst
+    ? kpi('Carga geral', pct.toFixed(1) + '%', `${fmtNum(totR)} de ${fmtNum(totE)}`, C.petroleo, '#fff')
+      + kpi('Registros carregados', fmtNum(totR), 'na última medição', C.blue, C.petroleo)
+      + kpi('Tabelas monitoradas', String(t.length), `${comCarga} com carga`, C.roxo, '#fff')
+      + kpi('Módulos', String(mods.length), 'com tabela monitorada', '#fff', C.petroleo)
+    : kpi('Registros carregados', fmtNum(totR), 'na última medição', C.petroleo, '#fff')
+      + kpi('Tabelas com carga', `${comCarga}/${t.length}`, `${t.length - comCarga} ainda zerada(s)`, C.blue, C.petroleo)
+      + kpi('Módulos', String(mods.length), 'com tabela monitorada', C.roxo, '#fff')
+      + kpi('% de carga', '—', 'sem estimativa cadastrada', '#fff', C.cinza);
+
+  const barra = (largura) => `
+    <div style="background:#e6edf0;border-radius:99px;height:8px;overflow:hidden">
+      <div style="background:${C.blue};height:8px;width:${largura}%"></div></div>`;
+
+  const blocoMod = mods.map(m => `
+    <tr>
+      <td style="${cel};width:200px">${escapeHtml(m.modulo)}</td>
+      <td style="${cel};width:45%">${barra((100 * Number(m.registros || 0) / maxMod).toFixed(1))}</td>
+      <td style="${cel};text-align:right;font-weight:600">${fmtNum(m.registros)}</td>
+      <td style="${cel};text-align:right;color:${C.cinza}">${m.com_carga}/${m.tabelas} tabelas</td>
+    </tr>`).join('');
+
+  const hist = serie.map(s => `
+    <tr>
+      <td style="${cel};width:200px">${fmtData(String(s.data_medicao))}${s.semana ? ` · S${s.semana}` : ''}</td>
+      <td style="${cel};width:45%">${barra(comEst && s.pct != null ? Math.min(100, Number(s.pct)).toFixed(1)
+                                                         : (100 * Number(s.realizado || 0) / Math.max(1, ...serie.map(x => Number(x.realizado || 0)))).toFixed(1))}</td>
+      <td style="${cel};text-align:right;font-weight:600">${comEst && s.pct != null ? Number(s.pct).toFixed(1) + '%' : fmtNum(s.realizado)}</td>
+      <td style="${cel};text-align:right;color:${C.cinza}">${s.tabelas_com_carga} c/ carga</td>
+    </tr>`).join('');
+
+  const porMod = new Map();
+  t.forEach(x => {
+    const k = x.modulo || '(sem módulo)';
+    if (!porMod.has(k)) porMod.set(k, []);
+    porMod.get(k).push(x);
+  });
+  const ordem = mods.map(m => m.modulo).filter(k => porMod.has(k));
+  [...porMod.keys()].forEach(k => { if (!ordem.includes(k)) ordem.push(k); });
+
+  const detalhe = ordem.map(nome => {
+    const itens = porMod.get(nome);
+    const reg = itens.reduce((a, x) => a + Number(x.realizado || 0), 0);
+    return `
+      <h3 style="font-size:14px;margin:18px 0 6px;color:${C.petroleo}">
+        ${escapeHtml(nome)}
+        <span style="font-weight:400;color:${C.cinza}">· ${fmtNum(reg)} registro(s) ·
+        ${itens.filter(x => Number(x.realizado || 0) > 0).length}/${itens.length} tabelas com carga</span>
+      </h3>
+      <table style="width:100%;border-collapse:collapse">
+        <tr style="background:${C.claro};font-size:11px;color:${C.cinza};text-align:left">
+          <th style="padding:6px 10px">Tabela</th><th style="padding:6px 10px">Descrição</th>
+          <th style="padding:6px 10px;text-align:right">Realizado</th>
+          ${comEst ? '<th style="padding:6px 10px;text-align:right">Estimativa</th><th style="padding:6px 10px;text-align:right">%</th><th style="padding:6px 10px">Status</th>'
+                   : '<th style="padding:6px 10px">Situação</th>'}
+        </tr>
+        ${itens.map(x => {
+          const est = Number(x.estimativa || 0);
+          const pc = x.percentual != null ? Number(x.percentual) : (est > 0 ? 100 * Number(x.realizado) / est : null);
+          return `<tr>
+            <td style="${cel};font-family:monospace">${escapeHtml(x.tabela || '')}</td>
+            <td style="${cel}">${escapeHtml(x.descricao || '—')}</td>
+            <td style="${cel};text-align:right">${fmtNum(x.realizado)}</td>
+            ${comEst ? `<td style="${cel};text-align:right">${est > 0 ? fmtNum(est) : '—'}</td>
+              <td style="${cel};text-align:right;font-weight:600">${pc === null ? '—' : pc.toFixed(1) + '%'}</td>
+              <td style="${cel}">${escapeHtml(x.status || '—')}</td>`
+              : `<td style="${cel};color:${Number(x.realizado) > 0 ? '#047857' : C.cinza}">${Number(x.realizado) > 0 ? 'Com carga' : 'Zerada'}</td>`}
+          </tr>`;
+        }).join('')}
+      </table>`;
+  }).join('');
+
+  const aviso = comEst ? '' : `
+    <p style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;font-size:13px">
+      <b>Sem estimativa cadastrada.</b> Os números são a contagem absoluta da última medição —
+      não há % de carga nem semáforo.</p>`;
+
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<title>Status dos Cadastros · ${escapeHtml(cliente)}</title></head>
+<body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
+<div style="max-width:900px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
+  <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
+  <h1 style="margin:4px 0 2px;font-size:22px">Status dos Cadastros</h1>
+  <p style="margin:0;color:${C.cinza};font-size:13px">
+    ${escapeHtml(p.projeto || 'Monitoramento de Cadastros')} ·
+    última medição ${fmtData(String(j.ultima_medicao || ''))} · ${j.total_medicoes} medição(ões)</p>
+  ${aviso}
+  <table style="width:100%;border-collapse:separate;margin:16px 0"><tr>${kpis}</tr></table>
+
+  <h2 style="font-size:15px;margin:22px 0 4px">Registros por módulo</h2>
+  <table style="width:100%;border-collapse:collapse">${blocoMod}</table>
+
+  <h2 style="font-size:15px;margin:22px 0 4px">Evolução por medição</h2>
+  <table style="width:100%;border-collapse:collapse">${hist}</table>
+
+  <h2 style="font-size:15px;margin:22px 0 4px">Tabelas monitoradas</h2>
+  ${detalhe}
+
+  <p style="margin-top:24px;color:#9C9C9C;font-size:11px">
+    Gerado pela Gestão de Projetos TOTVS SC em ${new Date().toLocaleString('pt-BR')}.</p>
+</div></body></html>`;
+}
+
+$('#cad-html').addEventListener('click', () => {
+  const html = relatorioCadastrosHTML();
+  if (!html) { alert('Não há medição para exportar.'); return; }
+  const nome = `status-cadastros-${(cad.customer || '').toLowerCase()}-${(cad.dados.ultima_medicao || '').replace(/-/g, '')}.html`;
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: nome });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+});
+
+$('#cad-email').addEventListener('click', () => abreModalEmail());
+
+// ============================================================================
+//  MODAIS — rascunho no Gmail e cadastro da App Password
+// ============================================================================
+function modal(titulo, corpoHTML, rotuloOk) {
+  const fundo = document.createElement('div');
+  fundo.className = 'fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-6 overflow-y-auto';
+  fundo.innerHTML = `
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-lg mt-16">
+      <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+        <h3 class="font-totvs text-totvs-petroleo">${titulo}</h3>
+        <button data-fechar class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+      </div>
+      <div class="p-5 space-y-3 text-sm">${corpoHTML}</div>
+      <div class="px-5 py-3 border-t border-slate-200 flex items-center justify-end gap-2">
+        <p data-erro class="mr-auto text-xs text-rose-600"></p>
+        <button data-fechar class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50">Cancelar</button>
+        <button data-ok class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">${rotuloOk}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(fundo);
+  const fecha = () => fundo.remove();
+  fundo.querySelectorAll('[data-fechar]').forEach(b => b.addEventListener('click', fecha));
+  fundo.addEventListener('click', e => { if (e.target === fundo) fecha(); });
+  return {
+    el: fundo, fecha,
+    campo: (id) => fundo.querySelector(`#${id}`),
+    erro: (msg) => { fundo.querySelector('[data-erro]').textContent = msg || ''; },
+    aoConfirmar: (fn) => fundo.querySelector('[data-ok]').addEventListener('click', fn),
+    ocupado: (v, txt) => {
+      const b = fundo.querySelector('[data-ok]');
+      b.disabled = v;
+      b.textContent = txt;
+    },
+  };
+}
+
+const campo = (id, rot, valor = '', tipo = 'text', dica = '') => `
+  <label class="block">
+    <span class="text-xs text-slate-500">${rot}</span>
+    <input id="${id}" type="${tipo}" value="${escapeHtml(valor)}"
+           class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-totvs-blue/40">
+    ${dica ? `<span class="text-xs text-slate-400">${dica}</span>` : ''}
+  </label>`;
+
+function abreModalEmail() {
+  const html = relatorioCadastrosHTML();
+  if (!html) { alert('Não há medição para enviar.'); return; }
+  const j = cad.dados;
+  const cliente = (state.selected?.projeto?.nome_cliente_projeto || j.projeto?.cliente_nome || '').trim();
+  const assunto = `Status dos Cadastros · ${cliente} · ${fmtData(String(j.ultima_medicao || ''))}`;
+
+  const m = modal('Criar rascunho no Gmail',
+    campo('em-para', 'Para (separe por vírgula)') +
+    campo('em-cc', 'Cc (opcional)') +
+    campo('em-assunto', 'Assunto', assunto) +
+    `<p class="text-xs text-slate-500">O corpo vai com o relatório completo: KPIs, registros por
+     módulo, evolução por medição e todas as tabelas. O rascunho é criado na sua conta —
+     nada é enviado.</p>`,
+    'Criar rascunho');
+
+  m.aoConfirmar(async () => {
+    const dados = {
+      para: m.campo('em-para').value.trim(),
+      cc: m.campo('em-cc').value.trim(),
+      assunto: m.campo('em-assunto').value.trim(),
+      html,
+    };
+    if (!dados.assunto) { m.erro('Informe o assunto.'); return; }
+    m.erro(''); m.ocupado(true, 'Criando…');
+    try {
+      const r = await api('/api/gmail/rascunho', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dados),
+      });
+      m.fecha();
+      alert(`Rascunho criado em ${r.gmail_email}. Abra o Gmail em Rascunhos.`);
+    } catch (e) {
+      m.ocupado(false, 'Criar rascunho');
+      if (e.status === 428) { m.fecha(); abreModalCredGmail(() => abreModalEmail()); return; }
+      m.erro(e.message);
+    }
+  });
+}
+
+function abreModalCredGmail(depois) {
+  const m = modal('Conectar o Gmail',
+    `<p class="text-xs text-slate-500">Para criar rascunhos, o app precisa de uma
+     <b>App Password</b> do Google (não é a sua senha normal). Gere em
+     <span class="font-mono">myaccount.google.com → Segurança → Senhas de app</span>.
+     Ela é guardada cifrada e nunca volta para a tela.</p>` +
+    campo('gc-email', 'E-mail do Gmail', '', 'email') +
+    campo('gc-senha', 'App Password (16 caracteres)', '', 'password', 'Os espaços são ignorados.'),
+    'Salvar e testar');
+
+  m.aoConfirmar(async () => {
+    const dados = {
+      gmail_email: m.campo('gc-email').value.trim(),
+      app_password: m.campo('gc-senha').value,
+    };
+    if (!dados.gmail_email || !dados.app_password) { m.erro('Preencha os dois campos.'); return; }
+    m.erro(''); m.ocupado(true, 'Testando no Gmail…');
+    try {
+      await api('/api/gmail/cred', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dados),
+      });
+      m.fecha();
+      if (depois) depois();
+    } catch (e) {
+      m.ocupado(false, 'Salvar e testar');
+      m.erro(e.message);
+    }
+  });
+}
 
 carregaLista();
 </script>
