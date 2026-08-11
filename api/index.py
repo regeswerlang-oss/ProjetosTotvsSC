@@ -525,6 +525,195 @@ def api_cron_sync():
     return _json({"ok": True, "paginas": paginas, "projetos": total, "duration_ms": dur})
 
 
+# ── MONITCAD — status dos cadastros (aba "Cadastros") ───────────────────────
+def _data_iso(v):
+    """Aceita '20260427' (AAAAMMDD) ou '2026-04-27'; devolve ISO ou None."""
+    s = str(v or "").strip()
+    if re.fullmatch(r"\d{8}", s):
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s if re.fullmatch(r"\d{4}-\d{2}-\d{2}", s) else None
+
+
+@app.get("/api/monitcad/<customer>")
+def api_monitcad(customer):
+    """Última medição + histórico de carga dos cadastros do cliente.
+    Enquanto o U_MONITPUSH() do Protheus não publicar, devolve vazio:true."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    proj = q("select * from cockpit.monitcad_projetos where customer=%s",
+             (customer,), one=True)
+    meds = q("""select id, data_medicao, semana, hora_medicao, origem
+                  from cockpit.monitcad_medicoes
+                 where customer=%s order by data_medicao""", (customer,))
+    if not meds:
+        return _json({"ok": True, "customer": customer, "projeto": proj,
+                      "vazio": True, "tabelas": [], "serie": [], "total_medicoes": 0})
+    ult = meds[-1]
+    tabelas = q("""select tabela, descricao, filtro, realizado, estimativa, percentual,
+                          data_prev, etapa, responsavel, status
+                     from cockpit.monitcad_tabelas
+                    where medicao_id=%s order by percentual nulls first, tabela""",
+                (ult["id"],))
+    serie = q("""select m.data_medicao, m.semana,
+                        sum(t.realizado)  as realizado,
+                        sum(t.estimativa) as estimativa,
+                        case when sum(t.estimativa) > 0
+                             then round(100.0 * sum(t.realizado) / sum(t.estimativa), 1)
+                             else 0 end as pct
+                   from cockpit.monitcad_medicoes m
+                   join cockpit.monitcad_tabelas t on t.medicao_id = m.id
+                  where m.customer=%s
+                  group by m.data_medicao, m.semana
+                  order by m.data_medicao""", (customer,))
+    return _json({"ok": True, "customer": customer, "projeto": proj, "vazio": False,
+                  "ultima_medicao": ult["data_medicao"], "total_medicoes": len(meds),
+                  "tabelas": tabelas, "serie": serie})
+
+
+@app.post("/api/monitcad/<customer>/upload")
+def api_monitcad_upload(customer):
+    """Carga manual do historico-semanal.json enquanto o job do Protheus não roda.
+    Idempotente: regrava a medição inteira quando a data já existe."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de subir medições.")
+
+    body = request.get_json(silent=True)
+    if body is None and (f := request.files.get("arquivo")):
+        try:
+            body = json.loads(f.read().decode("utf-8"))
+        except Exception as e:
+            return _err(400, f"JSON inválido no arquivo: {e}")
+    if not isinstance(body, dict):
+        return _err(400, "Envie o conteúdo do historico-semanal.json.")
+    medicoes = body.get("medicoes") or []
+    if not isinstance(medicoes, list) or not medicoes:
+        return _err(400, "JSON sem a lista 'medicoes'.")
+
+    # FK: o customer precisa existir em cockpit.clientes
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+
+    execute("""insert into cockpit.monitcad_projetos
+                 (customer, slug, projeto, cliente_nome, gp_totvs_nome, gp_cliente_nome, updated_at)
+               values (%s,%s,%s,%s,%s,%s, now())
+               on conflict (customer) do update set
+                 projeto=coalesce(excluded.projeto, cockpit.monitcad_projetos.projeto),
+                 cliente_nome=coalesce(excluded.cliente_nome, cockpit.monitcad_projetos.cliente_nome),
+                 gp_totvs_nome=coalesce(excluded.gp_totvs_nome, cockpit.monitcad_projetos.gp_totvs_nome),
+                 gp_cliente_nome=coalesce(excluded.gp_cliente_nome, cockpit.monitcad_projetos.gp_cliente_nome),
+                 updated_at=now()""",
+            (customer, _slug(body.get("projeto") or ""), body.get("projeto"),
+             body.get("cliente"), body.get("gp_totvs"), body.get("gp_cliente")))
+
+    n_med = n_tab = 0
+    ultima = None
+    for m in medicoes:
+        dt = _data_iso(m.get("data_iso") or m.get("data_medicao"))
+        if not dt:
+            continue
+        # regrava a medição inteira (as tabelas caem por ON DELETE CASCADE
+        # da FK medicao_id — se não houver cascade, o delete explícito cobre)
+        antigos = q("select id from cockpit.monitcad_medicoes where customer=%s and data_medicao=%s",
+                    (customer, dt))
+        for a in antigos:
+            execute("delete from cockpit.monitcad_tabelas where medicao_id=%s", (a["id"],))
+            execute("delete from cockpit.monitcad_medicoes where id=%s", (a["id"],))
+        row = q("""insert into cockpit.monitcad_medicoes
+                     (customer, data_medicao, semana, hora_medicao, origem, payload)
+                   values (%s,%s,%s,%s,'upload',%s) returning id""",
+                (customer, dt, m.get("semana"), m.get("hora_medicao"),
+                 json.dumps({k: v for k, v in m.items() if k != "tabelas"})), one=True)
+        mid = row["id"]
+        n_med += 1
+        ultima = max(ultima or dt, dt)
+        linhas = []
+        for t in (m.get("tabelas") or []):
+            est = float(t.get("estimativa") or 0)
+            real = float(t.get("realizado") or 0)
+            pct = t.get("percentual")
+            if pct is None:
+                pct = round(100.0 * real / est, 1) if est > 0 else 0
+            linhas.append((mid, customer, dt, t.get("tabela"), t.get("descricao"),
+                           t.get("filtro"), real, est, pct, _data_iso(t.get("data_prev")),
+                           t.get("etapa"), t.get("responsavel"), t.get("status")))
+        if linhas:
+            with db() as c, c.cursor() as cur:
+                execute_values(cur, """
+                    insert into cockpit.monitcad_tabelas
+                      (medicao_id, customer, data_medicao, tabela, descricao, filtro,
+                       realizado, estimativa, percentual, data_prev, etapa, responsavel, status)
+                    values %s""", linhas, page_size=200)
+            n_tab += len(linhas)
+
+    if ultima:
+        execute("update cockpit.monitcad_projetos set ultima_medicao=%s, updated_at=now() "
+                "where customer=%s", (ultima, customer))
+    return _json({"ok": True, "customer": customer, "medicoes": n_med,
+                  "tabelas": n_tab, "ultima_medicao": ultima})
+
+
+# ── Painéis do cliente (aba "Transição") ────────────────────────────────────
+# O HTML fica em cockpit.paineis_cliente, NÃO no git: este repo é público e o
+# painel carrega o plano de atividades, consultores e GAPs do cliente.
+@app.get("/api/paineis")
+def api_paineis():
+    """Painéis disponíveis para os clientes que o usuário enxerga."""
+    if (r := require_auth()):
+        return r
+    allowed = allowed_customers()
+    rows = q("""select p.customer, p.slug, p.titulo, p.descricao, p.updated_at,
+                       c.nome as cliente_nome
+                  from cockpit.paineis_cliente p
+                  join cockpit.clientes c on c.customer = p.customer
+                 where p.ativo order by c.nome, p.slug""")
+    out = [r for r in rows if allowed is None or r["customer"] in allowed]
+    return _json({"ok": True, "paineis": out, "pode_subir": is_admin(current_user())})
+
+
+@app.get("/painel/<customer>/<slug>")
+def page_painel(customer, slug):
+    """Serve o painel dentro do iframe da aba Transição — exige sessão e acesso
+    ao cliente. É por isso que o HTML não pode morar em web/ (estático livre)."""
+    if not current_user():
+        return redirect("/login", 302)
+    if (d := deny_customer(customer)):
+        return d
+    row = q("select html from cockpit.paineis_cliente "
+            "where customer=%s and slug=%s and ativo", (customer, slug), one=True)
+    if not row:
+        return _err(404, "Painel não encontrado.")
+    return Response(row["html"], mimetype="text/html; charset=utf-8")
+
+
+@app.post("/api/paineis/<customer>/<slug>")
+def api_painel_upload(customer, slug):
+    """Publica/atualiza o HTML do painel. Só admin; o corpo é o arquivo inteiro."""
+    if (r := require_admin()):
+        return r
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+    html = request.get_data(as_text=True) or ""
+    if (f := request.files.get("arquivo")):
+        html = f.read().decode("utf-8", errors="replace")
+    if "<" not in html or len(html) < 200:
+        return _err(400, "Envie o HTML completo do painel.")
+    titulo = request.args.get("titulo") or slug
+    execute("""insert into cockpit.paineis_cliente
+                 (customer, slug, titulo, html, updated_by, updated_at)
+               values (%s,%s,%s,%s,%s, now())
+               on conflict (customer, slug) do update set
+                 titulo=excluded.titulo, html=excluded.html,
+                 updated_by=excluded.updated_by, updated_at=now(), ativo=true""",
+            (customer, slug, titulo, html, current_user()))
+    return _json({"ok": True, "customer": customer, "slug": slug, "bytes": len(html)})
+
+
 # detalhe AO VIVO (cache curto por instância quente)
 _cache: dict = {}
 TTL = 90
@@ -570,7 +759,8 @@ def static_assets(asset):
         return _err(404, "Rota de API desconhecida.")
     safe = (WEB_DIR / asset).resolve()
     if WEB_DIR in safe.parents and safe.is_file():
-        if safe.name == "index.html" and not current_user():
+        # Nenhum HTML (fora o login) sai sem sessão — inclui transicao.html
+        if safe.suffix.lower() == ".html" and safe.name != "login.html" and not current_user():
             return redirect("/login", 302)
         ext = safe.suffix.lower()
         ctype = {".html": "text/html; charset=utf-8", ".js": "application/javascript",

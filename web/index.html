@@ -60,6 +60,15 @@
     opacity: 0.10;
   }
   .totvs-hex > * { position: relative; z-index: 1; }
+
+  /* Altura real do header — medida por ResizeObserver e usada pelo sticky das abas */
+  :root { --hdr: 68px; }
+  #app-tabs { top: var(--hdr); }
+  .app-tab { padding: 0.75rem 1rem; font-size: 0.875rem; border-bottom: 2px solid transparent;
+             color: #545454; font-weight: 500; }
+  .app-tab:hover { color: var(--totvs-petroleo); }
+  .app-tab.is-active { border-bottom-color: var(--totvs-blue); color: var(--totvs-petroleo); font-weight: 700; }
+  #frame-transicao { width: 100%; border: 0; display: block; min-height: 70vh; }
 </style>
 </head>
 <body class="bg-totvs-beige text-totvs-petroleo">
@@ -94,6 +103,15 @@
   <span id="simulando-txt"></span>
   <button id="sair-simulacao" class="ml-auto px-3 py-1 rounded-md bg-amber-950 text-amber-50 text-xs font-bold hover:bg-amber-900">Sair da simulação</button>
 </div>
+
+<!-- Navegação global do app -->
+<nav id="app-tabs" class="bg-white border-b border-slate-200 sticky z-[9] shadow-sm">
+  <div class="max-w-7xl mx-auto px-6 flex gap-1">
+    <button data-app="projetos"  class="app-tab is-active">Projetos</button>
+    <button data-app="cadastros" class="app-tab">Cadastros</button>
+    <button data-app="transicao" class="app-tab">Transição</button>
+  </div>
+</nav>
 
 <main class="max-w-7xl mx-auto px-6 py-6">
   <!-- VIEW 1: LISTA -->
@@ -137,31 +155,32 @@
         </div>
       </div>
 
-      <!-- KPIs -->
-      <div id="d-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
-
-      <!-- Horas detalhadas -->
-      <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
-        <h3 class="text-sm font-semibold text-slate-700 mb-3">Apontamentos por tipo</h3>
-        <div id="d-horas" class="space-y-2"></div>
-      </div>
-
-      <!-- Tabs: Cronograma | Por Módulo -->
+      <!-- Tabs do projeto: Resumo | Cronograma | Por Módulo | Por Etapa
+           A barra fica logo abaixo do card do projeto; KPIs e Apontamentos
+           passaram a viver dentro da aba Resumo. -->
       <div class="bg-white rounded-lg border border-slate-200">
         <div class="flex items-center justify-between px-5 pt-4 border-b border-slate-200">
           <div class="flex gap-1 -mb-px">
-            <button data-tab="crono"    class="tab-btn px-4 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Cronograma</button>
+            <button data-tab="resumo"   class="tab-btn px-4 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Resumo</button>
+            <button data-tab="crono"    class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
             <button data-tab="modulos"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
             <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
           </div>
-          <div class="flex items-center gap-2 text-xs pb-2">
+          <div id="tab-acoes" class="flex items-center gap-2 text-xs pb-2 hidden">
             <button data-act="expand-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Expandir</button>
             <button data-act="collapse-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Recolher</button>
           </div>
         </div>
 
+        <!-- Aba Resumo (KPIs + Apontamentos por tipo) -->
+        <div id="tab-resumo" class="p-5">
+          <div id="d-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
+          <h3 class="text-sm font-semibold text-slate-700 mb-3">Apontamentos por tipo</h3>
+          <div id="d-horas" class="space-y-2"></div>
+        </div>
+
         <!-- Aba Cronograma (existente) -->
-        <div id="tab-crono" class="p-5">
+        <div id="tab-crono" class="p-5 hidden">
           <div id="d-crono-loading" class="text-slate-400 text-sm py-4">Carregando cronograma…</div>
           <div id="d-crono"></div>
         </div>
@@ -180,6 +199,39 @@
       </div>
     </div>
   </section>
+
+  <!-- VIEW 3: CADASTROS (MONITCAD) -->
+  <section id="view-cadastros" class="hidden">
+    <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+      <select id="cad-cliente" class="px-3 py-2 border border-slate-300 rounded-md bg-white min-w-[280px]">
+        <option value="">Selecione o cliente…</option>
+      </select>
+      <button id="cad-reload" class="px-3 py-2 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+      <label id="cad-upload-wrap" class="ml-auto px-3 py-2 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+        ⬆ Subir medição (.json)
+        <input id="cad-file" type="file" accept="application/json" class="hidden">
+      </label>
+    </div>
+    <div id="cad-conteudo"></div>
+  </section>
+
+  <!-- VIEW 4: TRANSIÇÃO (painel de status entregue ao cliente) -->
+  <section id="view-transicao" class="hidden">
+    <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+      <select id="tr-painel" class="px-3 py-2 border border-slate-300 rounded-md bg-white min-w-[380px]">
+        <option value="">Selecione o painel…</option>
+      </select>
+      <span id="tr-info" class="text-xs text-slate-500"></span>
+      <label id="tr-upload-wrap" class="hidden ml-auto px-3 py-2 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+        ⬆ Publicar painel (.html)
+        <input id="tr-file" type="file" accept="text/html" class="hidden">
+      </label>
+    </div>
+    <div id="tr-conteudo"></div>
+    <div id="transicao-box" class="hidden bg-white rounded-lg border border-slate-200 overflow-hidden">
+      <iframe id="frame-transicao" title="Painel de status do cliente" loading="lazy"></iframe>
+    </div>
+  </section>
 </main>
 
 <script>
@@ -189,11 +241,12 @@
 const state = {
   projetos: [],
   clientes: [],
+  app: 'projetos',                     // 'projetos' | 'cadastros' | 'transicao'
   view: 'lista',                       // 'lista' | 'detalhe'
   selected: null,                      // { cli, cod, ver, loja, projeto }
   showAll: false,
   cronograma: null,                    // último cronograma carregado
-  tab: 'crono',                        // 'crono' | 'modulos'
+  tab: 'resumo',                       // 'resumo' | 'crono' | 'modulos' | 'etapas'
 };
 
 // Mapeamentos de status — PALPITES (ajustar conforme uso real)
@@ -422,6 +475,7 @@ function cardProjeto(p) {
 async function abrirDetalhe(sel) {
   state.selected = sel;
   state.view = 'detalhe';
+  setTab('resumo');                     // todo projeto abre pelo Resumo
   $('#view-lista').classList.add('hidden');
   $('#view-detalhe').classList.remove('hidden');
   $('#nav-back').classList.remove('hidden');
@@ -1211,17 +1265,293 @@ document.addEventListener('click', e => {
     }
   }
   const tab = e.target.closest('.tab-btn');
-  if (tab) {
-    state.tab = tab.dataset.tab;
-    $$('.tab-btn').forEach(b => {
-      const active = b.dataset.tab === state.tab;
-      b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${active ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
-    });
-    $('#tab-crono').classList.toggle('hidden',   state.tab !== 'crono');
-    $('#tab-modulos').classList.toggle('hidden', state.tab !== 'modulos');
-    $('#tab-etapas').classList.toggle('hidden',  state.tab !== 'etapas');
-  }
+  if (tab) setTab(tab.dataset.tab);
 });
+
+// ============================================================================
+//  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
+// ============================================================================
+function setTab(nome) {
+  state.tab = nome;
+  $$('.tab-btn').forEach(b => {
+    const active = b.dataset.tab === state.tab;
+    b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${active ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
+  });
+  ['resumo', 'crono', 'modulos', 'etapas'].forEach(t => {
+    $(`#tab-${t}`).classList.toggle('hidden', state.tab !== t);
+  });
+  // Expandir/Recolher só faz sentido nas abas com árvore
+  $('#tab-acoes').classList.toggle('hidden', state.tab === 'resumo');
+}
+
+// ============================================================================
+//  NAVEGAÇÃO GLOBAL (Projetos | Cadastros | Transição)
+// ============================================================================
+function setApp(nome) {
+  state.app = nome;
+  $$('.app-tab').forEach(b => b.classList.toggle('is-active', b.dataset.app === nome));
+  // Projetos mantém o par lista/detalhe; as outras são views próprias
+  const emDetalhe = nome === 'projetos' && state.view === 'detalhe';
+  $('#view-lista').classList.toggle('hidden', nome !== 'projetos' || emDetalhe);
+  $('#view-detalhe').classList.toggle('hidden', !emDetalhe);
+  $('#nav-back').classList.toggle('hidden', !emDetalhe);
+  $('#view-cadastros').classList.toggle('hidden', nome !== 'cadastros');
+  $('#view-transicao').classList.toggle('hidden', nome !== 'transicao');
+  window.scrollTo(0, 0);
+  if (nome === 'cadastros') initCadastros();
+  if (nome === 'transicao') initTransicao();
+}
+
+document.addEventListener('click', e => {
+  const t = e.target.closest('.app-tab');
+  if (t) setApp(t.dataset.app);
+});
+
+// Mantém o sticky das abas colado no header, qualquer que seja a altura dele
+const _hdr = document.querySelector('header');
+if (window.ResizeObserver && _hdr) {
+  new ResizeObserver(() => {
+    document.documentElement.style.setProperty('--hdr', `${_hdr.offsetHeight}px`);
+  }).observe(_hdr);
+}
+
+// ============================================================================
+//  ABA CADASTROS (MONITCAD) — status de carga dos cadastros por cliente
+// ============================================================================
+const cad = { carregado: false, customer: null };
+
+async function initCadastros() {
+  if (cad.carregado) return;
+  cad.carregado = true;
+  const sel = $('#cad-cliente');
+  // Reaproveita a lista de clientes já recortada pelo acesso do usuário
+  try {
+    const j = await api('/api/clientes');
+    sel.innerHTML = '<option value="">Selecione o cliente…</option>' +
+      (j.clientes || []).map(c => `<option value="${c.codigo}">${escapeHtml(c.nome)}</option>`).join('');
+  } catch (e) {
+    $('#cad-conteudo').innerHTML = blocoErro('Não foi possível listar os clientes', e, () => { cad.carregado = false; initCadastros(); });
+    return;
+  }
+  sel.addEventListener('change', () => carregaCadastros(sel.value));
+  $('#cad-reload').addEventListener('click', () => carregaCadastros(cad.customer));
+  $('#cad-file').addEventListener('change', enviaMedicao);
+  $('#cad-conteudo').innerHTML = blocoVazioCad('Selecione um cliente para ver o status dos cadastros.');
+}
+
+function blocoVazioCad(msg, extra = '') {
+  return `<div class="bg-white rounded-lg border border-slate-200 p-10 text-center">
+    <p class="text-slate-500">${escapeHtml(msg)}</p>${extra}</div>`;
+}
+
+async function carregaCadastros(customer) {
+  cad.customer = customer || null;
+  const box = $('#cad-conteudo');
+  if (!customer) { box.innerHTML = blocoVazioCad('Selecione um cliente para ver o status dos cadastros.'); return; }
+  box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando medições…</div>';
+  let j;
+  try {
+    j = await api(`/api/monitcad/${encodeURIComponent(customer)}`);
+  } catch (e) {
+    box.innerHTML = blocoErro('Não foi possível carregar os cadastros', e, () => carregaCadastros(customer));
+    return;
+  }
+  if (j.vazio) {
+    box.innerHTML = blocoVazioCad(
+      'Nenhuma medição publicada para este cliente ainda.',
+      '<p class="text-xs text-slate-400 mt-2">O job U_MONITPUSH() no Protheus ainda não enviou dados. ' +
+      'Use "⬆ Subir medição (.json)" para carregar o historico-semanal.json manualmente.</p>');
+    return;
+  }
+  box.innerHTML = renderCadastros(j);
+}
+
+function corStatus(s) {
+  return ({ VERDE: 'bg-emerald-100 text-emerald-800', AMARELO: 'bg-amber-100 text-amber-800',
+            VERMELHO: 'bg-rose-100 text-rose-800' })[(s || '').toUpperCase()]
+         || 'bg-slate-100 text-slate-700';
+}
+
+function renderCadastros(j) {
+  const t = j.tabelas || [], serie = j.serie || [], p = j.projeto || {};
+  const totR = t.reduce((a, x) => a + Number(x.realizado || 0), 0);
+  const totE = t.reduce((a, x) => a + Number(x.estimativa || 0), 0);
+  const pct = totE > 0 ? (100 * totR / totE) : 0;
+  const nVerm = t.filter(x => (x.status || '').toUpperCase() === 'VERMELHO').length;
+  const nAmar = t.filter(x => (x.status || '').toUpperCase() === 'AMARELO').length;
+  const ant = serie.length > 1 ? Number(serie[serie.length - 2].pct || 0) : null;
+  const delta = ant === null ? null : (pct - ant);
+
+  const kpi = (rot, val, sub, cls) => `
+    <div class="rounded-lg p-4 ${cls}">
+      <p class="text-xs opacity-80">${rot}</p>
+      <p class="text-2xl font-totvs mt-1">${val}</p>
+      ${sub ? `<p class="text-xs opacity-80 mt-0.5">${sub}</p>` : ''}
+    </div>`;
+
+  const linhas = t.map(x => {
+    const pc = Number(x.percentual != null ? x.percentual
+                 : (Number(x.estimativa) > 0 ? 100 * Number(x.realizado) / Number(x.estimativa) : 0));
+    return `<tr class="border-t border-slate-100">
+      <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
+      <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
+      <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(x.realizado)}</td>
+      <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(x.estimativa)}</td>
+      <td class="py-2 pr-3 text-right tabular-nums font-semibold">${pc.toFixed(1)}%</td>
+      <td class="py-2 pr-3 w-40"><div class="bar-track"><div class="bar-fill fill-exec" style="width:${Math.min(100, pc).toFixed(1)}%"></div></div></td>
+      <td class="py-2 pr-3 text-xs">${escapeHtml(x.etapa || '—')}</td>
+      <td class="py-2 pr-3 text-xs">${escapeHtml(x.responsavel || '—')}</td>
+      <td class="py-2 pr-3 text-xs">${x.data_prev ? fmtData(String(x.data_prev)) : '—'}</td>
+      <td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${corStatus(x.status)}">${escapeHtml(x.status || '—')}</span></td>
+    </tr>`;
+  }).join('');
+
+  const hist = serie.map(s => `
+    <div class="flex items-center gap-3 text-sm">
+      <span class="w-28 text-slate-500 text-xs">${fmtData(String(s.data_medicao))}${s.semana ? ` · S${s.semana}` : ''}</span>
+      <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${Math.min(100, Number(s.pct || 0))}%"></div></div>
+      <span class="w-14 text-right tabular-nums font-medium">${Number(s.pct || 0).toFixed(1)}%</span>
+    </div>`).join('');
+
+  return `
+    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+      <div class="flex items-start justify-between flex-wrap gap-3">
+        <div>
+          <p class="text-xs text-totvs-blue uppercase tracking-wide font-semibold">${escapeHtml(p.cliente_nome || '')}</p>
+          <h2 class="text-xl font-totvs text-totvs-petroleo mt-0.5">${escapeHtml(p.projeto || 'Monitoramento de Cadastros')}</h2>
+        </div>
+        <p class="text-xs text-slate-500">Última medição: <span class="font-medium">${fmtData(String(j.ultima_medicao || ''))}</span> · ${j.total_medicoes} medição(ões)</p>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      ${kpi('Carga geral', pct.toFixed(1) + '%', delta === null ? 'primeira medição' : `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta).toFixed(1)} p.p. vs anterior`, 'bg-totvs-petroleo text-white')}
+      ${kpi('Registros carregados', fmtNum(totR), `de ${fmtNum(totE)} estimados`, 'bg-totvs-blue text-totvs-petroleo')}
+      ${kpi('Tabelas monitoradas', String(t.length), `${nVerm} vermelha(s) · ${nAmar} amarela(s)`, 'bg-totvs-purple text-white')}
+      ${kpi('Em risco', String(nVerm + nAmar), 'tabelas fora da meta', 'bg-white border border-slate-200 text-totvs-petroleo')}
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Evolução por medição</h3>
+      <div class="space-y-2">${hist || '<p class="text-sm text-slate-400">Sem histórico.</p>'}</div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Tabelas monitoradas</h3>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead><tr class="text-xs text-slate-500 text-left">
+            <th class="pb-2 pr-3">Tabela</th><th class="pb-2 pr-3">Descrição</th>
+            <th class="pb-2 pr-3 text-right">Realizado</th><th class="pb-2 pr-3 text-right">Estimativa</th>
+            <th class="pb-2 pr-3 text-right">%</th><th class="pb-2 pr-3">Progresso</th>
+            <th class="pb-2 pr-3">Etapa</th><th class="pb-2 pr-3">Responsável</th>
+            <th class="pb-2 pr-3">Previsão</th><th class="pb-2">Status</th>
+          </tr></thead>
+          <tbody>${linhas}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function fmtNum(n) {
+  return Number(n || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 });
+}
+
+async function enviaMedicao(ev) {
+  const f = ev.target.files?.[0];
+  ev.target.value = '';
+  if (!f) return;
+  if (!cad.customer) { alert('Selecione o cliente antes de subir a medição.'); return; }
+  let payload;
+  try {
+    payload = JSON.parse(await f.text());
+  } catch (e) {
+    alert('Arquivo não é um JSON válido: ' + e.message);
+    return;
+  }
+  try {
+    const j = await api(`/api/monitcad/${encodeURIComponent(cad.customer)}/upload`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    alert(`Medições gravadas: ${j.medicoes} · linhas de tabela: ${j.tabelas}`);
+    carregaCadastros(cad.customer);
+  } catch (e) {
+    alert('Falha ao subir a medição: ' + e.message);
+  }
+}
+
+// ============================================================================
+//  ABA TRANSIÇÃO — painel de status entregue ao cliente
+//  O HTML vem de cockpit.paineis_cliente (fora do git: carrega dado do cliente).
+// ============================================================================
+const tr = { carregado: false, atual: null, podeSubir: false };
+
+async function initTransicao() {
+  if (tr.carregado) return;
+  tr.carregado = true;
+  let j;
+  try {
+    j = await api('/api/paineis');
+  } catch (e) {
+    $('#tr-conteudo').innerHTML = blocoErro('Não foi possível listar os painéis', e, () => { tr.carregado = false; initTransicao(); });
+    return;
+  }
+  tr.podeSubir = !!j.pode_subir;
+  $('#tr-upload-wrap').classList.toggle('hidden', !tr.podeSubir);
+  const sel = $('#tr-painel');
+  sel.innerHTML = '<option value="">Selecione o painel…</option>' +
+    (j.paineis || []).map(p => `<option value="${p.customer}/${p.slug}">${escapeHtml(p.cliente_nome)} · ${escapeHtml(p.titulo || p.slug)}</option>`).join('');
+  sel.addEventListener('change', () => abrePainel(sel.value));
+  $('#tr-file').addEventListener('change', publicaPainel);
+
+  if ((j.paineis || []).length === 0) {
+    $('#tr-conteudo').innerHTML = blocoVazioCad(
+      'Nenhum painel publicado ainda.',
+      tr.podeSubir
+        ? '<p class="text-xs text-slate-400 mt-2">Use "⬆ Publicar painel (.html)" para subir o HTML do status por atividades.</p>'
+        : '<p class="text-xs text-slate-400 mt-2">Peça ao administrador para publicar o painel do seu cliente.</p>');
+  } else if ((j.paineis || []).length === 1) {
+    sel.value = `${j.paineis[0].customer}/${j.paineis[0].slug}`;   // só um: já abre
+    abrePainel(sel.value);
+  } else {
+    $('#tr-conteudo').innerHTML = blocoVazioCad('Selecione o painel para visualizar.');
+  }
+}
+
+function abrePainel(ref) {
+  tr.atual = ref || null;
+  const box = $('#transicao-box'), fr = $('#frame-transicao');
+  if (!ref) { box.classList.add('hidden'); $('#tr-conteudo').innerHTML = blocoVazioCad('Selecione o painel para visualizar.'); return; }
+  $('#tr-conteudo').innerHTML = '';
+  box.classList.remove('hidden');
+  fr.src = `/painel/${ref}`;
+  // Página inteira dentro do iframe: acompanha a altura para não ter scroll duplo
+  const ajusta = () => {
+    try {
+      const h = fr.contentDocument?.body?.scrollHeight;
+      fr.style.height = h ? (h + 40) + 'px' : '85vh';
+    } catch { fr.style.height = '85vh'; }
+  };
+  fr.onload = () => { ajusta(); setTimeout(ajusta, 800); };
+  window.addEventListener('resize', ajusta);
+}
+
+async function publicaPainel(ev) {
+  const f = ev.target.files?.[0];
+  ev.target.value = '';
+  if (!f) return;
+  const ref = tr.atual || prompt('Publicar em qual painel? Informe CUSTOMER/slug (ex.: TFEHXQ00/transicao)');
+  if (!ref || !ref.includes('/')) return;
+  const titulo = prompt('Título do painel:', f.name.replace(/\.html?$/i, '')) || ref.split('/')[1];
+  try {
+    const j = await api(`/api/paineis/${ref}?titulo=${encodeURIComponent(titulo)}`,
+      { method: 'POST', headers: { 'Content-Type': 'text/html' }, body: await f.text() });
+    alert(`Painel publicado (${(j.bytes / 1024).toFixed(0)} KB).`);
+    tr.carregado = false;
+    $('#tr-painel').innerHTML = '';
+    await initTransicao();
+    $('#tr-painel').value = ref;
+    abrePainel(ref);
+  } catch (e) {
+    alert('Falha ao publicar o painel: ' + e.message);
+  }
+}
 
 carregaLista();
 </script>
