@@ -14,7 +14,7 @@ Porte do Projetos/server.py + pci_client.py para função serverless.
 """
 from __future__ import annotations
 
-import base64, hashlib, hmac, json, os, re, time, unicodedata
+import base64, hashlib, hmac, json, os, re, time, unicodedata, urllib.parse
 from pathlib import Path
 
 import psycopg2, psycopg2.extras, requests
@@ -40,6 +40,42 @@ MAPA_URL = f"{TASKS_BASE}/PCITConectaProjetos/mapa"
 CRONO_URL = f"{TASKS_BASE}/PCITConectaProjetos/cronograma"
 
 app = Flask(__name__)
+
+# ── Roteamento na Vercel — o contrato "?__path=" ────────────────────────────
+# Com `destination: "/api/index"` (seco), a Vercel entrega à função o caminho de
+# DESTINO: o Flask recebe PATH_INFO=/api/index em TODA request, nenhuma rota casa
+# e tudo cai no catch-all `/<path:asset>` → 404 "Rota de API desconhecida." (o
+# site inteiro morre, inclusive `/` e `/api/health`). O `vercel.json` passa o
+# caminho original em `?__path=/$1` e este middleware o devolve ao PATH_INFO.
+# Os dois andam em par: mexeu no destination, mexa aqui.
+FUNC_PATHS = ("/api/index", "/api/index.py")
+
+
+class _VercelRewritePath:
+    """Devolve ao PATH_INFO o caminho original vindo em ?__path=.
+    Inerte quando o PATH_INFO já chega certo (dev local ou se a Vercel voltar a
+    preservar o caminho)."""
+
+    def __init__(self, wsgi):
+        self.wsgi = wsgi
+
+    def __call__(self, environ, start_response):
+        if environ.get("PATH_INFO", "") in FUNC_PATHS:
+            pares = urllib.parse.parse_qsl(environ.get("QUERY_STRING", ""),
+                                           keep_blank_values=True)
+            resto = [(k, v) for k, v in pares if k != "__path"]
+            path = next((v for k, v in pares if k == "__path"), "") \
+                or environ.get("HTTP_X_VERCEL_ORIGINAL_PATH", "")
+            if path:
+                if "?" in path:                      # query que veio no próprio $1
+                    path, extra = path.split("?", 1)
+                    resto += urllib.parse.parse_qsl(extra, keep_blank_values=True)
+                environ["PATH_INFO"] = path if path.startswith("/") else "/" + path
+                environ["QUERY_STRING"] = urllib.parse.urlencode(resto)
+        return self.wsgi(environ, start_response)
+
+
+app.wsgi_app = _VercelRewritePath(app.wsgi_app)
 
 
 class PCIUnavailable(Exception):

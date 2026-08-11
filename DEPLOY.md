@@ -52,3 +52,28 @@ na base e o último sync.
   API der soluço, o app serve o cache anterior marcado como `_stale`.
 - Os HTMLs ficam em `web/` (nunca em `public/`, que a Vercel serviria antes da
   função e furaria o login).
+
+## Roteamento na Vercel — o contrato `?__path=`
+
+Com `destination: "/api/index"` (seco), a Vercel entrega à função o caminho de
+**destino**: o Flask recebe `PATH_INFO=/api/index` em **toda** request, nenhuma
+rota casa e tudo cai no catch-all `/<path:asset>`, que responde
+`404 {"ok": false, "error": "Rota de API desconhecida."}` — o site inteiro morre,
+inclusive `/` e `/api/health`.
+
+Por isso o `vercel.json` usa:
+
+```json
+"rewrites": [ { "source": "/(.*)", "destination": "/api/index?__path=/$1" } ]
+```
+
+e o `api/index.py` embrulha o WSGI no middleware `_VercelRewritePath`, que
+devolve o `__path` ao `PATH_INFO`, remove o `__path` da query e preserva o resto
+(fallback: header `x-vercel-original-path`). Ele só age quando o `PATH_INFO` é o
+caminho da função, então fica inerte no `python api/index.py` local.
+
+**Os dois andam em par: mexeu no `destination`, mexa no `FUNC_PATHS`/contrato
+`__path`.** Mesmo bug e mesmo fix do projeto Gaps · Tomada de Decisão (30/07/2026).
+
+Diagnóstico rápido: se `/api/health` — rota que existe — devolver "Rota de API
+desconhecida.", o problema é o `PATH_INFO`, não rota faltando nem deploy velho.
