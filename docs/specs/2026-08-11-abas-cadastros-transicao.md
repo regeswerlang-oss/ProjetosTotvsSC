@@ -3,20 +3,22 @@
 Agrupa no app **Projetos TOTVS SC** (`projetos-vercel`) três visões que antes
 viviam em arquivos soltos, e sobe a barra de abas do detalhe do projeto.
 
-## 1. Navegação global
+## 1. Uma barra de abas só, no contexto do projeto
 
-`<nav id="app-tabs">` logo abaixo do header, sticky colado nele (a altura real do
-header vai para a CSS var `--hdr`, medida por `ResizeObserver` — o header cresce
-quando entra a faixa amarela do "ver como").
+Não há navegação global. Cadastros e Transição vivem **na mesma barra** das abas
+do projeto, depois de um divisor:
 
-| Aba | View | Conteúdo |
-|---|---|---|
-| Projetos | `#view-lista` / `#view-detalhe` | comportamento anterior, intacto |
-| Cadastros | `#view-cadastros` | status de carga dos cadastros (MONITCAD) |
-| Transição | `#view-transicao` | painel de status entregue ao cliente |
+`Resumo | Cronograma | Por Módulo | Por Etapa ┊ Cadastros | Transição`
 
-`setApp(nome)` troca a view; ao voltar para "Projetos" o app volta para onde
-estava (lista ou detalhe), sem perder o projeto aberto.
+A consequência é o ponto central do desenho: **as duas abas sempre trabalham com
+o cliente do projeto aberto** (`state.selected.cli`, que é o
+`codigo_cliente_projeto` = `customer`). Não existe seletor de cliente nem risco de
+olhar o cadastro de um cliente enquanto o cabeçalho mostra o projeto de outro.
+
+`setTab(nome)` (lista `TABS`) troca o painel, carrega Cadastros/Transição sob
+demanda e esconde o "Expandir/Recolher" fora das abas com árvore. As duas abas
+guardam o `customer` já carregado e só refazem a busca quando o projeto aberto é
+de outro cliente.
 
 ## 2. Abas do detalhe subiram
 
@@ -84,7 +86,9 @@ GAPs do cliente. Ele vive em `cockpit.paineis_cliente (customer, slug, html…)`
 RLS habilitado sem policy (só service_role).
 
 - `GET /api/paineis` — painéis dos clientes que o usuário enxerga; devolve
-  `pode_subir` (admin).
+  `pode_subir` (admin). A aba filtra pelo `customer` do projeto aberto: um painel
+  só abre direto, vários mostram um seletor, nenhum mostra o estado vazio.
+  A publicação também mira sempre esse `customer` — só o slug é perguntado.
 - `GET /painel/<customer>/<slug>` — serve o HTML no iframe; exige sessão **e**
   passa por `deny_customer()`. Por isso não pode morar em `web/` (estático livre).
 - `POST /api/paineis/<customer>/<slug>?titulo=…` — publica/atualiza o HTML. Admin.
@@ -94,6 +98,7 @@ RLS habilitado sem policy (só service_role).
 
 ## Como publicar o painel do Olim
 
-1. Entrar como admin → aba **Transição** → "⬆ Publicar painel (.html)".
-2. Informar `TFEHXQ00/transicao` e escolher o `Olim_Status_Atividades.html`.
+1. Entrar como admin e abrir um projeto do Olim (cliente `TFEHXQ00`).
+2. Aba **Transição** → "⬆ Publicar painel (.html)" → slug `transicao` → escolher o
+   `Olim_Status_Atividades.html`.
 3. O painel passa a abrir para todo usuário com o cliente `TFEHXQ00` liberado.

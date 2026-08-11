@@ -61,13 +61,6 @@
   }
   .totvs-hex > * { position: relative; z-index: 1; }
 
-  /* Altura real do header — medida por ResizeObserver e usada pelo sticky das abas */
-  :root { --hdr: 68px; }
-  #app-tabs { top: var(--hdr); }
-  .app-tab { padding: 0.75rem 1rem; font-size: 0.875rem; border-bottom: 2px solid transparent;
-             color: #545454; font-weight: 500; }
-  .app-tab:hover { color: var(--totvs-petroleo); }
-  .app-tab.is-active { border-bottom-color: var(--totvs-blue); color: var(--totvs-petroleo); font-weight: 700; }
   #frame-transicao { width: 100%; border: 0; display: block; min-height: 70vh; }
 </style>
 </head>
@@ -103,15 +96,6 @@
   <span id="simulando-txt"></span>
   <button id="sair-simulacao" class="ml-auto px-3 py-1 rounded-md bg-amber-950 text-amber-50 text-xs font-bold hover:bg-amber-900">Sair da simulação</button>
 </div>
-
-<!-- Navegação global do app -->
-<nav id="app-tabs" class="bg-white border-b border-slate-200 sticky z-[9] shadow-sm">
-  <div class="max-w-7xl mx-auto px-6 flex gap-1">
-    <button data-app="projetos"  class="app-tab is-active">Projetos</button>
-    <button data-app="cadastros" class="app-tab">Cadastros</button>
-    <button data-app="transicao" class="app-tab">Transição</button>
-  </div>
-</nav>
 
 <main class="max-w-7xl mx-auto px-6 py-6">
   <!-- VIEW 1: LISTA -->
@@ -165,6 +149,9 @@
             <button data-tab="crono"    class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
             <button data-tab="modulos"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
             <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
+            <span class="w-px bg-slate-200 mx-2 my-2"></span>
+            <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
+            <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
           <div id="tab-acoes" class="flex items-center gap-2 text-xs pb-2 hidden">
             <button data-act="expand-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Expandir</button>
@@ -196,40 +183,38 @@
           <div id="d-etapas-loading" class="text-slate-400 text-sm py-4">Carregando…</div>
           <div id="d-etapas"></div>
         </div>
+
+        <!-- Aba Cadastros (MONITCAD) — sempre do cliente do projeto aberto -->
+        <div id="tab-cadastros" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="cad-cliente-nome" class="font-medium"></span>
+            <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+            <label id="cad-upload-wrap" class="ml-auto px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+              ⬆ Subir medição (.json)
+              <input id="cad-file" type="file" accept="application/json" class="hidden">
+            </label>
+          </div>
+          <div id="cad-conteudo"></div>
+        </div>
+
+        <!-- Aba Transição — painel de status do cliente do projeto aberto -->
+        <div id="tab-transicao" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="tr-cliente-nome" class="font-medium"></span>
+            <select id="tr-painel" class="hidden px-3 py-1.5 border border-slate-300 rounded-md bg-white"></select>
+            <label id="tr-upload-wrap" class="hidden ml-auto px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+              ⬆ Publicar painel (.html)
+              <input id="tr-file" type="file" accept="text/html" class="hidden">
+            </label>
+          </div>
+          <div id="tr-conteudo"></div>
+          <div id="transicao-box" class="hidden -mx-5 -mb-5 border-t border-slate-200 overflow-hidden">
+            <iframe id="frame-transicao" title="Painel de status do cliente" loading="lazy"></iframe>
+          </div>
+        </div>
       </div>
-    </div>
-  </section>
-
-  <!-- VIEW 3: CADASTROS (MONITCAD) -->
-  <section id="view-cadastros" class="hidden">
-    <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
-      <select id="cad-cliente" class="px-3 py-2 border border-slate-300 rounded-md bg-white min-w-[280px]">
-        <option value="">Selecione o cliente…</option>
-      </select>
-      <button id="cad-reload" class="px-3 py-2 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
-      <label id="cad-upload-wrap" class="ml-auto px-3 py-2 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-        ⬆ Subir medição (.json)
-        <input id="cad-file" type="file" accept="application/json" class="hidden">
-      </label>
-    </div>
-    <div id="cad-conteudo"></div>
-  </section>
-
-  <!-- VIEW 4: TRANSIÇÃO (painel de status entregue ao cliente) -->
-  <section id="view-transicao" class="hidden">
-    <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
-      <select id="tr-painel" class="px-3 py-2 border border-slate-300 rounded-md bg-white min-w-[380px]">
-        <option value="">Selecione o painel…</option>
-      </select>
-      <span id="tr-info" class="text-xs text-slate-500"></span>
-      <label id="tr-upload-wrap" class="hidden ml-auto px-3 py-2 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-        ⬆ Publicar painel (.html)
-        <input id="tr-file" type="file" accept="text/html" class="hidden">
-      </label>
-    </div>
-    <div id="tr-conteudo"></div>
-    <div id="transicao-box" class="hidden bg-white rounded-lg border border-slate-200 overflow-hidden">
-      <iframe id="frame-transicao" title="Painel de status do cliente" loading="lazy"></iframe>
     </div>
   </section>
 </main>
@@ -241,12 +226,11 @@
 const state = {
   projetos: [],
   clientes: [],
-  app: 'projetos',                     // 'projetos' | 'cadastros' | 'transicao'
   view: 'lista',                       // 'lista' | 'detalhe'
   selected: null,                      // { cli, cod, ver, loja, projeto }
   showAll: false,
   cronograma: null,                    // último cronograma carregado
-  tab: 'resumo',                       // 'resumo' | 'crono' | 'modulos' | 'etapas'
+  tab: 'resumo',                       // ver TABS
 };
 
 // Mapeamentos de status — PALPITES (ajustar conforme uso real)
@@ -1275,73 +1259,37 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'cadastros', 'transicao'];
+
 function setTab(nome) {
   state.tab = nome;
   $$('.tab-btn').forEach(b => {
     const active = b.dataset.tab === state.tab;
     b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${active ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
   });
-  ['resumo', 'crono', 'modulos', 'etapas'].forEach(t => {
-    $(`#tab-${t}`).classList.toggle('hidden', state.tab !== t);
-  });
+  TABS.forEach(t => $(`#tab-${t}`).classList.toggle('hidden', state.tab !== t));
   // Expandir/Recolher só faz sentido nas abas com árvore
-  $('#tab-acoes').classList.toggle('hidden', state.tab === 'resumo');
-}
-
-// ============================================================================
-//  NAVEGAÇÃO GLOBAL (Projetos | Cadastros | Transição)
-// ============================================================================
-function setApp(nome) {
-  state.app = nome;
-  $$('.app-tab').forEach(b => b.classList.toggle('is-active', b.dataset.app === nome));
-  // Projetos mantém o par lista/detalhe; as outras são views próprias
-  const emDetalhe = nome === 'projetos' && state.view === 'detalhe';
-  $('#view-lista').classList.toggle('hidden', nome !== 'projetos' || emDetalhe);
-  $('#view-detalhe').classList.toggle('hidden', !emDetalhe);
-  $('#nav-back').classList.toggle('hidden', !emDetalhe);
-  $('#view-cadastros').classList.toggle('hidden', nome !== 'cadastros');
-  $('#view-transicao').classList.toggle('hidden', nome !== 'transicao');
-  window.scrollTo(0, 0);
+  $('#tab-acoes').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(state.tab));
+  // Carga preguiçosa: as duas abas seguem o cliente do projeto aberto
   if (nome === 'cadastros') initCadastros();
   if (nome === 'transicao') initTransicao();
-}
-
-document.addEventListener('click', e => {
-  const t = e.target.closest('.app-tab');
-  if (t) setApp(t.dataset.app);
-});
-
-// Mantém o sticky das abas colado no header, qualquer que seja a altura dele
-const _hdr = document.querySelector('header');
-if (window.ResizeObserver && _hdr) {
-  new ResizeObserver(() => {
-    document.documentElement.style.setProperty('--hdr', `${_hdr.offsetHeight}px`);
-  }).observe(_hdr);
 }
 
 // ============================================================================
 //  ABA CADASTROS (MONITCAD) — status de carga dos cadastros por cliente
 // ============================================================================
-const cad = { carregado: false, customer: null };
+const cad = { customer: null };
 
-async function initCadastros() {
-  if (cad.carregado) return;
-  cad.carregado = true;
-  const sel = $('#cad-cliente');
-  // Reaproveita a lista de clientes já recortada pelo acesso do usuário
-  try {
-    const j = await api('/api/clientes');
-    sel.innerHTML = '<option value="">Selecione o cliente…</option>' +
-      (j.clientes || []).map(c => `<option value="${c.codigo}">${escapeHtml(c.nome)}</option>`).join('');
-  } catch (e) {
-    $('#cad-conteudo').innerHTML = blocoErro('Não foi possível listar os clientes', e, () => { cad.carregado = false; initCadastros(); });
-    return;
-  }
-  sel.addEventListener('change', () => carregaCadastros(sel.value));
-  $('#cad-reload').addEventListener('click', () => carregaCadastros(cad.customer));
-  $('#cad-file').addEventListener('change', enviaMedicao);
-  $('#cad-conteudo').innerHTML = blocoVazioCad('Selecione um cliente para ver o status dos cadastros.');
+function initCadastros() {
+  const cli = state.selected?.cli;
+  $('#cad-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (cad.customer === cli) return;      // já carregado para este cliente
+  carregaCadastros(cli);
 }
+
+$('#cad-reload').addEventListener('click', () => { cad.customer = null; initCadastros(); });
+$('#cad-file').addEventListener('change', enviaMedicao);
 
 function blocoVazioCad(msg, extra = '') {
   return `<div class="bg-white rounded-lg border border-slate-200 p-10 text-center">
@@ -1351,7 +1299,7 @@ function blocoVazioCad(msg, extra = '') {
 async function carregaCadastros(customer) {
   cad.customer = customer || null;
   const box = $('#cad-conteudo');
-  if (!customer) { box.innerHTML = blocoVazioCad('Selecione um cliente para ver o status dos cadastros.'); return; }
+  if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver o status dos cadastros do cliente.'); return; }
   box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando medições…</div>';
   let j;
   try {
@@ -1551,38 +1499,44 @@ async function enviaMedicao(ev) {
 //  ABA TRANSIÇÃO — painel de status entregue ao cliente
 //  O HTML vem de cockpit.paineis_cliente (fora do git: carrega dado do cliente).
 // ============================================================================
-const tr = { carregado: false, atual: null, podeSubir: false };
+const tr = { customer: null, atual: null, podeSubir: false };
 
 async function initTransicao() {
-  if (tr.carregado) return;
-  tr.carregado = true;
+  const cli = state.selected?.cli;
+  $('#tr-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (tr.customer === cli) return;        // já carregado para este cliente
+  tr.customer = cli;
+  tr.atual = null;
+  $('#transicao-box').classList.add('hidden');
+  $('#tr-painel').classList.add('hidden');
+  if (!cli) { $('#tr-conteudo').innerHTML = blocoVazioCad('Abra um projeto para ver o painel do cliente.'); return; }
+
   let j;
   try {
     j = await api('/api/paineis');
   } catch (e) {
-    $('#tr-conteudo').innerHTML = blocoErro('Não foi possível listar os painéis', e, () => { tr.carregado = false; initTransicao(); });
+    tr.customer = null;
+    $('#tr-conteudo').innerHTML = blocoErro('Não foi possível listar os painéis', e, initTransicao);
     return;
   }
   tr.podeSubir = !!j.pode_subir;
   $('#tr-upload-wrap').classList.toggle('hidden', !tr.podeSubir);
-  const sel = $('#tr-painel');
-  sel.innerHTML = '<option value="">Selecione o painel…</option>' +
-    (j.paineis || []).map(p => `<option value="${p.customer}/${p.slug}">${escapeHtml(p.cliente_nome)} · ${escapeHtml(p.titulo || p.slug)}</option>`).join('');
-  sel.addEventListener('change', () => abrePainel(sel.value));
-  $('#tr-file').addEventListener('change', publicaPainel);
+  const meus = (j.paineis || []).filter(p => p.customer === cli);   // só o cliente aberto
 
-  if ((j.paineis || []).length === 0) {
+  if (meus.length === 0) {
     $('#tr-conteudo').innerHTML = blocoVazioCad(
-      'Nenhum painel publicado ainda.',
+      'Nenhum painel publicado para este cliente.',
       tr.podeSubir
         ? '<p class="text-xs text-slate-400 mt-2">Use "⬆ Publicar painel (.html)" para subir o HTML do status por atividades.</p>'
-        : '<p class="text-xs text-slate-400 mt-2">Peça ao administrador para publicar o painel do seu cliente.</p>');
-  } else if ((j.paineis || []).length === 1) {
-    sel.value = `${j.paineis[0].customer}/${j.paineis[0].slug}`;   // só um: já abre
-    abrePainel(sel.value);
-  } else {
-    $('#tr-conteudo').innerHTML = blocoVazioCad('Selecione o painel para visualizar.');
+        : '<p class="text-xs text-slate-400 mt-2">Peça ao administrador para publicar o painel deste cliente.</p>');
+    return;
   }
+  const sel = $('#tr-painel');
+  sel.innerHTML = meus.map(p => `<option value="${p.customer}/${p.slug}">${escapeHtml(p.titulo || p.slug)}</option>`).join('');
+  sel.classList.toggle('hidden', meus.length < 2);   // seletor só quando há escolha
+  sel.onchange = () => abrePainel(sel.value);
+  abrePainel(`${meus[0].customer}/${meus[0].slug}`);
 }
 
 function abrePainel(ref) {
@@ -1607,22 +1561,25 @@ async function publicaPainel(ev) {
   const f = ev.target.files?.[0];
   ev.target.value = '';
   if (!f) return;
-  const ref = tr.atual || prompt('Publicar em qual painel? Informe CUSTOMER/slug (ex.: TFEHXQ00/transicao)');
-  if (!ref || !ref.includes('/')) return;
-  const titulo = prompt('Título do painel:', f.name.replace(/\.html?$/i, '')) || ref.split('/')[1];
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de publicar o painel.'); return; }
+  // Publica sempre no cliente do projeto aberto; o slug identifica o painel
+  const slug = tr.atual ? tr.atual.split('/')[1]
+             : (prompt('Identificador do painel (slug):', 'transicao') || '').trim();
+  if (!slug) return;
+  const titulo = prompt('Título do painel:', f.name.replace(/\.html?$/i, '')) || slug;
   try {
-    const j = await api(`/api/paineis/${ref}?titulo=${encodeURIComponent(titulo)}`,
+    const j = await api(`/api/paineis/${encodeURIComponent(cli)}/${encodeURIComponent(slug)}?titulo=${encodeURIComponent(titulo)}`,
       { method: 'POST', headers: { 'Content-Type': 'text/html' }, body: await f.text() });
     alert(`Painel publicado (${(j.bytes / 1024).toFixed(0)} KB).`);
-    tr.carregado = false;
-    $('#tr-painel').innerHTML = '';
+    tr.customer = null;                 // força recarregar a lista do cliente
     await initTransicao();
-    $('#tr-painel').value = ref;
-    abrePainel(ref);
   } catch (e) {
     alert('Falha ao publicar o painel: ' + e.message);
   }
 }
+
+$('#tr-file').addEventListener('change', publicaPainel);
 
 carregaLista();
 </script>
