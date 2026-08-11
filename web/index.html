@@ -1255,6 +1255,10 @@ document.addEventListener('click', e => {
   const btn = e.target.closest('[data-act]');
   if (btn) {
     const act = btn.dataset.act;
+    if (act === 'cad-expandir' || act === 'cad-recolher') {
+      $$('#cad-conteudo details.cad-grupo').forEach(d => d.open = act === 'cad-expandir');
+      return;
+    }
     if (state.tab === 'crono') {
       if (act === 'expand-all')   $$('#d-crono details').forEach(d => d.open = true);
       if (act === 'collapse-all') $$('#d-crono details').forEach(d => d.open = false);
@@ -1411,27 +1415,31 @@ function renderCadastros(j) {
       TABELAS_MONITOR.TXT) ou suba um historico-semanal.json que já traga a estimativa.</span>
     </div>`;
 
+  // ── Tabelas agrupadas por módulo (accordion) ──────────────────────────────
   const maxMod = Math.max(1, ...mods.map(m => Number(m.registros || 0)));
-  const blocoModulos = mods.length ? `
-    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-3">Registros por módulo</h3>
-      <div class="space-y-2">${mods.map(m => `
-        <div class="flex items-center gap-3 text-sm">
-          <span class="w-52 truncate">${escapeHtml(m.modulo)}</span>
-          <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${(100 * Number(m.registros || 0) / maxMod).toFixed(1)}%"></div></div>
-          <span class="w-24 text-right tabular-nums font-medium">${fmtNum(m.registros)}</span>
-          <span class="w-24 text-right text-xs text-slate-500">${m.com_carga}/${m.tabelas} tabelas</span>
-        </div>`).join('')}</div>
-    </div>` : '';
+  const porModulo = new Map();
+  t.forEach(x => {
+    const k = x.modulo || '(sem módulo)';
+    if (!porModulo.has(k)) porModulo.set(k, []);
+    porModulo.get(k).push(x);
+  });
+  // Ordem dos grupos = a do backend (registros desc); sobras vão para o fim
+  const ordem = mods.map(m => m.modulo).filter(k => porModulo.has(k));
+  [...porModulo.keys()].forEach(k => { if (!ordem.includes(k)) ordem.push(k); });
 
-  const linhas = t.map(x => {
+  const cabecalho = comEst
+    ? `<th class="pb-2 pr-3 text-right">Estimativa</th><th class="pb-2 pr-3 text-right">%</th>
+       <th class="pb-2 pr-3">Progresso</th><th class="pb-2 pr-3">Etapa</th>
+       <th class="pb-2 pr-3">Responsável</th><th class="pb-2 pr-3">Previsão</th><th class="pb-2">Status</th>`
+    : '<th class="pb-2">Situação</th>';
+
+  const linhaTabela = (x) => {
     const est = Number(x.estimativa || 0);
     const pc = x.percentual != null ? Number(x.percentual)
              : (est > 0 ? 100 * Number(x.realizado) / est : null);
     return `<tr class="border-t border-slate-100">
       <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
       <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
-      <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(x.modulo || '—')}</td>
       <td class="py-2 pr-3 text-right tabular-nums ${Number(x.realizado) > 0 ? 'font-medium' : 'text-slate-400'}">${fmtNum(x.realizado)}</td>
       ${comEst ? `
       <td class="py-2 pr-3 text-right tabular-nums">${est > 0 ? fmtNum(est) : '—'}</td>
@@ -1443,13 +1451,34 @@ function renderCadastros(j) {
       <td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${corStatus(x.status)}">${escapeHtml(x.status || '—')}</span></td>`
       : `<td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${Number(x.realizado) > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}">${Number(x.realizado) > 0 ? 'Com carga' : 'Zerada'}</span></td>`}
     </tr>`;
-  }).join('');
+  };
 
-  const cabecalho = comEst
-    ? `<th class="pb-2 pr-3 text-right">Estimativa</th><th class="pb-2 pr-3 text-right">%</th>
-       <th class="pb-2 pr-3">Progresso</th><th class="pb-2 pr-3">Etapa</th>
-       <th class="pb-2 pr-3">Responsável</th><th class="pb-2 pr-3">Previsão</th><th class="pb-2">Status</th>`
-    : '<th class="pb-2">Situação</th>';
+  const grupos = ordem.map(nome => {
+    const itens = porModulo.get(nome);
+    const reg = itens.reduce((a, x) => a + Number(x.realizado || 0), 0);
+    const cc = itens.filter(x => Number(x.realizado || 0) > 0).length;
+    // Já abre nos módulos que têm carga; os zerados nascem recolhidos
+    return `
+      <details class="cad-grupo border-b border-slate-100 last:border-b-0" ${reg > 0 ? 'open' : ''}>
+        <summary class="flex items-center gap-3 py-2.5 text-sm hover:bg-slate-50 -mx-2 px-2 rounded">
+          <span class="chev text-slate-400 text-xs">▶</span>
+          <span class="w-48 truncate font-medium ${reg > 0 ? 'text-totvs-petroleo' : 'text-slate-500'}">${escapeHtml(nome)}</span>
+          <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${(100 * reg / maxMod).toFixed(1)}%"></div></div>
+          <span class="w-24 text-right tabular-nums font-semibold ${reg > 0 ? '' : 'text-slate-400'}">${fmtNum(reg)}</span>
+          <span class="w-24 text-right text-xs text-slate-500">${cc}/${itens.length} tabelas</span>
+        </summary>
+        <div class="overflow-x-auto pl-7 pb-3">
+          <table class="w-full text-sm">
+            <thead><tr class="text-xs text-slate-500 text-left">
+              <th class="pb-2 pr-3">Tabela</th><th class="pb-2 pr-3">Descrição</th>
+              <th class="pb-2 pr-3 text-right">Realizado</th>
+              ${cabecalho}
+            </tr></thead>
+            <tbody>${itens.map(linhaTabela).join('')}</tbody>
+          </table>
+        </div>
+      </details>`;
+  }).join('');
 
   const maxSerie = Math.max(1, ...serie.map(s => Number(s.realizado || 0)));
   const hist = serie.map(s => {
@@ -1476,23 +1505,19 @@ function renderCadastros(j) {
     </div>
     ${aviso}
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">${kpis.join('')}</div>
-    ${blocoModulos}
     <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
       <h3 class="text-sm font-semibold text-slate-700 mb-3">Evolução por medição</h3>
       <div class="space-y-2">${hist || '<p class="text-sm text-slate-400">Sem histórico.</p>'}</div>
     </div>
     <div class="bg-white rounded-lg border border-slate-200 p-5">
-      <h3 class="text-sm font-semibold text-slate-700 mb-3">Tabelas monitoradas</h3>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead><tr class="text-xs text-slate-500 text-left">
-            <th class="pb-2 pr-3">Tabela</th><th class="pb-2 pr-3">Descrição</th>
-            <th class="pb-2 pr-3">Módulo</th><th class="pb-2 pr-3 text-right">Realizado</th>
-            ${cabecalho}
-          </tr></thead>
-          <tbody>${linhas}</tbody>
-        </table>
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-700">Tabelas monitoradas por módulo</h3>
+        <div class="flex items-center gap-2 text-xs">
+          <button data-act="cad-expandir" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Expandir</button>
+          <button data-act="cad-recolher" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Recolher</button>
+        </div>
       </div>
+      ${grupos || '<p class="text-sm text-slate-400">Sem tabelas na última medição.</p>'}
     </div>`;
 }
 

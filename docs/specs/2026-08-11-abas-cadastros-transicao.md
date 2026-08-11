@@ -36,6 +36,11 @@ Fonte canônica = `cockpit.monitcad_projetos` / `_medicoes` / `_tabelas`.
   nenhuma tabela tem estimativa cadastrada — aí a tela troca para contagem
   absoluta (registros carregados, tabelas com carga, módulos) e avisa que sem
   estimativa não há % nem semáforo. Sem medição → `vazio: true`.
+- **"Tabelas monitoradas por módulo"** é um accordion: um `<details>` por módulo,
+  com barra proporcional, total de registros e `com carga/total` no cabeçalho.
+  Módulos com carga nascem abertos, os zerados recolhidos; os botões
+  **Expandir/Recolher** (`data-act="cad-expandir|cad-recolher"`) agem em todos.
+  A ordem dos grupos vem do `modulos` do backend (registros desc).
 - `POST /api/monitcad/<customer>/upload` → carga manual do
   `historico-semanal.json` (o mesmo do projeto *Monitoramento Cadastros*).
   Idempotente: regrava a medição inteira quando a data já existe. Bloqueado
