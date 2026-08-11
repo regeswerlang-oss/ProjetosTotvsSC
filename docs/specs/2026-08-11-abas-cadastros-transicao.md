@@ -28,19 +28,48 @@ fora da primeira dobra. `abrirDetalhe()` sempre abre em Resumo (`setTab('resumo'
 
 ## 3. Aba Cadastros — MONITCAD
 
-- `GET /api/monitcad/<customer>` → projeto, **última medição** (tabelas com
-  realizado/estimativa/%/etapa/responsável/previsão/status) e **série histórica**
-  (`% = Σ realizado / Σ estimativa` por medição). Sem medição → `vazio: true` e a
-  tela explica que o `U_MONITPUSH()` ainda não publicou.
+Fonte canônica = `cockpit.monitcad_projetos` / `_medicoes` / `_tabelas`.
+
+- `GET /api/monitcad/<customer>` → projeto, **última medição** (tabela, descrição,
+  **módulo**, realizado, estimativa, %, etapa, responsável, previsão, status),
+  **quebra por módulo** e **série histórica**. `tem_estimativa: false` quando
+  nenhuma tabela tem estimativa cadastrada — aí a tela troca para contagem
+  absoluta (registros carregados, tabelas com carga, módulos) e avisa que sem
+  estimativa não há % nem semáforo. Sem medição → `vazio: true`.
 - `POST /api/monitcad/<customer>/upload` → carga manual do
   `historico-semanal.json` (o mesmo do projeto *Monitoramento Cadastros*).
   Idempotente: regrava a medição inteira quando a data já existe. Bloqueado
   durante simulação ("ver como") e exige o `customer` em `cockpit.clientes` (FK).
-- Tabelas: `cockpit.monitcad_projetos` / `_medicoes` / `_tabelas`.
 
-> **Pendência de segurança:** as três `monitcad_*` estão com **RLS desabilitado**.
-> O app lê por `DATABASE_URL` (service_role), então não depende de policy — mas
-> qualquer chave anon do projeto Supabase lê e escreve nelas hoje.
+### Migração do schema `monitcad` (11/08/2026)
+
+Os dados reais estavam no schema **`monitcad`** (`clientes`, `medicoes`,
+`estimativas`) — 41 medições do Olim importadas em 10/08/2026 — enquanto as
+`cockpit.monitcad_*` estavam vazias. Decisão: **`cockpit` é o canônico** e o
+schema `monitcad` foi migrado para lá.
+
+- `cockpit.monitcad_tabelas` ganhou a coluna **`modulo`** (o schema legado traz o
+  módulo Protheus por tabela).
+- Índice único `monitcad_medicoes (customer, data_medicao)` — deixa upload e
+  migração idempotentes.
+- A ligação é `monitcad.clientes.codigo` (`OLIM`, um slug) →
+  `cockpit.monitcad_projetos.slug`, com `customer = TFEHXQ00`. **Não confundir o
+  slug com o `customer`.**
+- `monitcad.estimativas` está vazia: sem ela não há % nem semáforo, só contagem.
+  Popular a partir do `TABELAS_MONITOR.TXT` do cliente resolve.
+
+### Segurança
+
+- As três `cockpit.monitcad_*` estavam com **RLS desabilitado** — corrigido em
+  11/08/2026 (RLS ligado, sem policy: só o backend por `DATABASE_URL`).
+- `public.monitcad_gravar_medicoes(...)` é `SECURITY DEFINER` e era executável
+  por `anon`/`authenticated`, o que furava o RLS. `EXECUTE` revogado. Quem grava
+  agora é o backend ou o `POST /api/monitcad/<customer>/upload`. **Se algum script
+  de importação usava a chave anon via RPC, ele passa a receber permission
+  denied** — o rollback é `grant execute on function
+  public.monitcad_gravar_medicoes(text,text,text,jsonb,text) to anon;`.
+- As duas RPC de leitura (`monitcad_clientes`, `monitcad_historico`) continuam
+  abertas ao `anon` — pendência conhecida.
 
 ## 4. Aba Transição — painéis do cliente
 

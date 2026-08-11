@@ -1374,13 +1374,17 @@ function corStatus(s) {
 
 function renderCadastros(j) {
   const t = j.tabelas || [], serie = j.serie || [], p = j.projeto || {};
+  const mods = j.modulos || [];
+  const comEst = !!j.tem_estimativa;          // sem estimativa cadastrada não há %
   const totR = t.reduce((a, x) => a + Number(x.realizado || 0), 0);
   const totE = t.reduce((a, x) => a + Number(x.estimativa || 0), 0);
-  const pct = totE > 0 ? (100 * totR / totE) : 0;
+  const pct = totE > 0 ? (100 * totR / totE) : null;
+  const comCarga = t.filter(x => Number(x.realizado || 0) > 0).length;
   const nVerm = t.filter(x => (x.status || '').toUpperCase() === 'VERMELHO').length;
   const nAmar = t.filter(x => (x.status || '').toUpperCase() === 'AMARELO').length;
-  const ant = serie.length > 1 ? Number(serie[serie.length - 2].pct || 0) : null;
-  const delta = ant === null ? null : (pct - ant);
+  const antS = serie.length > 1 ? serie[serie.length - 2] : null;
+  const deltaPct = (comEst && antS && antS.pct != null) ? (pct - Number(antS.pct)) : null;
+  const deltaReg = antS ? (totR - Number(antS.realizado || 0)) : null;
 
   const kpi = (rot, val, sub, cls) => `
     <div class="rounded-lg p-4 ${cls}">
@@ -1389,29 +1393,76 @@ function renderCadastros(j) {
       ${sub ? `<p class="text-xs opacity-80 mt-0.5">${sub}</p>` : ''}
     </div>`;
 
+  const kpis = comEst
+    ? [kpi('Carga geral', pct.toFixed(1) + '%', deltaPct === null ? 'primeira medição' : `${deltaPct >= 0 ? '▲' : '▼'} ${Math.abs(deltaPct).toFixed(1)} p.p. vs anterior`, 'bg-totvs-petroleo text-white'),
+       kpi('Registros carregados', fmtNum(totR), `de ${fmtNum(totE)} estimados`, 'bg-totvs-blue text-totvs-petroleo'),
+       kpi('Tabelas monitoradas', String(t.length), `${comCarga} com carga`, 'bg-totvs-purple text-white'),
+       kpi('Em risco', String(nVerm + nAmar), `${nVerm} vermelha(s) · ${nAmar} amarela(s)`, 'bg-white border border-slate-200 text-totvs-petroleo')]
+    : [kpi('Registros carregados', fmtNum(totR), deltaReg === null ? 'primeira medição' : `${deltaReg >= 0 ? '▲' : '▼'} ${fmtNum(Math.abs(deltaReg))} vs anterior`, 'bg-totvs-petroleo text-white'),
+       kpi('Tabelas com carga', `${comCarga}/${t.length}`, `${t.length - comCarga} ainda zerada(s)`, 'bg-totvs-blue text-totvs-petroleo'),
+       kpi('Módulos', String(mods.length), 'com tabela monitorada', 'bg-totvs-purple text-white'),
+       kpi('% de carga', '—', 'sem estimativa cadastrada', 'bg-white border border-slate-200 text-totvs-gray')];
+
+  const aviso = comEst ? '' : `
+    <div class="bg-totvs-yellow/10 border border-totvs-yellow/40 rounded-lg px-4 py-3 mb-4 text-sm">
+      <span class="font-semibold text-totvs-petroleo">Sem estimativa cadastrada.</span>
+      <span class="text-slate-600">Os números são a contagem absoluta da última medição.
+      Para ter % e semáforo, cadastre a estimativa por tabela (monitcad.estimativas /
+      TABELAS_MONITOR.TXT) ou suba um historico-semanal.json que já traga a estimativa.</span>
+    </div>`;
+
+  const maxMod = Math.max(1, ...mods.map(m => Number(m.registros || 0)));
+  const blocoModulos = mods.length ? `
+    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Registros por módulo</h3>
+      <div class="space-y-2">${mods.map(m => `
+        <div class="flex items-center gap-3 text-sm">
+          <span class="w-52 truncate">${escapeHtml(m.modulo)}</span>
+          <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${(100 * Number(m.registros || 0) / maxMod).toFixed(1)}%"></div></div>
+          <span class="w-24 text-right tabular-nums font-medium">${fmtNum(m.registros)}</span>
+          <span class="w-24 text-right text-xs text-slate-500">${m.com_carga}/${m.tabelas} tabelas</span>
+        </div>`).join('')}</div>
+    </div>` : '';
+
   const linhas = t.map(x => {
-    const pc = Number(x.percentual != null ? x.percentual
-                 : (Number(x.estimativa) > 0 ? 100 * Number(x.realizado) / Number(x.estimativa) : 0));
+    const est = Number(x.estimativa || 0);
+    const pc = x.percentual != null ? Number(x.percentual)
+             : (est > 0 ? 100 * Number(x.realizado) / est : null);
     return `<tr class="border-t border-slate-100">
       <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
       <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
-      <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(x.realizado)}</td>
-      <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(x.estimativa)}</td>
-      <td class="py-2 pr-3 text-right tabular-nums font-semibold">${pc.toFixed(1)}%</td>
-      <td class="py-2 pr-3 w-40"><div class="bar-track"><div class="bar-fill fill-exec" style="width:${Math.min(100, pc).toFixed(1)}%"></div></div></td>
+      <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(x.modulo || '—')}</td>
+      <td class="py-2 pr-3 text-right tabular-nums ${Number(x.realizado) > 0 ? 'font-medium' : 'text-slate-400'}">${fmtNum(x.realizado)}</td>
+      ${comEst ? `
+      <td class="py-2 pr-3 text-right tabular-nums">${est > 0 ? fmtNum(est) : '—'}</td>
+      <td class="py-2 pr-3 text-right tabular-nums font-semibold">${pc === null ? '—' : pc.toFixed(1) + '%'}</td>
+      <td class="py-2 pr-3 w-40"><div class="bar-track"><div class="bar-fill fill-exec" style="width:${pc === null ? 0 : Math.min(100, pc).toFixed(1)}%"></div></div></td>
       <td class="py-2 pr-3 text-xs">${escapeHtml(x.etapa || '—')}</td>
       <td class="py-2 pr-3 text-xs">${escapeHtml(x.responsavel || '—')}</td>
       <td class="py-2 pr-3 text-xs">${x.data_prev ? fmtData(String(x.data_prev)) : '—'}</td>
-      <td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${corStatus(x.status)}">${escapeHtml(x.status || '—')}</span></td>
+      <td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${corStatus(x.status)}">${escapeHtml(x.status || '—')}</span></td>`
+      : `<td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-medium ${Number(x.realizado) > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'}">${Number(x.realizado) > 0 ? 'Com carga' : 'Zerada'}</span></td>`}
     </tr>`;
   }).join('');
 
-  const hist = serie.map(s => `
-    <div class="flex items-center gap-3 text-sm">
+  const cabecalho = comEst
+    ? `<th class="pb-2 pr-3 text-right">Estimativa</th><th class="pb-2 pr-3 text-right">%</th>
+       <th class="pb-2 pr-3">Progresso</th><th class="pb-2 pr-3">Etapa</th>
+       <th class="pb-2 pr-3">Responsável</th><th class="pb-2 pr-3">Previsão</th><th class="pb-2">Status</th>`
+    : '<th class="pb-2">Situação</th>';
+
+  const maxSerie = Math.max(1, ...serie.map(s => Number(s.realizado || 0)));
+  const hist = serie.map(s => {
+    const largura = comEst && s.pct != null ? Math.min(100, Number(s.pct))
+                                            : (100 * Number(s.realizado || 0) / maxSerie);
+    const valor = comEst && s.pct != null ? Number(s.pct).toFixed(1) + '%' : fmtNum(s.realizado);
+    return `<div class="flex items-center gap-3 text-sm">
       <span class="w-28 text-slate-500 text-xs">${fmtData(String(s.data_medicao))}${s.semana ? ` · S${s.semana}` : ''}</span>
-      <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${Math.min(100, Number(s.pct || 0))}%"></div></div>
-      <span class="w-14 text-right tabular-nums font-medium">${Number(s.pct || 0).toFixed(1)}%</span>
-    </div>`).join('');
+      <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${largura.toFixed(1)}%"></div></div>
+      <span class="w-24 text-right tabular-nums font-medium">${valor}</span>
+      <span class="w-24 text-right text-xs text-slate-500">${s.tabelas_com_carga} c/ carga</span>
+    </div>`;
+  }).join('');
 
   return `
     <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
@@ -1423,12 +1474,9 @@ function renderCadastros(j) {
         <p class="text-xs text-slate-500">Última medição: <span class="font-medium">${fmtData(String(j.ultima_medicao || ''))}</span> · ${j.total_medicoes} medição(ões)</p>
       </div>
     </div>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-      ${kpi('Carga geral', pct.toFixed(1) + '%', delta === null ? 'primeira medição' : `${delta >= 0 ? '▲' : '▼'} ${Math.abs(delta).toFixed(1)} p.p. vs anterior`, 'bg-totvs-petroleo text-white')}
-      ${kpi('Registros carregados', fmtNum(totR), `de ${fmtNum(totE)} estimados`, 'bg-totvs-blue text-totvs-petroleo')}
-      ${kpi('Tabelas monitoradas', String(t.length), `${nVerm} vermelha(s) · ${nAmar} amarela(s)`, 'bg-totvs-purple text-white')}
-      ${kpi('Em risco', String(nVerm + nAmar), 'tabelas fora da meta', 'bg-white border border-slate-200 text-totvs-petroleo')}
-    </div>
+    ${aviso}
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">${kpis.join('')}</div>
+    ${blocoModulos}
     <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
       <h3 class="text-sm font-semibold text-slate-700 mb-3">Evolução por medição</h3>
       <div class="space-y-2">${hist || '<p class="text-sm text-slate-400">Sem histórico.</p>'}</div>
@@ -1439,10 +1487,8 @@ function renderCadastros(j) {
         <table class="w-full text-sm">
           <thead><tr class="text-xs text-slate-500 text-left">
             <th class="pb-2 pr-3">Tabela</th><th class="pb-2 pr-3">Descrição</th>
-            <th class="pb-2 pr-3 text-right">Realizado</th><th class="pb-2 pr-3 text-right">Estimativa</th>
-            <th class="pb-2 pr-3 text-right">%</th><th class="pb-2 pr-3">Progresso</th>
-            <th class="pb-2 pr-3">Etapa</th><th class="pb-2 pr-3">Responsável</th>
-            <th class="pb-2 pr-3">Previsão</th><th class="pb-2">Status</th>
+            <th class="pb-2 pr-3">Módulo</th><th class="pb-2 pr-3 text-right">Realizado</th>
+            ${cabecalho}
           </tr></thead>
           <tbody>${linhas}</tbody>
         </table>

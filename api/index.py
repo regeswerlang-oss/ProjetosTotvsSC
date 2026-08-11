@@ -551,17 +551,26 @@ def api_monitcad(customer):
         return _json({"ok": True, "customer": customer, "projeto": proj,
                       "vazio": True, "tabelas": [], "serie": [], "total_medicoes": 0})
     ult = meds[-1]
-    tabelas = q("""select tabela, descricao, filtro, realizado, estimativa, percentual,
-                          data_prev, etapa, responsavel, status
+    tabelas = q("""select tabela, descricao, modulo, filtro, realizado, estimativa,
+                          percentual, data_prev, etapa, responsavel, status
                      from cockpit.monitcad_tabelas
-                    where medicao_id=%s order by percentual nulls first, tabela""",
-                (ult["id"],))
+                    where medicao_id=%s
+                    order by modulo nulls last, realizado desc, tabela""", (ult["id"],))
+    # Sem monitcad.estimativas cadastradas não existe % de carga — só contagem.
+    tem_est = any(float(t["estimativa"] or 0) > 0 for t in tabelas)
+    modulos = q("""select coalesce(modulo,'(sem módulo)') as modulo,
+                          count(*) as tabelas,
+                          count(*) filter (where realizado > 0) as com_carga,
+                          sum(realizado) as registros
+                     from cockpit.monitcad_tabelas
+                    where medicao_id=%s group by 1 order by 4 desc, 1""", (ult["id"],))
     serie = q("""select m.data_medicao, m.semana,
                         sum(t.realizado)  as realizado,
                         sum(t.estimativa) as estimativa,
+                        count(*) filter (where t.realizado > 0) as tabelas_com_carga,
                         case when sum(t.estimativa) > 0
                              then round(100.0 * sum(t.realizado) / sum(t.estimativa), 1)
-                             else 0 end as pct
+                             else null end as pct
                    from cockpit.monitcad_medicoes m
                    join cockpit.monitcad_tabelas t on t.medicao_id = m.id
                   where m.customer=%s
@@ -569,7 +578,8 @@ def api_monitcad(customer):
                   order by m.data_medicao""", (customer,))
     return _json({"ok": True, "customer": customer, "projeto": proj, "vazio": False,
                   "ultima_medicao": ult["data_medicao"], "total_medicoes": len(meds),
-                  "tabelas": tabelas, "serie": serie})
+                  "tem_estimativa": tem_est, "tabelas": tabelas, "modulos": modulos,
+                  "serie": serie})
 
 
 @app.post("/api/monitcad/<customer>/upload")
@@ -640,13 +650,14 @@ def api_monitcad_upload(customer):
             if pct is None:
                 pct = round(100.0 * real / est, 1) if est > 0 else 0
             linhas.append((mid, customer, dt, t.get("tabela"), t.get("descricao"),
-                           t.get("filtro"), real, est, pct, _data_iso(t.get("data_prev")),
-                           t.get("etapa"), t.get("responsavel"), t.get("status")))
+                           t.get("modulo"), t.get("filtro"), real, est, pct,
+                           _data_iso(t.get("data_prev")), t.get("etapa"),
+                           t.get("responsavel"), t.get("status")))
         if linhas:
             with db() as c, c.cursor() as cur:
                 execute_values(cur, """
                     insert into cockpit.monitcad_tabelas
-                      (medicao_id, customer, data_medicao, tabela, descricao, filtro,
+                      (medicao_id, customer, data_medicao, tabela, descricao, modulo, filtro,
                        realizado, estimativa, percentual, data_prev, etapa, responsavel, status)
                     values %s""", linhas, page_size=200)
             n_tab += len(linhas)
