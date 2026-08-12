@@ -150,6 +150,7 @@
             <button data-tab="modulos"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
             <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
+            <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
             <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
             <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
@@ -182,6 +183,36 @@
         <div id="tab-etapas" class="p-5 hidden">
           <div id="d-etapas-loading" class="text-slate-400 text-sm py-4">Carregando…</div>
           <div id="d-etapas"></div>
+        </div>
+
+        <!-- Aba GAPs — tickets com a tag GAP do cliente do projeto aberto -->
+        <div id="tab-gaps" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="gap-cliente-nome" class="font-medium"></span>
+            <div class="inline-flex rounded-md border border-slate-300 overflow-hidden">
+              <button data-modo="lista"  class="gap-modo px-3 py-1.5 bg-totvs-blue text-totvs-petroleo font-semibold">Lista</button>
+              <button data-modo="kanban" class="gap-modo px-3 py-1.5 bg-white text-slate-600 hover:bg-slate-50">Kanban</button>
+            </div>
+            <input id="gap-busca" type="search" placeholder="Buscar por título, id, produto…"
+                   class="flex-1 min-w-[220px] px-3 py-1.5 border border-slate-300 rounded-md bg-white">
+            <select id="gap-etapa" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
+              <option value="">Todas as etapas</option>
+            </select>
+            <select id="gap-decisao" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
+              <option value="">Toda decisão</option>
+              <option value="_sem">Sem decisão</option>
+              <option value="aprovar">Aprovado</option>
+              <option value="segunda_fase">2ª fase</option>
+              <option value="contorno">Contorno</option>
+              <option value="entendimento_projeto">Entendimento do projeto</option>
+              <option value="recusar">Recusado</option>
+              <option value="pendente">Pendente</option>
+            </select>
+            <button id="gap-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="gap-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+          <div id="gap-conteudo"></div>
         </div>
 
         <!-- Aba Cadastros (MONITCAD) — sempre do cliente do projeto aberto -->
@@ -1266,7 +1297,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'cadastros', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'gaps', 'cadastros', 'transicao'];
 
 function setTab(nome) {
   state.tab = nome;
@@ -1277,9 +1308,313 @@ function setTab(nome) {
   TABS.forEach(t => $(`#tab-${t}`).classList.toggle('hidden', state.tab !== t));
   // Expandir/Recolher só faz sentido nas abas com árvore
   $('#tab-acoes').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(state.tab));
-  // Carga preguiçosa: as duas abas seguem o cliente do projeto aberto
+  // Carga preguiçosa: as três abas seguem o cliente do projeto aberto
+  if (nome === 'gaps') initGaps();
   if (nome === 'cadastros') initCadastros();
   if (nome === 'transicao') initTransicao();
+}
+
+// ============================================================================
+//  ABA GAPs — tickets com a tag GAP do cliente do projeto aberto
+// ============================================================================
+const gap = { customer: null, itens: [], modo: 'lista' };
+
+// Ordem do Kanban = fluxo real do atendimento, não ordem alfabética
+const GAP_STATUS = ['Novo', 'Aberto', 'Em Andamento', 'Agendado', 'Em Espera',
+                    'Em Validacao', 'Validacao Cliente', 'Resolvido', 'Cancelado'];
+const DECISAO = {
+  aprovar: { label: 'Aprovado', cls: 'bg-emerald-100 text-emerald-800' },
+  segunda_fase: { label: '2ª fase', cls: 'bg-sky-100 text-sky-800' },
+  contorno: { label: 'Contorno', cls: 'bg-amber-100 text-amber-800' },
+  entendimento_projeto: { label: 'Entendimento', cls: 'bg-violet-100 text-violet-800' },
+  recusar: { label: 'Recusado', cls: 'bg-rose-100 text-rose-800' },
+  pendente: { label: 'Pendente', cls: 'bg-slate-100 text-slate-700' },
+};
+
+async function initGaps() {
+  const cli = state.selected?.cli;
+  $('#gap-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (gap.customer === cli) return;
+  gap.customer = cli;
+  if (!cli) { $('#gap-conteudo').innerHTML = blocoVazioCad('Abra um projeto para ver os GAPs do cliente.'); return; }
+  $('#gap-conteudo').innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando GAPs…</div>';
+  try {
+    const j = await api(`/api/gaps/${encodeURIComponent(cli)}`);
+    gap.itens = j.gaps || [];
+  } catch (e) {
+    gap.customer = null;
+    $('#gap-conteudo').innerHTML = blocoErro('Não foi possível carregar os GAPs', e, initGaps);
+    return;
+  }
+  const etapas = [...new Set(gap.itens.map(g => g.etapa_gap).filter(Boolean))].sort();
+  $('#gap-etapa').innerHTML = '<option value="">Todas as etapas</option>' +
+    etapas.map(e => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join('');
+  renderGaps();
+}
+
+// "balanca" tem que achar "Balança" — busca sem acento é o esperado em pt-BR
+const semAcento = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+function gapsFiltrados() {
+  const q = semAcento($('#gap-busca').value.trim());
+  const etapa = $('#gap-etapa').value;
+  const dec = $('#gap-decisao').value;
+  return gap.itens.filter(g => {
+    if (etapa && g.etapa_gap !== etapa) return false;
+    if (dec === '_sem' && g.decisao) return false;
+    if (dec && dec !== '_sem' && g.decisao !== dec) return false;
+    if (q) {
+      const alvo = semAcento(`${g.id || ''} ${g.titulo || ''} ${g.produto || ''} ${g.competencia || ''} ${g.responsavel_nome || ''}`);
+      if (!alvo.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderGaps() {
+  const itens = gapsFiltrados();
+  const horas = itens.reduce((a, g) => a + Number(g.time_estimate || 0), 0);
+  const decididos = itens.filter(g => g.decisao && g.decisao !== 'pendente').length;
+  const aprovados = itens.filter(g => g.decisao === 'aprovar').length;
+
+  const kpi = (rot, val, sub, cls) => `
+    <div class="rounded-lg p-4 ${cls}">
+      <p class="text-xs opacity-80">${rot}</p>
+      <p class="text-2xl font-totvs mt-1">${val}</p>
+      <p class="text-xs opacity-80 mt-0.5">${sub}</p>
+    </div>`;
+  $('#gap-kpis').innerHTML =
+    kpi('GAPs', String(itens.length), itens.length === gap.itens.length ? 'do cliente' : `de ${gap.itens.length} no total`, 'bg-totvs-petroleo text-white') +
+    kpi('Horas estimadas', fmtNum(horas), 'soma das estimativas', 'bg-totvs-blue text-totvs-petroleo') +
+    kpi('Decididos', `${decididos}/${itens.length}`, `${aprovados} aprovado(s)`, 'bg-totvs-purple text-white') +
+    kpi('Sem decisão', String(itens.filter(g => !g.decisao).length), 'aguardando reunião', 'bg-white border border-slate-200 text-totvs-petroleo');
+
+  $('#gap-conteudo').innerHTML = itens.length === 0
+    ? blocoVazioCad('Nenhum GAP para este filtro.')
+    : (gap.modo === 'kanban' ? kanbanGaps(itens) : listaGaps(itens));
+}
+
+function selosGap(g) {
+  const d = g.decisao ? DECISAO[g.decisao] : null;
+  return `${d ? `<span class="px-2 py-0.5 rounded-full text-xs font-medium ${d.cls}">${d.label}</span>` : ''}
+    ${g.tem_alinhamento ? '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600" title="Tem alinhamento comercial">◆</span>' : ''}`;
+}
+
+function listaGaps(itens) {
+  return `
+    <div class="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead><tr class="text-xs text-slate-500 text-left border-b border-slate-200">
+          <th class="p-3">GAP</th><th class="p-3">Título</th><th class="p-3">Etapa</th>
+          <th class="p-3">Status</th><th class="p-3">Produto</th>
+          <th class="p-3 text-right">Horas</th><th class="p-3">Responsável</th>
+          <th class="p-3">Decisão</th>
+        </tr></thead>
+        <tbody>${itens.map(g => `
+          <tr data-gap="${g.uuid_ticket}" class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer">
+            <td class="p-3 font-mono text-xs">${escapeHtml(g.id || '—')}</td>
+            <td class="p-3 font-medium">${escapeHtml(g.titulo || '—')}</td>
+            <td class="p-3 text-xs">${escapeHtml(g.etapa_gap || '—')}</td>
+            <td class="p-3 text-xs">${escapeHtml(g.status_tasks || '—')}</td>
+            <td class="p-3 text-xs text-slate-500">${escapeHtml(g.produto || '—')}</td>
+            <td class="p-3 text-right tabular-nums">${g.time_estimate ? fmtNum(g.time_estimate) : '—'}</td>
+            <td class="p-3 text-xs">${escapeHtml((g.responsavel_nome || g.user_assigned || '—').trim())}</td>
+            <td class="p-3">${selosGap(g) || '<span class="text-xs text-slate-400">—</span>'}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+function kanbanGaps(itens) {
+  const porStatus = new Map();
+  itens.forEach(g => {
+    const k = g.status_tasks || '(sem status)';
+    if (!porStatus.has(k)) porStatus.set(k, []);
+    porStatus.get(k).push(g);
+  });
+  const ordem = GAP_STATUS.filter(s => porStatus.has(s));
+  [...porStatus.keys()].forEach(k => { if (!ordem.includes(k)) ordem.push(k); });
+
+  return `<div class="flex gap-3 overflow-x-auto pb-2">${ordem.map(st => {
+    const col = porStatus.get(st);
+    const h = col.reduce((a, g) => a + Number(g.time_estimate || 0), 0);
+    return `
+      <div class="w-72 shrink-0 bg-slate-100 rounded-lg p-2">
+        <div class="flex items-baseline justify-between px-1 pb-2">
+          <span class="text-sm font-semibold text-totvs-petroleo">${escapeHtml(st)}</span>
+          <span class="text-xs text-slate-500">${col.length} · ${fmtNum(h)}h</span>
+        </div>
+        <div class="space-y-2">${col.map(g => `
+          <div data-gap="${g.uuid_ticket}" class="bg-white rounded-md border border-slate-200 p-3 cursor-pointer hover:border-totvs-blue">
+            <div class="flex items-center justify-between gap-2">
+              <span class="font-mono text-xs text-slate-500">${escapeHtml(g.id || '—')}</span>
+              <span class="text-xs tabular-nums">${g.time_estimate ? fmtNum(g.time_estimate) + 'h' : ''}</span>
+            </div>
+            <p class="text-sm font-medium mt-1 leading-snug">${escapeHtml(g.titulo || '—')}</p>
+            <p class="text-xs text-slate-500 mt-1">${escapeHtml(g.etapa_gap || '—')}${g.produto ? ' · ' + escapeHtml(g.produto) : ''}</p>
+            <div class="mt-2 flex items-center gap-1">${selosGap(g)}</div>
+          </div>`).join('')}</div>
+      </div>`;
+  }).join('')}</div>`;
+}
+
+$$('.gap-modo').forEach(b => b.addEventListener('click', () => {
+  gap.modo = b.dataset.modo;
+  $$('.gap-modo').forEach(x => {
+    const on = x.dataset.modo === gap.modo;
+    x.className = `gap-modo px-3 py-1.5 ${on ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}`;
+  });
+  renderGaps();
+}));
+['gap-busca', 'gap-etapa', 'gap-decisao'].forEach(id =>
+  $(`#${id}`).addEventListener('input', renderGaps));
+$('#gap-reload').addEventListener('click', () => { gap.customer = null; initGaps(); });
+$('#tab-gaps').addEventListener('click', e => {
+  const linha = e.target.closest('[data-gap]');
+  if (linha) abreGap(linha.dataset.gap);
+});
+
+// ── Detalhe do GAP: dados + decisão + alinhamento comercial ────────────────
+async function abreGap(uuid) {
+  const painel = document.createElement('div');
+  painel.className = 'fixed inset-0 z-50 bg-black/40 flex justify-end';
+  painel.innerHTML = `<div class="bg-white w-full max-w-2xl h-full overflow-y-auto shadow-xl">
+    <div class="p-6 text-slate-400 text-sm">Carregando GAP…</div></div>`;
+  document.body.appendChild(painel);
+  const caixa = painel.firstElementChild;
+  const fecha = () => painel.remove();
+  painel.addEventListener('click', e => { if (e.target === painel) fecha(); });
+
+  let j;
+  try {
+    j = await api(`/api/gaps/ticket/${encodeURIComponent(uuid)}`);
+  } catch (e) {
+    caixa.innerHTML = `<div class="p-6">${blocoErro('Não foi possível abrir o GAP', e, () => { fecha(); abreGap(uuid); })}</div>`;
+    return;
+  }
+  const t = j.ticket || {}, d = j.decisao || {}, a = j.alinhamento || {};
+  const ta = (id, rot, valor, dica = '') => `
+    <label class="block">
+      <span class="text-xs font-medium text-slate-600">${rot}</span>
+      ${dica ? `<span class="block text-xs text-slate-400 mb-1">${dica}</span>` : ''}
+      <textarea id="${id}" rows="3" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-totvs-blue/40">${escapeHtml(valor || '')}</textarea>
+    </label>`;
+
+  caixa.innerHTML = `
+    <div class="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-start justify-between gap-4">
+      <div>
+        <p class="font-mono text-xs text-slate-500">${escapeHtml(t.id || '')} · ${escapeHtml(t.cliente || '')}</p>
+        <h2 class="text-lg font-totvs text-totvs-petroleo mt-0.5">${escapeHtml(t.titulo || '—')}</h2>
+      </div>
+      <button data-fechar class="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
+    </div>
+    <div class="p-6 space-y-5 text-sm">
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        ${[['Etapa', t.etapa_gap], ['Status', t.status_tasks], ['Classificação', t.classificacao_gap],
+           ['Produto', t.produto], ['Horas estimadas', t.time_estimate ? fmtNum(t.time_estimate) : null],
+           ['Responsável', (t.responsavel_nome || t.user_assigned || '').trim()],
+           ['Resp. cliente', t.assigned_customer], ['Aging', t.aging_dias != null ? t.aging_dias + ' dias' : null]]
+          .map(([r, v]) => `<div><p class="text-xs text-slate-500">${r}</p><p class="font-medium">${escapeHtml(v || '—')}</p></div>`).join('')}
+      </div>
+
+      ${t.descricao ? `<div>
+        <h3 class="text-sm font-semibold text-slate-700 mb-1">Descrição</h3>
+        <div class="bg-slate-50 rounded-md p-3 whitespace-pre-wrap text-slate-700 max-h-64 overflow-y-auto">${escapeHtml(t.descricao)}</div>
+      </div>` : ''}
+
+      <div>
+        <h3 class="text-sm font-semibold text-slate-700 mb-1">Tags</h3>
+        <div class="flex flex-wrap gap-1">${(j.tags || []).map(x =>
+          `<span class="px-2 py-0.5 rounded-full bg-slate-100 text-xs text-slate-600">${escapeHtml(x.raw_tag)}</span>`).join('') || '<span class="text-xs text-slate-400">—</span>'}</div>
+      </div>
+
+      ${(j.ocorrencias || []).length ? `<div>
+        <h3 class="text-sm font-semibold text-slate-700 mb-1">Ocorrências</h3>
+        <div class="space-y-2 max-h-64 overflow-y-auto">${j.ocorrencias.map(o => `
+          <div class="border-l-2 border-slate-200 pl-3">
+            <p class="text-xs text-slate-500">${escapeHtml(o.autor || '—')} · ${escapeHtml(String(o.occurred_at || '').slice(0, 16).replace('T', ' '))}</p>
+            <p class="whitespace-pre-wrap text-slate-700">${escapeHtml(o.details || '')}</p>
+          </div>`).join('')}</div>
+      </div>` : ''}
+
+      <div class="border-t border-slate-200 pt-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-2">Decisão</h3>
+        <div class="flex flex-wrap gap-2 mb-3">${Object.entries(DECISAO).map(([k, v]) =>
+          `<button data-dec="${k}" class="dec-btn px-3 py-1.5 rounded-md border text-xs font-medium ${d.decisao === k ? 'border-totvs-blue ' + v.cls : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'}">${v.label}</button>`).join('')}</div>
+        <div class="grid grid-cols-2 gap-3">
+          <label class="block"><span class="text-xs text-slate-500">Estimativa (horas)</span>
+            <input id="dec-est" type="number" step="0.5" value="${d.estimativa ?? ''}"
+                   class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md"></label>
+          <label class="block"><span class="text-xs text-slate-500">Classe</span>
+            <input id="dec-classe" value="${escapeHtml(d.classe || '')}"
+                   class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md"></label>
+        </div>
+        ${ta('dec-obs', 'Observação', d.observacao)}
+        <p class="text-xs text-slate-400 mt-1">Grava só aqui (cockpit.decisoes) — não altera o Tasks SC.
+          ${d.decided_by ? `Última: ${escapeHtml(d.decided_by)} em ${escapeHtml(String(d.decided_at || '').slice(0, 16).replace('T', ' '))}.` : ''}</p>
+        <button id="dec-salvar" class="mt-2 px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">Salvar decisão</button>
+      </div>
+
+      <div class="border-t border-slate-200 pt-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-2">Alinhamento comercial</h3>
+        <div class="space-y-3">
+          ${ta('al-quest', 'Questionamento do cliente', a.questionamento_cliente)}
+          ${ta('al-arg', '🔒 Argumentação interna', a.argumentacao_interna,
+               'INTERNO — não expor ao cliente em e-mail nem em painel compartilhado.')}
+          ${ta('al-reuniao', 'Alinhamento da reunião', a.alinhamento_reuniao)}
+          ${ta('al-retorno', 'Retorno formal ao cliente', a.retorno_cliente)}
+        </div>
+        <button id="al-salvar" class="mt-3 px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">Salvar alinhamento</button>
+      </div>
+      <p data-msg class="text-xs"></p>
+    </div>`;
+
+  caixa.querySelector('[data-fechar]').addEventListener('click', fecha);
+  let escolhida = d.decisao || null;
+  caixa.querySelectorAll('.dec-btn').forEach(b => b.addEventListener('click', () => {
+    escolhida = b.dataset.dec;
+    caixa.querySelectorAll('.dec-btn').forEach(x => {
+      const on = x.dataset.dec === escolhida;
+      x.className = `dec-btn px-3 py-1.5 rounded-md border text-xs font-medium ${on ? 'border-totvs-blue ' + DECISAO[x.dataset.dec].cls : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'}`;
+    });
+  }));
+
+  const msg = (txt, erro) => {
+    const p = caixa.querySelector('[data-msg]');
+    p.textContent = txt;
+    p.className = `text-xs ${erro ? 'text-rose-600' : 'text-emerald-700'}`;
+  };
+  const salvar = async (btn, url, corpo, ok) => {
+    btn.disabled = true;
+    try {
+      await api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      msg(ok, false);
+      gap.customer = null;
+      await initGaps();                     // reflete o selo na lista/kanban
+    } catch (e) {
+      msg(e.message, true);
+    }
+    btn.disabled = false;
+  };
+
+  caixa.querySelector('#dec-salvar').addEventListener('click', (e) => {
+    if (!escolhida) { msg('Escolha uma decisão.', true); return; }
+    salvar(e.target, `/api/gaps/ticket/${encodeURIComponent(uuid)}/decisao`, {
+      decisao: escolhida,
+      estimativa: caixa.querySelector('#dec-est').value,
+      classe: caixa.querySelector('#dec-classe').value.trim(),
+      observacao: caixa.querySelector('#dec-obs').value.trim(),
+    }, 'Decisão salva.');
+  });
+  caixa.querySelector('#al-salvar').addEventListener('click', (e) => {
+    salvar(e.target, `/api/gaps/ticket/${encodeURIComponent(uuid)}/alinhamento`, {
+      questionamento_cliente: caixa.querySelector('#al-quest').value.trim(),
+      argumentacao_interna: caixa.querySelector('#al-arg').value.trim(),
+      alinhamento_reuniao: caixa.querySelector('#al-reuniao').value.trim(),
+      retorno_cliente: caixa.querySelector('#al-retorno').value.trim(),
+    }, 'Alinhamento salvo.');
+  });
 }
 
 // ============================================================================

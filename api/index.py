@@ -809,6 +809,144 @@ def api_monitcad_upload(customer):
                   "medicoes": n_med, "tabelas": n_tab, "ultima_medicao": ultima})
 
 
+# ── GAPs (aba "GAPs") ───────────────────────────────────────────────────────
+# GAP = ticket com a tag EXATA "GAP" em cockpit.ticket_tags. Existe também o
+# campo tipo_atividade='GAP', que quase coincide (630 nos dois, 15 só em cada) —
+# a tag é a fonte da verdade aqui, por decisão de 11/08/2026.
+DECISOES = ("aprovar", "segunda_fase", "contorno", "entendimento_projeto",
+            "recusar", "pendente")
+
+SQL_GAPS = """
+  select t.uuid_ticket, t.raw->>'id' as id, t.titulo, t.status_tasks,
+         t.status_temporario, t.etapa_gap, t.classificacao_gap, t.produto,
+         t.competencia, t.projeto, t.prioridade, t.time_estimate, t.aging_dias,
+         t.due_date, t.atrasado, t.bloqueado, t.user_assigned,
+         u.nome as responsavel_nome, t.assigned_customer,
+         t.ult_ocorr_texto, t.ult_ocorr_data, t.ult_ocorr_autor, t.updated_at,
+         d.decisao, d.estimativa as decisao_estimativa, d.observacao as decisao_obs,
+         d.decided_by, d.decided_at,
+         (a.uuid_ticket is not null) as tem_alinhamento
+    from cockpit.tickets t
+    join cockpit.ticket_tags g
+      on g.uuid_ticket = t.uuid_ticket and g.raw_tag = 'GAP'
+    left join cockpit.usuarios u on u.codigo = t.user_assigned
+    left join cockpit.decisoes d on d.uuid_ticket = t.uuid_ticket
+    left join cockpit.gap_alinhamentos a on a.uuid_ticket = t.uuid_ticket
+   where t.customer = %s
+   order by t.time_estimate desc nulls last, t.titulo
+"""
+
+
+def _customer_do_ticket(uuid):
+    r = q("select customer from cockpit.tickets where uuid_ticket=%s", (uuid,), one=True)
+    return r["customer"] if r else None
+
+
+def _guarda_ticket(uuid):
+    """Autoriza pelo cliente DONO do ticket — nunca pelo que o front mandou."""
+    cust = _customer_do_ticket(uuid)
+    if not cust:
+        return _err(404, "GAP não encontrado."), None
+    return deny_customer(cust), cust
+
+
+@app.get("/api/gaps/<customer>")
+def api_gaps(customer):
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    gaps = q(SQL_GAPS, (customer,))
+    horas = sum(float(g["time_estimate"] or 0) for g in gaps)
+    return _json({"ok": True, "customer": customer, "total": len(gaps),
+                  "horas_estimadas": horas, "gaps": gaps})
+
+
+@app.get("/api/gaps/ticket/<uuid>")
+def api_gap_detalhe(uuid):
+    if (r := require_auth()):
+        return r
+    negado, _ = _guarda_ticket(uuid)
+    if negado:
+        return negado
+    t = q("""select t.uuid_ticket, t.raw->>'id' as id, t.titulo, t.descricao, t.cliente,
+                    t.status_tasks, t.etapa_gap, t.classificacao_gap, t.produto,
+                    t.competencia, t.time_estimate, t.due_date, t.aging_dias,
+                    t.user_assigned, u.nome as responsavel_nome, t.assigned_customer,
+                    t.observador, t.updated_at, t.synced_at
+               from cockpit.tickets t
+               left join cockpit.usuarios u on u.codigo = t.user_assigned
+              where t.uuid_ticket = %s""", (uuid,), one=True)
+    tags = q("""select raw_tag, dimensao, valor from cockpit.ticket_tags
+                 where uuid_ticket=%s order by dimensao_idx nulls last, raw_tag""", (uuid,))
+    ocorr = q("""select uuid_history, tipo, details, autor, occurred_at
+                   from cockpit.ocorrencias where uuid_ticket=%s
+                  order by occurred_at desc nulls last limit 30""", (uuid,))
+    dec = q("select * from cockpit.decisoes where uuid_ticket=%s", (uuid,), one=True)
+    ali = q("select * from cockpit.gap_alinhamentos where uuid_ticket=%s", (uuid,), one=True)
+    return _json({"ok": True, "ticket": t, "tags": tags, "ocorrencias": ocorr,
+                  "decisao": dec, "alinhamento": ali})
+
+
+@app.post("/api/gaps/ticket/<uuid>/decisao")
+def api_gap_decisao(uuid):
+    """Grava a decisão LOCAL (cockpit.decisoes). Não toca no Tasks SC."""
+    if (r := require_auth()):
+        return r
+    negado, _ = _guarda_ticket(uuid)
+    if negado:
+        return negado
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de decidir.")
+    b = request.get_json(silent=True) or {}
+    decisao = (b.get("decisao") or "pendente").strip()
+    if decisao not in DECISOES:
+        return _err(400, f"Decisão inválida: {decisao}")
+    est = b.get("estimativa")
+    est = float(est) if est not in (None, "") else None
+    execute("""insert into cockpit.decisoes
+                 (uuid_ticket, decisao, estimativa, observacao, classe,
+                  decided_by, decided_at, updated_at)
+               values (%s,%s,%s,%s,%s,%s, now(), now())
+               on conflict (uuid_ticket) do update set
+                 decisao=excluded.decisao, estimativa=excluded.estimativa,
+                 observacao=excluded.observacao, classe=excluded.classe,
+                 decided_by=excluded.decided_by, decided_at=now(), updated_at=now()""",
+            (uuid, decisao, est, b.get("observacao"), b.get("classe"), current_user()))
+    return _json({"ok": True, "uuid_ticket": uuid, "decisao": decisao})
+
+
+@app.post("/api/gaps/ticket/<uuid>/alinhamento")
+def api_gap_alinhamento(uuid):
+    """Alinhamento comercial do GAP. ATENÇÃO: argumentacao_interna é INTERNA —
+    não expor ao cliente em e-mail nem em painel compartilhado."""
+    if (r := require_auth()):
+        return r
+    negado, cust = _guarda_ticket(uuid)
+    if negado:
+        return negado
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de gravar.")
+    b = request.get_json(silent=True) or {}
+    tid = q("select raw->>'id' as id from cockpit.tickets where uuid_ticket=%s",
+            (uuid,), one=True)
+    execute("""insert into cockpit.gap_alinhamentos
+                 (uuid_ticket, task_id, customer, questionamento_cliente,
+                  argumentacao_interna, alinhamento_reuniao, retorno_cliente,
+                  created_by, updated_by, updated_at)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+               on conflict (uuid_ticket) do update set
+                 questionamento_cliente=excluded.questionamento_cliente,
+                 argumentacao_interna=excluded.argumentacao_interna,
+                 alinhamento_reuniao=excluded.alinhamento_reuniao,
+                 retorno_cliente=excluded.retorno_cliente,
+                 updated_by=excluded.updated_by, updated_at=now()""",
+            (uuid, (tid or {}).get("id"), cust, b.get("questionamento_cliente"),
+             b.get("argumentacao_interna"), b.get("alinhamento_reuniao"),
+             b.get("retorno_cliente"), current_user(), current_user()))
+    return _json({"ok": True, "uuid_ticket": uuid})
+
+
 # ── Gmail: rascunho por IMAP APPEND ─────────────────────────────────────────
 # A App Password fica cifrada (Fernet) em cockpit.gmail_credenciais, com a chave
 # derivada do SESSION_SECRET da Vercel — trocar o SESSION_SECRET invalida todas
