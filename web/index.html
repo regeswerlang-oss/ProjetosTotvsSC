@@ -151,7 +151,10 @@
             <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
             <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
-            <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
+            <button data-tab="cad_prod"  class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Cadastros<span class="block text-[10px] uppercase tracking-wide opacity-70">Base Produção</span></button>
+            <button data-tab="cad_teste" class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Cadastros<span class="block text-[10px] uppercase tracking-wide opacity-70">Base de Testes</span></button>
+            <button data-tab="mov_prod"  class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Movimentos<span class="block text-[10px] uppercase tracking-wide opacity-70">Base Produção</span></button>
+            <button data-tab="mov_teste" class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Movimentos<span class="block text-[10px] uppercase tracking-wide opacity-70">Base de Testes</span></button>
             <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
           <div id="tab-acoes" class="flex items-center gap-2 text-xs pb-2 hidden">
@@ -220,8 +223,10 @@
           <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
             <span class="text-xs text-slate-500">Cliente</span>
             <span id="cad-cliente-nome" class="font-medium"></span>
+            <span id="cad-amb-selo" class="px-2 py-0.5 rounded-full text-xs font-semibold"></span>
             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
+              <button id="cad-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
               <button id="cad-html" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⬇ Exportar HTML</button>
               <button id="cad-email" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">✉ Rascunho no Gmail</button>
               <label id="cad-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
@@ -231,6 +236,22 @@
             </div>
           </div>
           <div id="cad-conteudo"></div>
+        </div>
+
+        <!-- Aba Movimentos — volume transacional, mesmo par Produção/Teste -->
+        <div id="tab-movimentos" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="mov-cliente-nome" class="font-medium"></span>
+            <span id="mov-amb-selo" class="px-2 py-0.5 rounded-full text-xs font-semibold"></span>
+            <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+            <div class="ml-auto flex items-center gap-2">
+              <button id="mov-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
+              <button id="mov-import" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">⬆ Importar movimentos</button>
+            </div>
+          </div>
+          <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
+          <div id="mov-conteudo"></div>
         </div>
 
         <!-- Aba Transição — painel de status do cliente do projeto aberto -->
@@ -1297,21 +1318,48 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'gaps', 'cadastros', 'transicao'];
+// Cadastros e Movimentos têm duas abas cada (Produção e Teste) mas UM painel:
+// a aba escolhe o ambiente, e o painel é reaproveitado. Duplicar o DOM só para
+// trocar uma palavra na query sairia caro de manter.
+const ABAS = {
+  resumo: { painel: 'resumo' }, crono: { painel: 'crono' },
+  modulos: { painel: 'modulos' }, etapas: { painel: 'etapas' },
+  gaps: { painel: 'gaps' },
+  cad_prod: { painel: 'cadastros', ambiente: 'producao' },
+  cad_teste: { painel: 'cadastros', ambiente: 'teste' },
+  mov_prod: { painel: 'movimentos', ambiente: 'producao' },
+  mov_teste: { painel: 'movimentos', ambiente: 'teste' },
+  transicao: { painel: 'transicao' },
+};
+const PAINEIS = [...new Set(Object.values(ABAS).map(a => a.painel))];
+
+const AMB = {
+  producao: { label: 'Base Produção', cls: 'bg-emerald-100 text-emerald-800' },
+  teste: { label: 'Base de Testes', cls: 'bg-amber-100 text-amber-900' },
+};
 
 function setTab(nome) {
   state.tab = nome;
+  const aba = ABAS[nome] || ABAS.resumo;
   $$('.tab-btn').forEach(b => {
-    const active = b.dataset.tab === state.tab;
-    b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${active ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
+    const on = b.dataset.tab === state.tab;
+    const duasLinhas = b.querySelector('span') !== null;
+    b.className = `tab-btn ${duasLinhas ? 'px-3 py-1.5 text-left leading-tight' : 'px-4 py-2'} text-sm border-b-2 ${on ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
   });
-  TABS.forEach(t => $(`#tab-${t}`).classList.toggle('hidden', state.tab !== t));
+  PAINEIS.forEach(p => $(`#tab-${p}`).classList.toggle('hidden', p !== aba.painel));
   // Expandir/Recolher só faz sentido nas abas com árvore
   $('#tab-acoes').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(state.tab));
-  // Carga preguiçosa: as três abas seguem o cliente do projeto aberto
-  if (nome === 'gaps') initGaps();
-  if (nome === 'cadastros') initCadastros();
-  if (nome === 'transicao') initTransicao();
+  // Carga preguiçosa: todas seguem o cliente do projeto aberto
+  if (aba.painel === 'gaps') initGaps();
+  if (aba.painel === 'cadastros') initCadastros(aba.ambiente);
+  if (aba.painel === 'movimentos') initMovimentos(aba.ambiente);
+  if (aba.painel === 'transicao') initTransicao();
+}
+
+function seloAmbiente(el, ambiente) {
+  const a = AMB[ambiente] || AMB.producao;
+  el.textContent = a.label;
+  el.className = `px-2 py-0.5 rounded-full text-xs font-semibold ${a.cls}`;
 }
 
 // ============================================================================
@@ -1620,17 +1668,20 @@ async function abreGap(uuid) {
 // ============================================================================
 //  ABA CADASTROS (MONITCAD) — status de carga dos cadastros por cliente
 // ============================================================================
-const cad = { customer: null, dados: null };
+const cad = { customer: null, ambiente: 'producao', dados: null };
 
-function initCadastros() {
+function initCadastros(ambiente = 'producao') {
   const cli = state.selected?.cli;
   $('#cad-cliente-nome').textContent =
     (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
-  if (cad.customer === cli) return;      // já carregado para este cliente
+  seloAmbiente($('#cad-amb-selo'), ambiente);
+  // A chave do cache é o par cliente+ambiente: trocar de aba tem que rebuscar
+  if (cad.customer === cli && cad.ambiente === ambiente) return;
+  cad.ambiente = ambiente;
   carregaCadastros(cli);
 }
 
-$('#cad-reload').addEventListener('click', () => { cad.customer = null; initCadastros(); });
+$('#cad-reload').addEventListener('click', () => { cad.customer = null; initCadastros(cad.ambiente); });
 $('#cad-file').addEventListener('change', enviaMedicao);
 
 function blocoVazioCad(msg, extra = '') {
@@ -1645,7 +1696,7 @@ async function carregaCadastros(customer) {
   box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando medições…</div>';
   let j;
   try {
-    j = await api(`/api/monitcad/${encodeURIComponent(customer)}`);
+    j = await api(`/api/monitcad/${encodeURIComponent(customer)}?ambiente=${cad.ambiente}`);
   } catch (e) {
     box.innerHTML = blocoErro('Não foi possível carregar os cadastros', e, () => carregaCadastros(customer));
     return;
@@ -1653,9 +1704,9 @@ async function carregaCadastros(customer) {
   cad.dados = j;                        // guardado para o export HTML / e-mail
   if (j.vazio) {
     box.innerHTML = blocoVazioCad(
-      'Nenhuma medição publicada para este cliente ainda.',
-      '<p class="text-xs text-slate-400 mt-2">O job U_MONITPUSH() no Protheus ainda não enviou dados. ' +
-      'Use "⬆ Subir medição (.json)" para carregar o historico-semanal.json manualmente.</p>');
+      `Nenhuma medição na ${AMB[cad.ambiente].label} deste cliente.`,
+      '<p class="text-xs text-slate-400 mt-2">Use "🗄 Script SQL" para levantar a contagem no banco ' +
+      'e "⬆ Subir medição" para carregar o resultado. Cada base tem a sua própria série.</p>');
     return;
   }
   box.innerHTML = renderCadastros(j);
@@ -1829,19 +1880,181 @@ async function enviaMedicao(ev) {
     try { JSON.parse(texto); }
     catch (e) { alert('Arquivo não é um JSON nem um CSV válido: ' + e.message); return; }
   }
-  try {
-    const j = await api(`/api/monitcad/${encodeURIComponent(cli)}/upload`, {
-      method: 'POST',
-      headers: { 'Content-Type': csv ? 'text/csv; charset=utf-8' : 'application/json' },
-      body: texto,
-    });
-    alert(`Medições gravadas: ${j.medicoes} · linhas de tabela: ${j.tabelas} (${j.formato})`);
-    cad.customer = null;
-    initCadastros();
-  } catch (e) {
-    alert('Falha ao subir a medição: ' + e.message);
-  }
+  // Sempre confirmar a base: subir teste em cima de produção contamina a série
+  confirmaAmbiente(f.name, cad.ambiente, async (amb, m) => {
+    m.ocupado(true, 'Enviando…');
+    try {
+      const j = await api(`/api/monitcad/${encodeURIComponent(cli)}/upload?ambiente=${amb}`, {
+        method: 'POST',
+        headers: { 'Content-Type': csv ? 'text/csv; charset=utf-8' : 'application/json' },
+        body: texto,
+      });
+      m.fecha();
+      alert(`${AMB[amb].label}: ${j.medicoes} medição(ões), ${j.tabelas} linha(s) (${j.formato}).`);
+      // Se o arquivo era de outra base, vai para a aba dela — deixar a aba
+      // "Produção" mostrando dado de teste é o tipo de confusão que custa caro
+      cad.customer = null;
+      setTab(amb === 'teste' ? 'cad_teste' : 'cad_prod');
+    } catch (e) {
+      m.ocupado(false, 'Importar');
+      m.erro(e.message);
+    }
+  });
 }
+
+// Pergunta de qual base veio o arquivo — vale para cadastros e movimentos
+function confirmaAmbiente(nomeArquivo, sugerido, aoConfirmar) {
+  const opcao = (v) => `
+    <label class="flex items-start gap-2 p-3 rounded-md border ${v === sugerido ? 'border-totvs-blue bg-totvs-blue/5' : 'border-slate-300'} cursor-pointer">
+      <input type="radio" name="amb" value="${v}" ${v === sugerido ? 'checked' : ''} class="mt-0.5 accent-totvs-blue">
+      <span>
+        <span class="font-semibold">${AMB[v].label}</span>
+        <span class="block text-xs text-slate-500">${v === 'producao'
+          ? 'Base real do cliente — alimenta o acompanhamento oficial.'
+          : 'Base de homologação — série separada, não mistura com produção.'}</span>
+      </span>
+    </label>`;
+  const m = modal('De qual base veio este arquivo?',
+    `<p class="text-xs text-slate-500">Arquivo: <span class="font-mono">${escapeHtml(nomeArquivo)}</span></p>
+     <div class="space-y-2">${opcao('producao')}${opcao('teste')}</div>
+     <p class="text-xs text-slate-400">Produção e teste têm séries independentes: uma nunca sobrescreve a outra,
+       mesmo na mesma data.</p>`,
+    'Importar');
+  m.aoConfirmar(() => {
+    const escolhido = m.el.querySelector('input[name="amb"]:checked')?.value || sugerido;
+    aoConfirmar(escolhido, m);
+  });
+}
+
+// ============================================================================
+//  ABA MOVIMENTOS — volume transacional, mesmo par Produção/Teste
+//  A importação ainda não tem layout definido: o botão existe e explica o que
+//  falta, em vez de fingir que funciona.
+// ============================================================================
+const mov = { customer: null, ambiente: 'producao', dados: null };
+
+// Conjunto núcleo de movimento — o que costuma pesar numa virada
+const PADRAO_MOVIMENTOS = [
+  ['Compras', 'SC1', 'Solicitacoes de Compra', 'C1_EMISSAO'],
+  ['Compras', 'SC7', 'Pedidos de Compra', 'C7_EMISSAO'],
+  ['Estoque', 'SD3', 'Movimentacoes Internas', 'D3_EMISSAO'],
+  ['Estoque', 'SB2', 'Saldos em Estoque', ''],
+  ['Faturamento', 'SC5', 'Pedidos de Venda (cabecalho)', 'C5_EMISSAO'],
+  ['Faturamento', 'SC6', 'Pedidos de Venda (itens)', 'C6_ENTREG'],
+  ['Faturamento', 'SF2', 'Notas Fiscais de Saida', 'F2_EMISSAO'],
+  ['Faturamento', 'SD2', 'Itens de NF de Saida', 'D2_EMISSAO'],
+  ['Compras', 'SF1', 'Notas Fiscais de Entrada', 'F1_EMISSAO'],
+  ['Compras', 'SD1', 'Itens de NF de Entrada', 'D1_EMISSAO'],
+  ['Financeiro', 'SE1', 'Titulos a Receber', 'E1_EMISSAO'],
+  ['Financeiro', 'SE2', 'Titulos a Pagar', 'E2_EMISSAO'],
+  ['Financeiro', 'SE5', 'Movimentacao Bancaria', 'E5_DATA'],
+  ['Contabilidade', 'CT2', 'Lancamentos Contabeis', 'CT2_DATA'],
+  ['PCP', 'SC2', 'Ordens de Producao', 'C2_EMISSAO'],
+  ['PCP', 'SD4', 'Empenhos', ''],
+];
+
+function initMovimentos(ambiente = 'producao') {
+  const cli = state.selected?.cli;
+  $('#mov-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  seloAmbiente($('#mov-amb-selo'), ambiente);
+  if (mov.customer === cli && mov.ambiente === ambiente) return;
+  mov.ambiente = ambiente;
+  carregaMovimentos(cli);
+}
+
+async function carregaMovimentos(customer) {
+  mov.customer = customer || null;
+  const box = $('#mov-conteudo');
+  $('#mov-kpis').classList.add('hidden');
+  if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver os movimentos do cliente.'); return; }
+  box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando movimentos…</div>';
+  let j;
+  try {
+    j = await api(`/api/monitmov/${encodeURIComponent(customer)}?ambiente=${mov.ambiente}`);
+  } catch (e) {
+    box.innerHTML = blocoErro('Não foi possível carregar os movimentos', e, () => carregaMovimentos(customer));
+    return;
+  }
+  mov.dados = j;
+  if (j.vazio) {
+    box.innerHTML = blocoVazioCad(
+      `Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`,
+      '<p class="text-xs text-slate-400 mt-2">Use "🗄 Script SQL" para levantar o volume no banco. ' +
+      'A importação depende do layout ainda a definir — o botão explica o que falta.</p>');
+    return;
+  }
+  const itens = j.itens || [], mods = j.modulos || [];
+  const total = itens.reduce((a, x) => a + Number(x.quantidade || 0), 0);
+  const maxMod = Math.max(1, ...mods.map(m => Number(m.registros || 0)));
+  const kpi = (rot, val, sub, cls) => `
+    <div class="rounded-lg p-4 ${cls}"><p class="text-xs opacity-80">${rot}</p>
+      <p class="text-2xl font-totvs mt-1">${val}</p><p class="text-xs opacity-80 mt-0.5">${sub}</p></div>`;
+  $('#mov-kpis').classList.remove('hidden');
+  $('#mov-kpis').innerHTML =
+    kpi('Movimentos', fmtNum(total), 'na última medição', 'bg-totvs-petroleo text-white') +
+    kpi('Tabelas', String(itens.length), `${itens.filter(x => Number(x.quantidade) > 0).length} com movimento`, 'bg-totvs-blue text-totvs-petroleo') +
+    kpi('Módulos', String(mods.length), 'com tabela medida', 'bg-totvs-purple text-white') +
+    kpi('Período', j.periodo_ini ? `${fmtData(String(j.periodo_ini))} → ${fmtData(String(j.periodo_fim || ''))}` : '—',
+        `medição de ${fmtData(String(j.ultima_medicao || ''))}`, 'bg-white border border-slate-200 text-totvs-petroleo');
+
+  box.innerHTML = `
+    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Movimentos por módulo</h3>
+      <div class="space-y-2">${mods.map(m => `
+        <div class="flex items-center gap-3 text-sm">
+          <span class="w-52 truncate">${escapeHtml(m.modulo)}</span>
+          <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${(100 * Number(m.registros || 0) / maxMod).toFixed(1)}%"></div></div>
+          <span class="w-24 text-right tabular-nums font-medium">${fmtNum(m.registros)}</span>
+          <span class="w-28 text-right text-xs text-slate-500">${m.com_movimento}/${m.tabelas} tabelas</span>
+        </div>`).join('')}</div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-5 overflow-x-auto">
+      <h3 class="text-sm font-semibold text-slate-700 mb-3">Tabelas medidas</h3>
+      <table class="w-full text-sm">
+        <thead><tr class="text-xs text-slate-500 text-left">
+          <th class="pb-2 pr-3">Tabela</th><th class="pb-2 pr-3">Descrição</th>
+          <th class="pb-2 pr-3">Módulo</th><th class="pb-2 pr-3 text-right">Quantidade</th>
+          <th class="pb-2 pr-3 text-right">Valor</th><th class="pb-2">Período</th>
+        </tr></thead>
+        <tbody>${itens.map(x => `
+          <tr class="border-t border-slate-100">
+            <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
+            <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
+            <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(x.modulo || '—')}</td>
+            <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(x.quantidade)}</td>
+            <td class="py-2 pr-3 text-right tabular-nums">${x.valor != null ? fmtNum(x.valor) : '—'}</td>
+            <td class="py-2 text-xs">${escapeHtml(x.periodo || '—')}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+$('#mov-reload').addEventListener('click', () => { mov.customer = null; initMovimentos(mov.ambiente); });
+
+$('#mov-sql').addEventListener('click', () => abreModalSQL('movimentos'));
+
+$('#mov-import').addEventListener('click', () => {
+  modal('Importar movimentos',
+    `<p class="text-sm">O layout de importação dos movimentos <b>ainda não está definido</b> —
+      este botão é o lugar dele.</p>
+     <p class="text-sm text-slate-600">O destino no banco já existe
+       (<span class="font-mono text-xs">cockpit.monitmov_medicoes</span> e
+       <span class="font-mono text-xs">monitmov_itens</span>), com o mesmo par
+       Produção/Teste dos cadastros e campos para quantidade, valor e período.</p>
+     <p class="text-sm text-slate-600">Para fechar o layout eu preciso de um arquivo de exemplo
+       e da resposta a três perguntas:</p>
+     <ul class="text-sm text-slate-600 list-disc pl-5 space-y-1">
+       <li>Uma linha por tabela (como nos cadastros) ou uma linha por documento?</li>
+       <li>Entra <b>valor</b> além da quantidade?</li>
+       <li>O período é fixo (mês) ou vem no arquivo?</li>
+     </ul>
+     <p class="text-xs text-slate-400">Quando o arquivo chegar, a importação vai perguntar
+       de qual base veio, igual à dos cadastros.</p>`,
+    'Entendi');
+  const m = document.body.lastElementChild;
+  m.querySelector('[data-ok]').addEventListener('click', () => m.remove());
+});
 
 // ============================================================================
 //  ABA TRANSIÇÃO — painel de status entregue ao cliente
@@ -2071,6 +2284,161 @@ $('#cad-html').addEventListener('click', () => {
 });
 
 $('#cad-email').addEventListener('click', () => abreModalEmail());
+
+// ============================================================================
+//  CADASTROS — script SQL que levanta a contagem no banco do Protheus
+//  Mesmo padrão do job MONITCAD: COUNT(*) por tabela com D_E_L_E_T_=' '.
+//  O resultado sai no layout do CSV que a própria aba importa.
+// ============================================================================
+// Conjunto núcleo de implantação — usado quando o cliente ainda não tem medição
+const PADRAO_MONITCAD = [
+  ['Compras', 'SA2', 'Fornecedores'], ['Compras', 'SA5', 'Amarracao Produto x Fornecedor'],
+  ['Compras', 'SC1', 'Solicitacao de Compra'], ['Compras', 'SC7', 'Pedido de Compra'],
+  ['Compras', 'SC8', 'Cotacoes'],
+  ['Configurador', 'SAH', 'Unidades de Medida'], ['Configurador', 'SM2', 'Moedas'],
+  ['Configurador', 'SX5', 'Tabelas Genericas'], ['Configurador', 'SX6', 'Parametros do Sistema'],
+  ['Configurador', 'SX7', 'Gatilhos'],
+  ['Contabilidade', 'CT1', 'Plano de Contas'], ['Contabilidade', 'CT5', 'Lancamentos Padrao'],
+  ['Contabilidade', 'CTD', 'Itens Contabeis'], ['Contabilidade', 'CTH', 'Classes de Valor'],
+  ['Contabilidade', 'CTT', 'Centro de Custo / Unidade Negocio'],
+  ['Contabilidade', 'CV3', 'Saldos Contabeis'],
+  ['Contratos', 'CN9', 'Contratos (cabecalho)'],
+  ['Estoque', 'NNR', 'Locais de Estoque'], ['Estoque', 'SB1', 'Cadastro de Produto'],
+  ['Estoque', 'SBM', 'Grupos de Produto'],
+  ['Faturamento', 'DA1', 'Tabelas de Preco (itens)'], ['Faturamento', 'SA1', 'Clientes'],
+  ['Faturamento', 'SA3', 'Vendedores'], ['Faturamento', 'SA4', 'Transportadoras'],
+  ['Faturamento', 'SC5', 'Pedido de Venda (cabecalho)'], ['Faturamento', 'SC6', 'Pedido de Venda (itens)'],
+  ['Financeiro', 'SA6', 'Bancos'], ['Financeiro', 'SE1', 'Contas a Receber'],
+  ['Financeiro', 'SE2', 'Contas a Pagar'], ['Financeiro', 'SE4', 'Condicoes de Pagamento'],
+  ['Financeiro', 'SED', 'Naturezas Financeiras'], ['Financeiro', 'SF1', 'Cabecalho NF Entrada'],
+  ['Financeiro', 'SD1', 'Itens NF Entrada'], ['Financeiro', 'SF2', 'Cabecalho NF Saida'],
+  ['Fiscal', 'SD2', 'Itens NF Saida'], ['Fiscal', 'SF3', 'Livros Fiscais'],
+  ['Fiscal', 'SF4', 'Tipos de Entrada e Saida (TES)'],
+  ['PCP', 'SG1', 'Estrutura de Produto'], ['RH', 'SRA', 'Funcionarios'],
+  ['Servico', 'AA1', 'Atendentes'], ['Loja', 'SL1', 'Venda Frente de Loja'],
+];
+
+const sqlTxt = (s) => `'${String(s ?? '').replace(/'/g, "''")}'`;
+
+function montaScriptSQL(tipo, sufixo, dialeto, ini, fim) {
+  const movimentos = tipo === 'movimentos';
+  const daMedicao = movimentos
+    ? (mov.dados?.itens || []).map(t => [t.modulo || '(sem módulo)', t.tabela, t.descricao || '', t.filtro || ''])
+    : (cad.dados?.tabelas || []).map(t => [t.modulo || '(sem módulo)', t.tabela, t.descricao || '', t.filtro || '']);
+  const padrao = movimentos ? PADRAO_MOVIMENTOS : PADRAO_MONITCAD.map(x => [...x, '']);
+  const linhas = daMedicao.length ? daMedicao : padrao;
+  const cliente = (state.selected?.projeto?.nome_cliente_projeto || '').trim();
+  const ambiente = movimentos ? mov.ambiente : cad.ambiente;
+
+  const oracle = dialeto === 'oracle';
+  const agora = oracle ? `TO_CHAR(SYSDATE,'YYYY-MM-DD HH24:MI')`
+                       : `CONVERT(varchar(16), GETDATE(), 120)`;
+  const semana = oracle ? `TO_CHAR(SYSDATE,'IYYY')||'-W'||TO_CHAR(SYSDATE,'IW')`
+                        : `CONCAT(DATEPART(year, GETDATE()), '-W', FORMAT(DATEPART(ISO_WEEK, GETDATE()), '00'))`;
+  // No Protheus a data é char AAAAMMDD — comparação direta com string funciona
+  const p1 = (ini || '').replace(/-/g, ''), p2 = (fim || '').replace(/-/g, '');
+
+  const selects = linhas.map(([mod, tab, desc, quarto]) => {
+    const fisica = `${tab}${sufixo}`;
+    let where = `WHERE D_E_L_E_T_=' '`;
+    if (movimentos) {
+      // no conjunto de movimentos o 4º campo é a COLUNA DE DATA do documento
+      if (quarto && p1 && p2) where += `\n   AND ${quarto} BETWEEN '${p1}' AND '${p2}'`;
+    } else if (quarto) {
+      where += ` AND ${quarto}`;
+    }
+    const periodo = movimentos ? `, ${sqlTxt(p1 && p2 ? `${p1}-${p2}` : 'total')} AS PERIODO` : '';
+    return `SELECT ${sqlTxt(mod)} AS MODULO, ${sqlTxt(tab)} AS TABELA, ${sqlTxt(desc)} AS DESCRICAO,
+       ${agora} AS DT_LEITURA, ${semana} AS SEMANA, COUNT(*) AS QTDE${periodo}
+  FROM ${fisica} ${where}`;
+  });
+
+  const semData = movimentos ? linhas.filter(l => !l[3]).map(l => l[1]) : [];
+
+  return `-- ===========================================================================
+-- ${movimentos ? 'Volume de MOVIMENTOS' : 'Monitoramento de CADASTROS'}${cliente ? ' · ' + cliente : ''}
+-- Ambiente de destino: ${AMB[ambiente].label.toUpperCase()}
+-- Gerado pela Gestão de Projetos TOTVS SC em ${new Date().toLocaleString('pt-BR')}
+--
+-- Rode no banco do Protheus (${oracle ? 'Oracle' : 'SQL Server'}) e exporte o
+-- resultado em CSV.${movimentos
+  ? ' A importação de movimentos ainda não tem layout definido.'
+  : ' Depois suba o arquivo em "⬆ Subir medição".'}
+--
+-- ATENÇÃO: rode na base ${AMB[ambiente].label.toUpperCase()}. Produção e teste têm
+-- séries separadas no painel — o arquivo trocado polui a leitura do projeto.
+--
+-- Sufixo das tabelas: ${sufixo}  (ex.: SA1 → SA1${sufixo}). Troque se a empresa
+-- ou o grupo for outro. Mesma regra do job MONITCAD: D_E_L_E_T_=' '.
+${movimentos && p1 && p2 ? `-- Período: ${p1} a ${p2} (data do documento, char AAAAMMDD).` : ''}
+${semData.length ? `-- Sem coluna de data (contam o total, não o período): ${semData.join(', ')}.` : ''}
+${daMedicao.length
+  ? `-- Tabelas: as ${linhas.length} da última medição deste cliente/ambiente.`
+  : `-- Tabelas: conjunto núcleo (${linhas.length}) — ainda não há medição neste
+--          ambiente. Ajuste conforme o escopo do cliente.`}
+-- ===========================================================================
+
+${selects.join('\nUNION ALL\n')}
+ORDER BY 1, 2;
+`;
+}
+
+function abreModalSQL(tipo = 'cadastros') {
+  const movimentos = tipo === 'movimentos';
+  const hoje = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const mesIni = iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+
+  const m = modal(`Script SQL · ${movimentos ? 'volume de movimentos' : 'contagem de cadastros'}`,
+    `<div class="grid grid-cols-2 gap-3">
+       ${campo('sql-sufixo', 'Sufixo das tabelas', '010', 'text', 'Ex.: SA1 + 010 = SA1010')}
+       <label class="block"><span class="text-xs text-slate-500">Banco</span>
+         <select id="sql-dialeto" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+           <option value="mssql">SQL Server</option>
+           <option value="oracle">Oracle</option>
+         </select></label>
+     </div>
+     ${movimentos ? `<div class="grid grid-cols-2 gap-3">
+       ${campo('sql-ini', 'Período de', mesIni, 'date')}
+       ${campo('sql-fim', 'até', iso(hoje), 'date')}</div>` : ''}
+     <p class="text-xs text-slate-500">Rode na
+       <b>${AMB[movimentos ? mov.ambiente : cad.ambiente].label}</b> — é a base da aba aberta.
+       ${movimentos ? 'O período filtra pela data do documento.' : 'Exporte em CSV e suba em "⬆ Subir medição".'}</p>
+     <textarea id="sql-txt" rows="14" readonly
+       class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs bg-slate-50"></textarea>
+     <div class="flex gap-2">
+       <button id="sql-copiar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">Copiar</button>
+       <button id="sql-baixar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">Baixar .sql</button>
+       <span id="sql-msg" class="text-xs text-emerald-700 self-center"></span>
+     </div>`,
+    'Fechar');
+
+  const gera = () => {
+    m.campo('sql-txt').value = montaScriptSQL(
+      tipo, m.campo('sql-sufixo').value.trim() || '010', m.campo('sql-dialeto').value,
+      movimentos ? m.campo('sql-ini').value : '', movimentos ? m.campo('sql-fim').value : '');
+  };
+  gera();
+  ['sql-sufixo', 'sql-dialeto', 'sql-ini', 'sql-fim'].forEach(id =>
+    m.campo(id)?.addEventListener('input', gera));
+  m.aoConfirmar(m.fecha);
+
+  m.campo('sql-copiar').addEventListener('click', async () => {
+    const txt = m.campo('sql-txt').value;
+    try { await navigator.clipboard.writeText(txt); }
+    catch { m.campo('sql-txt').select(); document.execCommand('copy'); }
+    m.campo('sql-msg').textContent = 'Copiado.';
+  });
+  m.campo('sql-baixar').addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([m.campo('sql-txt').value], { type: 'text/plain;charset=utf-8' }));
+    const a = Object.assign(document.createElement('a'), {
+      href: url, download: `monitcad-${(cad.customer || 'cliente').toLowerCase()}.sql` });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  });
+}
+
+$('#cad-sql').addEventListener('click', () => abreModalSQL('cadastros'));
 
 // ============================================================================
 //  MODAIS — rascunho no Gmail e cadastro da App Password

@@ -649,21 +649,33 @@ def _csv_para_body(texto):
     return {"medicoes": [por_data[d] for d in sorted(por_data)]}
 
 
+AMBIENTES = ("producao", "teste")
+
+
+def _ambiente():
+    """Produção e teste são bases DIFERENTES: nunca somar as duas na mesma
+    leitura. O ambiente vem sempre explícito do front."""
+    a = (request.args.get("ambiente") or "producao").strip().lower()
+    return a if a in AMBIENTES else "producao"
+
+
 @app.get("/api/monitcad/<customer>")
 def api_monitcad(customer):
-    """Última medição + histórico de carga dos cadastros do cliente.
-    Enquanto o U_MONITPUSH() do Protheus não publicar, devolve vazio:true."""
+    """Última medição + histórico de carga dos cadastros do cliente, no ambiente
+    pedido. Sem medição naquele ambiente, devolve vazio:true."""
     if (r := require_auth()):
         return r
     if (d := deny_customer(customer)):
         return d
+    amb = _ambiente()
     proj = q("select * from cockpit.monitcad_projetos where customer=%s",
              (customer,), one=True)
     meds = q("""select id, data_medicao, semana, hora_medicao, origem
                   from cockpit.monitcad_medicoes
-                 where customer=%s order by data_medicao""", (customer,))
+                 where customer=%s and ambiente=%s order by data_medicao""",
+             (customer, amb))
     if not meds:
-        return _json({"ok": True, "customer": customer, "projeto": proj,
+        return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
                       "vazio": True, "tabelas": [], "serie": [], "total_medicoes": 0})
     ult = meds[-1]
     tabelas = q("""select tabela, descricao, modulo, filtro, realizado, estimativa,
@@ -688,13 +700,13 @@ def api_monitcad(customer):
                              else null end as pct
                    from cockpit.monitcad_medicoes m
                    join cockpit.monitcad_tabelas t on t.medicao_id = m.id
-                  where m.customer=%s
+                  where m.customer=%s and m.ambiente=%s
                   group by m.data_medicao, m.semana
-                  order by m.data_medicao""", (customer,))
-    return _json({"ok": True, "customer": customer, "projeto": proj, "vazio": False,
-                  "ultima_medicao": ult["data_medicao"], "total_medicoes": len(meds),
-                  "tem_estimativa": tem_est, "tabelas": tabelas, "modulos": modulos,
-                  "serie": serie})
+                  order by m.data_medicao""", (customer, amb))
+    return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
+                  "vazio": False, "ultima_medicao": ult["data_medicao"],
+                  "total_medicoes": len(meds), "tem_estimativa": tem_est,
+                  "tabelas": tabelas, "modulos": modulos, "serie": serie})
 
 
 @app.post("/api/monitcad/<customer>/upload")
@@ -761,23 +773,25 @@ def api_monitcad_upload(customer):
             (customer, _slug(body.get("projeto") or "") or None, body.get("projeto"),
              body.get("cliente"), body.get("gp_totvs"), body.get("gp_cliente")))
 
+    amb = _ambiente()
     n_med = n_tab = 0
     ultima = None
     for m in medicoes:
         dt = _data_iso(m.get("data_iso") or m.get("data_medicao"))
         if not dt:
             continue
-        # regrava a medição inteira (as tabelas caem por ON DELETE CASCADE
-        # da FK medicao_id — se não houver cascade, o delete explícito cobre)
-        antigos = q("select id from cockpit.monitcad_medicoes where customer=%s and data_medicao=%s",
-                    (customer, dt))
+        # regrava a medição inteira DAQUELE ambiente — produção e teste convivem
+        # na mesma data sem uma apagar a outra
+        antigos = q("""select id from cockpit.monitcad_medicoes
+                        where customer=%s and data_medicao=%s and ambiente=%s""",
+                    (customer, dt, amb))
         for a in antigos:
             execute("delete from cockpit.monitcad_tabelas where medicao_id=%s", (a["id"],))
             execute("delete from cockpit.monitcad_medicoes where id=%s", (a["id"],))
         row = q("""insert into cockpit.monitcad_medicoes
-                     (customer, data_medicao, semana, hora_medicao, origem, payload)
-                   values (%s,%s,%s,%s,'upload',%s) returning id""",
-                (customer, dt, m.get("semana"), m.get("hora_medicao"),
+                     (customer, ambiente, data_medicao, semana, hora_medicao, origem, payload)
+                   values (%s,%s,%s,%s,%s,'upload',%s) returning id""",
+                (customer, amb, dt, m.get("semana"), m.get("hora_medicao"),
                  json.dumps({k: v for k, v in m.items() if k != "tabelas"})), one=True)
         mid = row["id"]
         n_med += 1
@@ -789,7 +803,7 @@ def api_monitcad_upload(customer):
             pct = t.get("percentual")
             if pct is None:
                 pct = round(100.0 * real / est, 1) if est > 0 else 0
-            linhas.append((mid, customer, dt, t.get("tabela"), t.get("descricao"),
+            linhas.append((mid, customer, amb, dt, t.get("tabela"), t.get("descricao"),
                            t.get("modulo"), t.get("filtro"), real, est, pct,
                            _data_iso(t.get("data_prev")), t.get("etapa"),
                            t.get("responsavel"), t.get("status")))
@@ -797,16 +811,57 @@ def api_monitcad_upload(customer):
             with db() as c, c.cursor() as cur:
                 execute_values(cur, """
                     insert into cockpit.monitcad_tabelas
-                      (medicao_id, customer, data_medicao, tabela, descricao, modulo, filtro,
-                       realizado, estimativa, percentual, data_prev, etapa, responsavel, status)
+                      (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
+                       modulo, filtro, realizado, estimativa, percentual, data_prev,
+                       etapa, responsavel, status)
                     values %s""", linhas, page_size=200)
             n_tab += len(linhas)
 
-    if ultima:
+    if ultima and amb == "producao":     # o marco do projeto é a base de produção
         execute("update cockpit.monitcad_projetos set ultima_medicao=%s, updated_at=now() "
                 "where customer=%s", (ultima, customer))
-    return _json({"ok": True, "customer": customer, "formato": "csv" if ehcsv else "json",
-                  "medicoes": n_med, "tabelas": n_tab, "ultima_medicao": ultima})
+    return _json({"ok": True, "customer": customer, "ambiente": amb,
+                  "formato": "csv" if ehcsv else "json", "medicoes": n_med,
+                  "tabelas": n_tab, "ultima_medicao": ultima})
+
+
+# ── MOVIMENTOS — volume transacional, mesmo desenho dos cadastros ───────────
+@app.get("/api/monitmov/<customer>")
+def api_monitmov(customer):
+    """Última medição de MOVIMENTOS do cliente no ambiente pedido.
+    A importação ainda não tem layout definido — por enquanto só lê."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    amb = _ambiente()
+    meds = q("""select id, data_medicao, semana, periodo_ini, periodo_fim, origem
+                  from cockpit.monitmov_medicoes
+                 where customer=%s and ambiente=%s order by data_medicao""",
+             (customer, amb))
+    if not meds:
+        return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": True,
+                      "itens": [], "modulos": [], "serie": [], "total_medicoes": 0})
+    ult = meds[-1]
+    itens = q("""select tabela, descricao, modulo, filtro, quantidade, valor, periodo
+                   from cockpit.monitmov_itens where medicao_id=%s
+                  order by modulo nulls last, quantidade desc, tabela""", (ult["id"],))
+    modulos = q("""select coalesce(modulo,'(sem módulo)') as modulo, count(*) as tabelas,
+                          count(*) filter (where quantidade > 0) as com_movimento,
+                          sum(quantidade) as registros
+                     from cockpit.monitmov_itens where medicao_id=%s
+                    group by 1 order by 4 desc, 1""", (ult["id"],))
+    serie = q("""select m.data_medicao, m.semana, sum(i.quantidade) as realizado,
+                        count(*) filter (where i.quantidade > 0) as tabelas_com_carga
+                   from cockpit.monitmov_medicoes m
+                   join cockpit.monitmov_itens i on i.medicao_id = m.id
+                  where m.customer=%s and m.ambiente=%s
+                  group by m.data_medicao, m.semana order by m.data_medicao""",
+              (customer, amb))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": False,
+                  "ultima_medicao": ult["data_medicao"], "total_medicoes": len(meds),
+                  "periodo_ini": ult["periodo_ini"], "periodo_fim": ult["periodo_fim"],
+                  "itens": itens, "modulos": modulos, "serie": serie})
 
 
 # ── GAPs (aba "GAPs") ───────────────────────────────────────────────────────
