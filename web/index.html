@@ -62,6 +62,14 @@
   .totvs-hex > * { position: relative; z-index: 1; }
 
   #frame-transicao { width: 100%; border: 0; display: block; min-height: 70vh; }
+
+  /* Sub-abas de Cadastros (Cadastros/Movimentos × Produção/Teste) */
+  .sub-tab { padding: 0.375rem 0.75rem; font-size: 0.8125rem; text-align: left;
+             line-height: 1.15; color: #545454; border-bottom: 2px solid transparent;
+             margin-bottom: -1px; }
+  .sub-tab:hover { color: var(--totvs-petroleo); }
+  .sub-tab.is-active { border-bottom-color: var(--totvs-blue);
+                       color: var(--totvs-petroleo); font-weight: 700; }
 </style>
 </head>
 <body class="bg-totvs-beige text-totvs-petroleo">
@@ -151,10 +159,7 @@
             <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
             <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
-            <button data-tab="cad_prod"  class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Cadastros<span class="block text-[10px] uppercase tracking-wide opacity-70">Base Produção</span></button>
-            <button data-tab="cad_teste" class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Cadastros<span class="block text-[10px] uppercase tracking-wide opacity-70">Base de Testes</span></button>
-            <button data-tab="mov_prod"  class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Movimentos<span class="block text-[10px] uppercase tracking-wide opacity-70">Base Produção</span></button>
-            <button data-tab="mov_teste" class="tab-btn px-3 py-1.5 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700 text-left leading-tight">Movimentos<span class="block text-[10px] uppercase tracking-wide opacity-70">Base de Testes</span></button>
+            <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
             <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
           <div id="tab-acoes" class="flex items-center gap-2 text-xs pb-2 hidden">
@@ -218,8 +223,17 @@
           <div id="gap-conteudo"></div>
         </div>
 
-        <!-- Aba Cadastros (MONITCAD) — sempre do cliente do projeto aberto -->
+        <!-- Aba Cadastros — guarda-chuva. Dentro dela, quatro sub-abas:
+             Cadastros/Movimentos × Base Produção/Base de Testes. -->
         <div id="tab-cadastros" class="p-5 hidden">
+          <div class="flex gap-1 border-b border-slate-200 mb-4">
+            <button data-sub="cad_prod"  class="sub-tab">Cadastros<span class="block text-[10px] uppercase tracking-wide opacity-70">Base Produção</span></button>
+            <button data-sub="cad_teste" class="sub-tab">Cadastros<span class="block text-[10px] uppercase tracking-wide opacity-70">Base de Testes</span></button>
+            <button data-sub="mov_prod"  class="sub-tab">Movimentos<span class="block text-[10px] uppercase tracking-wide opacity-70">Base Produção</span></button>
+            <button data-sub="mov_teste" class="sub-tab">Movimentos<span class="block text-[10px] uppercase tracking-wide opacity-70">Base de Testes</span></button>
+          </div>
+
+        <div id="sub-cadastros">
           <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
             <span class="text-xs text-slate-500">Cliente</span>
             <span id="cad-cliente-nome" class="font-medium"></span>
@@ -238,8 +252,8 @@
           <div id="cad-conteudo"></div>
         </div>
 
-        <!-- Aba Movimentos — volume transacional, mesmo par Produção/Teste -->
-        <div id="tab-movimentos" class="p-5 hidden">
+        <!-- Sub-aba Movimentos — volume transacional, mesmo par Produção/Teste -->
+        <div id="sub-movimentos" class="hidden">
           <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
             <span class="text-xs text-slate-500">Cliente</span>
             <span id="mov-cliente-nome" class="font-medium"></span>
@@ -252,6 +266,7 @@
           </div>
           <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
           <div id="mov-conteudo"></div>
+        </div>
         </div>
 
         <!-- Aba Transição — painel de status do cliente do projeto aberto -->
@@ -287,6 +302,7 @@ const state = {
   showAll: false,
   cronograma: null,                    // último cronograma carregado
   tab: 'resumo',                       // ver TABS
+  sub: 'cad_prod',                     // sub-aba dentro de Cadastros (ver SUBABAS)
 };
 
 // Mapeamentos de status — PALPITES (ajustar conforme uso real)
@@ -1318,20 +1334,17 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-// Cadastros e Movimentos têm duas abas cada (Produção e Teste) mas UM painel:
-// a aba escolhe o ambiente, e o painel é reaproveitado. Duplicar o DOM só para
-// trocar uma palavra na query sairia caro de manter.
-const ABAS = {
-  resumo: { painel: 'resumo' }, crono: { painel: 'crono' },
-  modulos: { painel: 'modulos' }, etapas: { painel: 'etapas' },
-  gaps: { painel: 'gaps' },
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'gaps', 'cadastros', 'transicao'];
+
+// Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
+// escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
+// sairia caro de manter.
+const SUBABAS = {
   cad_prod: { painel: 'cadastros', ambiente: 'producao' },
   cad_teste: { painel: 'cadastros', ambiente: 'teste' },
   mov_prod: { painel: 'movimentos', ambiente: 'producao' },
   mov_teste: { painel: 'movimentos', ambiente: 'teste' },
-  transicao: { painel: 'transicao' },
 };
-const PAINEIS = [...new Set(Object.values(ABAS).map(a => a.painel))];
 
 const AMB = {
   producao: { label: 'Base Produção', cls: 'bg-emerald-100 text-emerald-800' },
@@ -1340,21 +1353,30 @@ const AMB = {
 
 function setTab(nome) {
   state.tab = nome;
-  const aba = ABAS[nome] || ABAS.resumo;
   $$('.tab-btn').forEach(b => {
     const on = b.dataset.tab === state.tab;
-    const duasLinhas = b.querySelector('span') !== null;
-    b.className = `tab-btn ${duasLinhas ? 'px-3 py-1.5 text-left leading-tight' : 'px-4 py-2'} text-sm border-b-2 ${on ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
+    b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${on ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
   });
-  PAINEIS.forEach(p => $(`#tab-${p}`).classList.toggle('hidden', p !== aba.painel));
+  TABS.forEach(t => $(`#tab-${t}`).classList.toggle('hidden', t !== nome));
   // Expandir/Recolher só faz sentido nas abas com árvore
-  $('#tab-acoes').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(state.tab));
+  $('#tab-acoes').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(nome));
   // Carga preguiçosa: todas seguem o cliente do projeto aberto
-  if (aba.painel === 'gaps') initGaps();
-  if (aba.painel === 'cadastros') initCadastros(aba.ambiente);
-  if (aba.painel === 'movimentos') initMovimentos(aba.ambiente);
-  if (aba.painel === 'transicao') initTransicao();
+  if (nome === 'gaps') initGaps();
+  if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
+  if (nome === 'transicao') initTransicao();
 }
+
+function setSub(nome) {
+  state.sub = nome;
+  const sub = SUBABAS[nome] || SUBABAS.cad_prod;
+  $$('.sub-tab').forEach(b => b.classList.toggle('is-active', b.dataset.sub === nome));
+  $('#sub-cadastros').classList.toggle('hidden', sub.painel !== 'cadastros');
+  $('#sub-movimentos').classList.toggle('hidden', sub.painel !== 'movimentos');
+  if (sub.painel === 'cadastros') initCadastros(sub.ambiente);
+  else initMovimentos(sub.ambiente);
+}
+
+$$('.sub-tab').forEach(b => b.addEventListener('click', () => setSub(b.dataset.sub)));
 
 function seloAmbiente(el, ambiente) {
   const a = AMB[ambiente] || AMB.producao;
@@ -1891,10 +1913,10 @@ async function enviaMedicao(ev) {
       });
       m.fecha();
       alert(`${AMB[amb].label}: ${j.medicoes} medição(ões), ${j.tabelas} linha(s) (${j.formato}).`);
-      // Se o arquivo era de outra base, vai para a aba dela — deixar a aba
-      // "Produção" mostrando dado de teste é o tipo de confusão que custa caro
+      // Se o arquivo era de outra base, vai para a sub-aba dela — deixar
+      // "Produção" mostrando dado de teste é a confusão que custa caro
       cad.customer = null;
-      setTab(amb === 'teste' ? 'cad_teste' : 'cad_prod');
+      setSub(amb === 'teste' ? 'cad_teste' : 'cad_prod');
     } catch (e) {
       m.ocupado(false, 'Importar');
       m.erro(e.message);

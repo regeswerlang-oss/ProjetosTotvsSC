@@ -13,17 +13,20 @@ coluna nas tabelas, não como filtro de tela:
 - `monitcad_projetos.ultima_medicao` só é atualizada por upload de **produção** —
   o marco do projeto é a base real.
 
-## Quatro abas, dois painéis
+## Uma aba no topo, quatro sub-abas dentro
 
-A barra ganhou quatro entradas, com o nome em duas linhas para caber:
+A barra de cima continua enxuta — `… ┊ GAPs | Cadastros | Transição`. As quatro
+combinações vivem **dentro** de Cadastros, numa segunda linha de abas:
 
-`Resumo | Cronograma | Por Módulo | Por Etapa ┊ GAPs | Cadastros·Produção |
-Cadastros·Testes | Movimentos·Produção | Movimentos·Testes | Transição`
+`Cadastros·Produção | Cadastros·Testes | Movimentos·Produção | Movimentos·Testes`
 
-Mas existem só **dois painéis** (`#tab-cadastros` e `#tab-movimentos`): o mapa
-`ABAS` diz qual painel cada aba usa e com qual ambiente. Duplicar o DOM só para
-trocar uma palavra na query seria o dobro de manutenção para o mesmo resultado.
-A chave de cache de cada painel é o par **cliente + ambiente**.
+E existem só **dois sub-painéis** (`#sub-cadastros` e `#sub-movimentos`): o mapa
+`SUBABAS` diz qual painel cada sub-aba usa e com qual ambiente. Duplicar o DOM só
+para trocar uma palavra na query seria o dobro de manutenção para o mesmo
+resultado. A chave de cache de cada painel é o par **cliente + ambiente**.
+
+`state.sub` guarda a sub-aba, então voltar para Cadastros devolve você para onde
+estava.
 
 Um selo colorido ao lado do nome do cliente diz em qual base você está —
 verde para produção, âmbar para teste.
@@ -35,8 +38,8 @@ aba aberta pré-selecionada. Não é confirmação decorativa: subir um CSV de t
 cima da série de produção contamina o acompanhamento do projeto e não há como
 saber depois qual linha veio de onde.
 
-Se o arquivo for de uma base diferente da aba aberta, a tela **muda para a aba
-correspondente** depois de importar — deixar a aba "Produção" exibindo dado de
+Se o arquivo for de uma base diferente da sub-aba aberta, a tela **muda para a
+sub-aba correspondente** depois de importar — deixar a aba "Produção" exibindo dado de
 teste é exatamente a confusão que o modal existe para evitar.
 
 ## Botão "🗄 Script SQL"
@@ -56,6 +59,23 @@ um conjunto núcleo embutido (42 tabelas de cadastro, 16 de movimento).
 (`C5_EMISSAO`, `F2_EMISSAO`…), usada no `BETWEEN` do período. Tabelas sem coluna
 de data (SB2, SD4) contam o total e são listadas no cabeçalho do script para você
 não achar que o período foi aplicado nelas.
+
+## Armadilha: a UNIQUE antiga
+
+`monitcad_medicoes` tinha uma **constraint** `UNIQUE (customer, data_medicao)`
+criada antes do conceito de ambiente — com nome `..._key`, diferente do índice
+`..._uk` que a migração dropou. Ela sobreviveu e barrava a primeira importação de
+teste numa data que já existia em produção:
+
+```
+UniqueViolation: duplicate key value violates unique constraint
+"monitcad_medicoes_customer_data_medicao_key"
+```
+
+Removida em 12/08/2026. A unicidade válida é só
+`monitcad_medicoes_customer_data_amb_uk (customer, data_medicao, ambiente)`.
+**Ao mexer em unicidade, conferir constraints E índices** — `\d` da tabela mostra
+os dois, mas `drop index` não derruba uma constraint.
 
 ## Movimentos: o que existe e o que falta
 
