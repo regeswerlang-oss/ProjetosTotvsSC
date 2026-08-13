@@ -157,6 +157,7 @@
             <button data-tab="crono"    class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
             <button data-tab="modulos"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
             <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
+            <button data-tab="consumo"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
             <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
             <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
@@ -191,6 +192,31 @@
         <div id="tab-etapas" class="p-5 hidden">
           <div id="d-etapas-loading" class="text-slate-400 text-sm py-4">Carregando…</div>
           <div id="d-etapas"></div>
+        </div>
+
+        <!-- Aba Consumo — resumo por etapa contra a base líquida do projeto -->
+        <div id="tab-consumo" class="p-5 hidden">
+          <div class="mb-4 flex items-end gap-4 flex-wrap text-sm">
+            <label class="block">
+              <span class="text-xs text-slate-500">Horas do projeto</span>
+              <input id="cons-total" type="number" step="1"
+                     class="mt-1 w-32 px-3 py-1.5 border border-slate-300 rounded-md tabular-nums">
+            </label>
+            <span class="pb-2 text-slate-400 text-lg">−</span>
+            <label class="block">
+              <span class="text-xs text-slate-500">Personalizações</span>
+              <input id="cons-desconto" type="number" step="1" value="1006"
+                     class="mt-1 w-32 px-3 py-1.5 border border-slate-300 rounded-md tabular-nums">
+            </label>
+            <span class="pb-2 text-slate-400 text-lg">=</span>
+            <div class="pb-1">
+              <span class="text-xs text-slate-500 block">Base de comparação</span>
+              <span id="cons-base" class="text-lg font-totvs text-totvs-petroleo"></span>
+            </div>
+            <button id="cons-reset" class="ml-auto px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↺ Restaurar seleção</button>
+          </div>
+          <div id="cons-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
+          <div id="cons-conteudo"></div>
         </div>
 
         <!-- Aba GAPs — tickets com a tag GAP do cliente do projeto aberto -->
@@ -534,6 +560,8 @@ function cardProjeto(p) {
 async function abrirDetalhe(sel) {
   state.selected = sel;
   state.view = 'detalhe';
+  consumo.iniciado = false;             // outro projeto, outra base de horas
+  consumo.excluidos.clear();
   setTab('resumo');                     // todo projeto abre pelo Resumo
   $('#view-lista').classList.add('hidden');
   $('#view-detalhe').classList.remove('hidden');
@@ -569,6 +597,7 @@ async function abrirDetalhe(sel) {
     renderCronograma(crono);
     renderPorModulo(crono);
     renderPorEtapa(crono);
+    if (state.tab === 'consumo') renderConsumo();   // já estava na aba quando chegou
     $('#d-crono-loading').classList.add('hidden');
     $('#d-modulos-loading').classList.add('hidden');
     $('#d-etapas-loading').classList.add('hidden');
@@ -1334,7 +1363,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'gaps', 'cadastros', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'cadastros', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -1361,6 +1390,7 @@ function setTab(nome) {
   // Expandir/Recolher só faz sentido nas abas com árvore
   $('#tab-acoes').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(nome));
   // Carga preguiçosa: todas seguem o cliente do projeto aberto
+  if (nome === 'consumo') renderConsumo();
   if (nome === 'gaps') initGaps();
   if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
   if (nome === 'transicao') initTransicao();
@@ -1383,6 +1413,179 @@ function seloAmbiente(el, ambiente) {
   el.textContent = a.label;
   el.className = `px-2 py-0.5 rounded-full text-xs font-semibold ${a.cls}`;
 }
+
+// ============================================================================
+//  ABA CONSUMO — resumo por etapa contra a base líquida do projeto
+//  PROTÓTIPO (12/08/2026) — desenho a validar com o usuário.
+// ============================================================================
+// Grupos que NÃO entram nem aparecem: são esforço de gestão, não de entrega,
+// e distorceriam o consumo por etapa.
+const CONSUMO_FORA = ['monitoramento e controle', 'encerramento'];
+
+const consumo = { desconto: 1006, excluidos: new Set(), iniciado: false };
+
+const chaveAtiv = (it) =>
+  `${it.subReal}|${it.modulo}|${(it.atividade?.descricao || '').trim()}`;
+
+function foraDoConsumo(it) {
+  const alvo = semAcento(`${it.fase || ''} ${it.etapa || ''} ${it.subReal || ''}`);
+  return CONSUMO_FORA.some(g => alvo.includes(g));
+}
+
+function renderConsumo() {
+  const box = $('#cons-conteudo');
+  if (!state.cronograma) {
+    box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando cronograma…</div>';
+    return;
+  }
+  // A base parte das Horas Previstas do projeto; o usuário pode ajustar as duas
+  if (!consumo.iniciado) {
+    consumo.iniciado = true;
+    $('#cons-total').value = Math.round(state.projHorasPrevistas || 0);
+  }
+
+  const itens = coletaAtividades(state.cronograma).filter(it => !foraDoConsumo(it));
+  const total = Number($('#cons-total').value || 0);
+  const desconto = Number($('#cons-desconto').value || 0);
+  const base = Math.max(0, total - desconto);
+  $('#cons-base').textContent = `${fmtH(base)} h`;
+
+  // Agrupa por etapa (sub-etapa real do MIT), na ordem natural do método
+  const porEtapa = {};
+  itens.forEach(it => (porEtapa[it.subReal] = porEtapa[it.subReal] || []).push(it));
+  const linhas = Object.entries(porEtapa)
+    .map(([etapa, lista]) => {
+      const dentro = lista.filter(it => !consumo.excluidos.has(chaveAtiv(it)));
+      return { etapa, lista, dentro, agg: agrega(dentro), aggTudo: agrega(lista) };
+    })
+    .sort((a, b) => ordemEtapa(a.etapa) - ordemEtapa(b.etapa) || b.aggTudo.estimadas - a.aggTudo.estimadas);
+
+  const somaExec = linhas.reduce((a, l) => a + l.agg.executadas, 0);
+  const somaEst = linhas.reduce((a, l) => a + l.agg.estimadas, 0);
+  const nExcl = consumo.excluidos.size;
+
+  const kpi = (rot, val, sub, cls) => `
+    <div class="rounded-lg p-4 ${cls}"><p class="text-xs opacity-80">${rot}</p>
+      <p class="text-2xl font-totvs mt-1">${val}</p><p class="text-xs opacity-80 mt-0.5">${sub}</p></div>`;
+  $('#cons-kpis').innerHTML =
+    kpi('Base de comparação', fmtH(base), `${fmtH(total)} − ${fmtH(desconto)} de personalizações`, 'bg-totvs-petroleo text-white') +
+    kpi('Realizado nas etapas', fmtH(somaExec), base > 0 ? `${(100 * somaExec / base).toFixed(1)}% da base` : '—', 'bg-totvs-blue text-totvs-petroleo') +
+    kpi('Estimado nas etapas', fmtH(somaEst), base > 0 ? `${(100 * somaEst / base).toFixed(1)}% da base` : '—', 'bg-totvs-purple text-white') +
+    kpi('Saldo da base', fmtH(base - somaExec), `${linhas.length} etapa(s)${nExcl ? ` · ${nExcl} item(ns) fora` : ''}`, 'bg-white border border-slate-200 text-totvs-petroleo');
+
+  const barra = (pct, cor) => `
+    <div class="bar-track"><div class="bar-fill ${cor}" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div></div>`;
+
+  const linhaEtapa = (l) => {
+    const pctBase = base > 0 ? (100 * l.agg.executadas / base) : 0;
+    const pctExec = l.agg.estimadas > 0 ? (100 * l.agg.executadas / l.agg.estimadas) : 0;
+    const especifico = semAcento(l.etapa).includes('especifico');
+    const fora = l.lista.length - l.dentro.length;
+    return `
+      <tr class="border-t border-slate-100 ${especifico ? 'cursor-pointer hover:bg-slate-50' : ''}"
+          ${especifico ? 'data-abre-especificos' : ''}>
+        <td class="py-2.5 pr-3 font-medium">
+          ${especifico ? '<span class="text-slate-400 mr-1">▸</span>' : ''}${escapeHtml(l.etapa)}
+          ${fora ? `<span class="ml-2 text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">${fora} fora</span>` : ''}
+        </td>
+        <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(l.agg.estimadas)}</td>
+        <td class="py-2.5 pr-3 text-right tabular-nums font-medium">${fmtH(l.agg.executadas)}</td>
+        <td class="py-2.5 pr-3 text-right tabular-nums text-slate-500">${fmtH(l.agg.planejadas)}</td>
+        <td class="py-2.5 pr-3 text-right tabular-nums">${pctExec.toFixed(0)}%</td>
+        <td class="py-2.5 pr-3 w-48">${barra(pctBase, 'fill-exec')}</td>
+        <td class="py-2.5 text-right tabular-nums font-semibold text-totvs-petroleo">${pctBase.toFixed(1)}%</td>
+      </tr>`;
+  };
+
+  // Específicos: cada atividade com caixa para entrar ou não no cálculo
+  const especificos = linhas.find(l => semAcento(l.etapa).includes('especifico'));
+  const listaEsp = especificos ? especificos.lista.slice()
+    .sort((a, b) => (b.atividade.horas_previstas || 0) - (a.atividade.horas_previstas || 0)) : [];
+
+  box.innerHTML = `
+    <div class="bg-white rounded-lg border border-slate-200 p-5 overflow-x-auto">
+      <div class="flex items-baseline justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-700">Consumo por etapa</h3>
+        <p class="text-xs text-slate-400">Monitoramento e Controle e Encerramento ficam fora do cálculo e da tela.</p>
+      </div>
+      <table class="w-full text-sm">
+        <thead><tr class="text-xs text-slate-500 text-left border-b border-slate-200">
+          <th class="pb-2 pr-3">Etapa</th>
+          <th class="pb-2 pr-3 text-right">Estimadas</th>
+          <th class="pb-2 pr-3 text-right">Realizadas</th>
+          <th class="pb-2 pr-3 text-right">A realizar</th>
+          <th class="pb-2 pr-3 text-right">% da etapa</th>
+          <th class="pb-2 pr-3">Consumo da base</th>
+          <th class="pb-2 text-right">% da base</th>
+        </tr></thead>
+        <tbody>${linhas.map(linhaEtapa).join('')}</tbody>
+        <tfoot class="border-t-2 border-slate-300 font-semibold bg-slate-50">
+          <tr>
+            <td class="py-2.5 pr-3">Total das etapas</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(somaEst)}</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(somaExec)}</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(linhas.reduce((a, l) => a + l.agg.planejadas, 0))}</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${somaEst > 0 ? (100 * somaExec / somaEst).toFixed(0) : 0}%</td>
+            <td class="py-2.5 pr-3">${barra(base > 0 ? 100 * somaExec / base : 0, 'fill-exec')}</td>
+            <td class="py-2.5 text-right tabular-nums">${base > 0 ? (100 * somaExec / base).toFixed(1) : '0,0'}%</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+
+    ${listaEsp.length ? `
+    <div id="cons-especificos" class="bg-white rounded-lg border border-slate-200 p-5 mt-4">
+      <div class="flex items-center justify-between mb-3">
+        <h3 class="text-sm font-semibold text-slate-700">Específicos · o que entra no cálculo</h3>
+        <div class="flex gap-2 text-xs">
+          <button data-esp="todos" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Marcar todos</button>
+          <button data-esp="nenhum" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Desmarcar todos</button>
+        </div>
+      </div>
+      <table class="w-full text-sm">
+        <thead><tr class="text-xs text-slate-500 text-left border-b border-slate-200">
+          <th class="pb-2 pr-3 w-10"></th><th class="pb-2 pr-3">Atividade</th>
+          <th class="pb-2 pr-3">Módulo</th>
+          <th class="pb-2 pr-3 text-right">Estimadas</th>
+          <th class="pb-2 text-right">Realizadas</th>
+        </tr></thead>
+        <tbody>${listaEsp.map(it => {
+          const k = chaveAtiv(it);
+          const on = !consumo.excluidos.has(k);
+          return `<tr class="border-t border-slate-100 ${on ? '' : 'opacity-50'}">
+            <td class="py-2 pr-3"><input type="checkbox" data-ativ="${escapeHtml(k)}" ${on ? 'checked' : ''} class="accent-totvs-blue"></td>
+            <td class="py-2 pr-3">${escapeHtml(it.atividade.descricao || '—')}</td>
+            <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(it.modulo || '—')}</td>
+            <td class="py-2 pr-3 text-right tabular-nums">${fmtH(it.atividade.horas_previstas || 0)}</td>
+            <td class="py-2 text-right tabular-nums">${fmtH(it.atividade.horas_realizadas || 0)}</td>
+          </tr>`;
+        }).join('')}</tbody>
+      </table>
+    </div>` : ''}`;
+
+  // Marcar/desmarcar recalcula tudo — a base não muda, mas as etapas sim
+  box.querySelectorAll('[data-ativ]').forEach(c => c.addEventListener('change', () => {
+    const k = c.dataset.ativ;
+    if (c.checked) consumo.excluidos.delete(k); else consumo.excluidos.add(k);
+    renderConsumo();
+  }));
+  box.querySelectorAll('[data-esp]').forEach(b => b.addEventListener('click', () => {
+    if (b.dataset.esp === 'todos') listaEsp.forEach(it => consumo.excluidos.delete(chaveAtiv(it)));
+    else listaEsp.forEach(it => consumo.excluidos.add(chaveAtiv(it)));
+    renderConsumo();
+  }));
+  const alvo = box.querySelector('#cons-especificos');
+  box.querySelectorAll('[data-abre-especificos]').forEach(tr =>
+    tr.addEventListener('click', () => alvo?.scrollIntoView({ behavior: 'smooth', block: 'start' })));
+}
+
+['cons-total', 'cons-desconto'].forEach(id =>
+  $(`#${id}`).addEventListener('input', renderConsumo));
+$('#cons-reset').addEventListener('click', () => {
+  consumo.excluidos.clear();
+  $('#cons-desconto').value = 1006;
+  renderConsumo();
+});
 
 // ============================================================================
 //  ABA GAPs — tickets com a tag GAP do cliente do projeto aberto
