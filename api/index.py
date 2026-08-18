@@ -791,6 +791,80 @@ def api_monitcad_evolucao(customer):
                   "tabelas": q(SQL_EVO_MATRIZ, (customer, amb))})
 
 
+SCRIPT_TIPOS = ("cadastros", "movimentos")
+
+
+def _tipo_script():
+    t = (request.args.get("tipo") or "cadastros").strip().lower()
+    return t if t in SCRIPT_TIPOS else "cadastros"
+
+
+@app.get("/api/monitcad/<customer>/script")
+def api_monitcad_script(customer):
+    """Script SQL de contagem customizado do cliente.
+
+    Um por tipo (cadastros/movimentos) e válido para as DUAS bases: o escopo de
+    tabelas é o mesmo em produção e em teste, o que muda é onde rodar — e disso
+    cuida o cabeçalho, que o front reescreve na hora de exibir."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    tipo = _tipo_script()
+    row = q("""select customer, tipo, sql, dialeto, sufixo, updated_by, updated_at
+                 from cockpit.monitcad_scripts
+                where customer=%s and tipo=%s""", (customer, tipo), one=True)
+    return _json({"ok": True, "customer": customer, "tipo": tipo, "script": row})
+
+
+@app.post("/api/monitcad/<customer>/script")
+def api_monitcad_script_salvar(customer):
+    """Salva o script colado. Quem enxerga o cliente pode salvar — mesma régua
+    da importação de medição —, e fica registrado quem foi."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de salvar o script.")
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+
+    body = request.get_json(silent=True) or {}
+    sql = (body.get("sql") or "").strip()
+    if len(sql) < 20:
+        return _err(400, "Cole o script antes de salvar.")
+    # O script nunca é executado aqui — vai para o console do Protheus. A única
+    # checagem é que exista um SELECT, o que também deixa passar CTE (WITH ...).
+    if not re.search(r"\bselect\b", sql, re.I):
+        return _err(400, "O script precisa conter um SELECT.")
+
+    tipo = _tipo_script()
+    execute("""insert into cockpit.monitcad_scripts
+                 (customer, tipo, sql, dialeto, sufixo, updated_by, updated_at)
+               values (%s,%s,%s,%s,%s,%s, now())
+               on conflict (customer, tipo) do update set
+                 sql=excluded.sql, dialeto=excluded.dialeto, sufixo=excluded.sufixo,
+                 updated_by=excluded.updated_by, updated_at=now()""",
+            (customer, tipo, sql, (body.get("dialeto") or "")[:20] or None,
+             (body.get("sufixo") or "")[:10] or None, current_user()))
+    return _json({"ok": True, "customer": customer, "tipo": tipo, "bytes": len(sql)})
+
+
+@app.delete("/api/monitcad/<customer>/script")
+def api_monitcad_script_remover(customer):
+    """Apaga o script salvo — o modal volta a abrir com o gerado."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de remover o script.")
+    execute("delete from cockpit.monitcad_scripts where customer=%s and tipo=%s",
+            (customer, _tipo_script()))
+    return _json({"ok": True, "customer": customer, "tipo": _tipo_script(), "removido": True})
+
+
 @app.post("/api/monitcad/<customer>/upload")
 def api_monitcad_upload(customer):
     """Carga manual enquanto o job do Protheus não roda. Aceita DOIS formatos:

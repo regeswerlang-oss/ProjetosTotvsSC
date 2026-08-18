@@ -63,3 +63,55 @@ cai, uma medição zerada) e outra de 8 medições para o corte de colunas. Conf
 KPIs, série semanal, ranking, filtros, foco preservado na busca e ida e volta
 entre as duas visões — mais o console limpo. As duas SQLs foram rodadas contra o
 Supabase real antes de virarem código.
+
+---
+
+# Script SQL colável e salvo por cliente
+
+O modal "Script SQL" só sabia mostrar o script gerado, `readonly`. Na prática o
+script real de cada cliente é ajustado à mão (a Olim usa uma CTE com `LISTA` +
+`ESTIMATIVA` e `DBMS_XMLGEN`, que o gerador não tem como inventar) e vivia fora
+do app, num arquivo solto. Agora o textarea é editável e o script pode ser
+gravado.
+
+**Escopo: cliente + tipo, valendo para as duas bases.** O escopo de tabelas de
+produção e de teste é o mesmo; o que muda é onde rodar, e disso cuida o
+cabeçalho, reescrito na hora de exibir. Um script para `cadastros`, outro para
+`movimentos`.
+
+**Permissão: quem enxerga o cliente pode salvar** — mesma régua da importação de
+medição, com `updated_by` e `updated_at` mostrados no modal. Simulação
+("ver como") é bloqueada, senão a autoria fica mentindo.
+
+**Abre sempre no gerado**, com "Carregar salvo" a um clique. Assim o script
+automático continua acompanhando as tabelas da última medição, e o salvo é uma
+escolha explícita.
+
+## O detalhe que decide se isso é usável
+
+Sufixo e banco regeneram o script **só enquanto ele for o automático**. Depois
+que o usuário cola o dele, um `input` no campo sufixo sobrescreveria tudo — era
+o comportamento antigo, aceitável quando o texto era descartável. Um flag
+`manual` corta isso, e uma linha âmbar explica por que os campos pararam de
+reagir. "Gerar padrão" e "Carregar salvo" pedem confirmação antes de descartar
+texto editado.
+
+## Backend
+
+`cockpit.monitcad_scripts (customer, tipo)` — `sql`, mais `dialeto` e `sufixo`
+como metadado para "Carregar salvo" restaurar os dois campos junto.
+
+```
+GET    /api/monitcad/<customer>/script?tipo=cadastros  → {script: {...} | null}
+POST   /api/monitcad/<customer>/script?tipo=cadastros  → {sql, dialeto, sufixo}
+DELETE /api/monitcad/<customer>/script?tipo=cadastros
+```
+
+O script **nunca é executado aqui** — ele vai para o console do Protheus. A
+única validação é conter um `SELECT` (o que deixa passar CTE começando em
+`WITH`), porque bloquear por palavra-chave só geraria falso positivo em
+comentário.
+
+Testado com Playwright: 25 verificações cobrindo abrir, regenerar, colar,
+salvar (com o corpo do POST conferido), recarregar, remover, reabrir o modal e o
+mesmo fluxo em Movimentos.

@@ -399,6 +399,15 @@ function fmtH(v) {
   if (v === null || v === undefined || isNaN(v)) return '—';
   return Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
 }
+function fmtDataHora(v) {
+  // timestamptz do Postgres chega como "2026-08-18 14:30:00+00" — o espaço no
+  // meio e o fuso de dois dígitos derrubam o parser (vira Invalid Date até no
+  // Chrome). Normaliza os dois antes de instanciar a Date.
+  if (!v) return '—';
+  const iso = String(v).trim().replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00');
+  const d = new Date(iso);
+  return isNaN(d) ? String(v) : d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' });
+}
 function fmtData(s) {
   if (!s) return '—';
   // dd/mm/aaaa já vem formatado; "YYYY-MM-DD" vira pt-BR
@@ -2984,6 +2993,7 @@ ORDER BY 1, 2;
 
 function abreModalSQL(tipo = 'cadastros') {
   const movimentos = tipo === 'movimentos';
+  const cli = state.selected?.cli || null;
   const hoje = new Date();
   const iso = (d) => d.toISOString().slice(0, 10);
   const mesIni = iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
@@ -3003,24 +3013,92 @@ function abreModalSQL(tipo = 'cadastros') {
      <p class="text-xs text-slate-500">Rode na
        <b>${AMB[movimentos ? mov.ambiente : cad.ambiente].label}</b> — é a base da aba aberta.
        ${movimentos ? 'O período filtra pela data do documento.' : 'Exporte em CSV e suba em "⬆ Subir medição".'}</p>
-     <textarea id="sql-txt" rows="14" readonly
-       class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs bg-slate-50"></textarea>
-     <div class="flex gap-2">
+     <div id="sql-salvo" class="text-xs text-slate-500"></div>
+     <textarea id="sql-txt" rows="16" spellcheck="false"
+       class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"></textarea>
+     <p id="sql-aviso" class="text-xs text-amber-700 hidden">Script editado à mão — mudar sufixo
+       ou banco não recria mais o texto. Use "Gerar padrão" para voltar ao automático.</p>
+     <div class="flex gap-2 flex-wrap items-center">
        <button id="sql-copiar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">Copiar</button>
        <button id="sql-baixar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">Baixar .sql</button>
-       <span id="sql-msg" class="text-xs text-emerald-700 self-center"></span>
-     </div>`,
-    'Fechar');
+       <span class="flex-1"></span>
+       <button id="sql-padrao" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">Gerar padrão</button>
+       <button id="sql-carregar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm" disabled>Carregar salvo</button>
+       <button id="sql-remover" class="px-3 py-1.5 rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50 text-sm hidden">Remover salvo</button>
+     </div>
+     <p id="sql-msg" class="text-xs text-emerald-700"></p>`,
+    'Salvar script');
+  // Editar SQL em caixa estreita é sofrimento — este modal nasce largo
+  m.el.firstElementChild.classList.replace('max-w-lg', 'max-w-3xl');
 
+  let manual = false;      // o texto na tela foi digitado/colado pelo usuário
+  let salvo = null;        // o que está gravado no banco para este cliente/tipo
+
+  const marcaManual = (v) => {
+    manual = v;
+    m.campo('sql-aviso').classList.toggle('hidden', !v);
+  };
   const gera = () => {
     m.campo('sql-txt').value = montaScriptSQL(
       tipo, m.campo('sql-sufixo').value.trim() || '010', m.campo('sql-dialeto').value,
       movimentos ? m.campo('sql-ini').value : '', movimentos ? m.campo('sql-fim').value : '');
+    marcaManual(false);
   };
   gera();
+
+  // Sufixo e banco só recriam o script enquanto ele for o gerado: depois que o
+  // usuário colou o dele, sobrescrever a cada tecla seria perder o trabalho
   ['sql-sufixo', 'sql-dialeto', 'sql-ini', 'sql-fim'].forEach(id =>
-    m.campo(id)?.addEventListener('input', gera));
-  m.aoConfirmar(m.fecha);
+    m.campo(id)?.addEventListener('input', () => { if (!manual) gera(); }));
+  m.campo('sql-txt').addEventListener('input', () => marcaManual(true));
+
+  const pintaSalvo = () => {
+    const box = m.campo('sql-salvo');
+    m.campo('sql-carregar').disabled = !salvo;
+    m.campo('sql-remover').classList.toggle('hidden', !salvo);
+    if (!salvo) {
+      box.innerHTML = cli
+        ? 'Nenhum script salvo para este cliente. Cole o seu e clique em <b>Salvar script</b> — ' +
+          'ele vale para as duas bases (produção e testes).'
+        : 'Abra um projeto para poder salvar o script.';
+      return;
+    }
+    box.innerHTML = `<span class="text-emerald-700 font-medium">Script salvo</span> por
+      ${escapeHtml(salvo.updated_by || '—')} em ${fmtDataHora(salvo.updated_at)}
+      ${salvo.sufixo ? `· sufixo ${escapeHtml(salvo.sufixo)}` : ''} — use "Carregar salvo".`;
+  };
+  pintaSalvo();
+
+  if (cli) {
+    api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`)
+      .then(j => { salvo = j.script || null; pintaSalvo(); })
+      .catch(() => { m.campo('sql-salvo').textContent = 'Não foi possível checar se há script salvo.'; });
+  }
+
+  m.campo('sql-padrao').addEventListener('click', () => {
+    if (manual && !confirm('Recriar o script automático descarta o texto que está na tela. Continuar?')) return;
+    gera();
+    m.campo('sql-msg').textContent = 'Script padrão recriado (nada foi salvo ainda).';
+  });
+
+  m.campo('sql-carregar').addEventListener('click', () => {
+    if (!salvo) return;
+    if (manual && !confirm('Carregar o script salvo descarta o texto que está na tela. Continuar?')) return;
+    m.campo('sql-txt').value = salvo.sql;
+    if (salvo.sufixo) m.campo('sql-sufixo').value = salvo.sufixo;
+    if (salvo.dialeto) m.campo('sql-dialeto').value = salvo.dialeto;
+    marcaManual(true);          // é o script do usuário: não pode ser sobrescrito
+    m.campo('sql-msg').textContent = 'Script salvo carregado.';
+  });
+
+  m.campo('sql-remover').addEventListener('click', async () => {
+    if (!confirm('Remover o script salvo deste cliente? O modal volta a abrir com o gerado.')) return;
+    try {
+      await api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`, { method: 'DELETE' });
+      salvo = null; pintaSalvo();
+      m.campo('sql-msg').textContent = 'Script salvo removido.';
+    } catch (e) { m.erro(e.message); }
+  });
 
   m.campo('sql-copiar').addEventListener('click', async () => {
     const txt = m.campo('sql-txt').value;
@@ -3028,12 +3106,33 @@ function abreModalSQL(tipo = 'cadastros') {
     catch { m.campo('sql-txt').select(); document.execCommand('copy'); }
     m.campo('sql-msg').textContent = 'Copiado.';
   });
+
   m.campo('sql-baixar').addEventListener('click', () => {
     const url = URL.createObjectURL(new Blob([m.campo('sql-txt').value], { type: 'text/plain;charset=utf-8' }));
     const a = Object.assign(document.createElement('a'), {
-      href: url, download: `monitcad-${(cad.customer || 'cliente').toLowerCase()}.sql` });
+      href: url, download: `monit${movimentos ? 'mov' : 'cad'}-${(cli || 'cliente').toLowerCase()}.sql` });
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
+  });
+
+  // O botão principal salva; sair é pelo Cancelar / X. Salvar não fecha o modal:
+  // quase sempre o passo seguinte é copiar o script que acabou de ser gravado.
+  m.aoConfirmar(async () => {
+    m.erro('');
+    if (!cli) { m.erro('Abra um projeto antes de salvar o script.'); return; }
+    m.ocupado(true, 'Salvando…');
+    try {
+      await api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql: m.campo('sql-txt').value,
+                               dialeto: m.campo('sql-dialeto').value,
+                               sufixo: m.campo('sql-sufixo').value.trim() }),
+      });
+      const j = await api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`);
+      salvo = j.script || null; pintaSalvo();
+      m.campo('sql-msg').textContent = 'Script salvo para este cliente — vale para produção e testes.';
+    } catch (e) { m.erro(e.message); }
+    m.ocupado(false, 'Salvar script');
   });
 }
 
