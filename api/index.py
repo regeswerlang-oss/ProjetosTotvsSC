@@ -587,14 +587,25 @@ def _dt_hora(v):
 
 
 # Nomes de coluna aceitos no CSV (sem acento, maiúsculo, sem espaço/underscore)
+# QTD_REAL / QTD_ESTIMADA estão aqui por um motivo concreto: o script SQL que a
+# própria aba gera usa esses nomes, e em 18/08/2026 uma medição da Olim entrou
+# com as 112 tabelas e realizado = 0 porque a coluna não era reconhecida. Ao
+# acrescentar um alias novo, lembre que coluna ignorada vira ZERO silencioso.
 CSV_COLS = {
     "MODULO": "modulo", "TABELA": "tabela", "DESCRICAO": "descricao",
-    "QTDE": "realizado", "QUANTIDADE": "realizado", "REALIZADO": "realizado",
-    "REGISTROS": "realizado", "ESTIMATIVA": "estimativa", "META": "estimativa",
+    "QTDE": "realizado", "QTD": "realizado", "QUANTIDADE": "realizado",
+    "REALIZADO": "realizado", "REGISTROS": "realizado", "CONTAGEM": "realizado",
+    "QTDREAL": "realizado", "QTDATUAL": "realizado", "QTDREGISTROS": "realizado",
+    "ESTIMATIVA": "estimativa", "META": "estimativa", "ESTIMADA": "estimativa",
+    "PREVISTO": "estimativa", "QTDESTIMADA": "estimativa",
+    "QTDESTIMATIVA": "estimativa", "QTDPREVISTA": "estimativa",
     "FILTRO": "filtro", "ETAPA": "etapa", "RESPONSAVEL": "responsavel",
     "STATUS": "status", "DATAPREV": "data_prev", "PREVISAO": "data_prev",
     "DTLEITURA": "_dt", "DATA": "_dt", "DATAMEDICAO": "_dt", "SEMANA": "_semana",
 }
+
+# Só para a mensagem de erro — os nomes na forma em que o usuário escreve
+QTD_ACEITOS = "QTDE, QTD, QTD_REAL, QUANTIDADE, REALIZADO, REGISTROS"
 
 
 def _norm_col(s):
@@ -617,6 +628,12 @@ def _csv_para_body(texto):
     if "tabela" not in cabec:
         raise ValueError("CSV sem a coluna TABELA. Esperado: MODULO, TABELA, "
                          "DESCRICAO, DT_LEITURA, SEMANA, QTDE.")
+    # Sem coluna de quantidade a medição entraria inteira zerada e pareceria uma
+    # base vazia. Falhar aqui é MUITO mais barato do que descobrir depois.
+    if "realizado" not in cabec:
+        raise ValueError(f"CSV sem coluna de quantidade — aceito: {QTD_ACEITOS}. "
+                         "Cabeçalho recebido: "
+                         + ", ".join(c.strip() for c in linhas[0] if c.strip()))
 
     por_data = {}
     for linha in linhas[1:]:
@@ -707,6 +724,71 @@ def api_monitcad(customer):
                   "vazio": False, "ultima_medicao": ult["data_medicao"],
                   "total_medicoes": len(meds), "tem_estimativa": tem_est,
                   "tabelas": tabelas, "modulos": modulos, "serie": serie})
+
+
+SQL_EVO_MEDICOES = """
+with med as (
+  select id, data_medicao, hora_medicao,
+         to_char(data_medicao,'IYYY')||'-W'||lpad(to_char(data_medicao,'IW'),2,'0') as semana_iso,
+         row_number() over (partition by to_char(data_medicao,'IYYY-IW')
+                            order by data_medicao desc, id desc) = 1 as fim_semana
+    from cockpit.monitcad_medicoes
+   where customer = %s and ambiente = %s
+)
+select m.data_medicao, m.semana_iso, m.fim_semana, m.hora_medicao,
+       count(t.*)                              as tabelas,
+       count(*) filter (where t.realizado > 0) as com_carga,
+       sum(t.realizado)                        as realizado,
+       sum(t.estimativa)                       as estimativa
+  from med m
+  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
+ group by 1, 2, 3, 4
+ order by 1
+"""
+
+SQL_EVO_MATRIZ = """
+with med as (
+  select id, data_medicao
+    from cockpit.monitcad_medicoes
+   where customer = %s and ambiente = %s
+), ult as (
+  select id from med order by data_medicao desc, id desc limit 1
+)
+select t.tabela,
+       max(t.descricao) as descricao,
+       max(t.modulo)    as modulo,
+       max(t.estimativa) filter (where t.medicao_id = (select id from ult)) as estimativa,
+       jsonb_object_agg(to_char(m.data_medicao,'YYYY-MM-DD'), t.realizado)  as serie
+  from med m
+  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
+ group by t.tabela
+ order by max(t.modulo) nulls last, t.tabela
+"""
+
+
+@app.get("/api/monitcad/<customer>/evolucao")
+def api_monitcad_evolucao(customer):
+    """Evolução dos cadastros entre medições: eixo de medições + matriz
+    tabela x medição. Ranking e consolidação semanal são derivados no front a
+    partir daqui — o banco devolve o retrato bruto, uma vez só.
+
+    A estimativa vem SÓ da última medição: é o retrato vigente. Pegar o max()
+    de todas faria uma estimativa antiga, já corrigida para baixo, continuar
+    valendo. E `serie` só tem chave nas datas em que a tabela foi medida — a
+    ausência da chave significa fora do escopo naquela data, que é diferente de
+    medida com zero."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    amb = _ambiente()
+    medicoes = q(SQL_EVO_MEDICOES, (customer, amb))
+    if not medicoes:
+        return _json({"ok": True, "customer": customer, "ambiente": amb,
+                      "vazio": True, "medicoes": [], "tabelas": []})
+    return _json({"ok": True, "customer": customer, "ambiente": amb,
+                  "vazio": False, "medicoes": medicoes,
+                  "tabelas": q(SQL_EVO_MATRIZ, (customer, amb))})
 
 
 @app.post("/api/monitcad/<customer>/upload")
