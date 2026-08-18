@@ -1074,11 +1074,15 @@ SQL_GAPS = """
          t.status_temporario, t.etapa_gap, t.classificacao_gap, t.produto,
          t.competencia, t.projeto, t.prioridade, t.time_estimate, t.aging_dias,
          t.due_date, t.atrasado, t.bloqueado, t.user_assigned,
-         u.nome as responsavel_nome, t.assigned_customer,
+         u.nome as responsavel_nome, t.assigned_customer, t.observador,
          t.ult_ocorr_texto, t.ult_ocorr_data, t.ult_ocorr_autor, t.updated_at,
          d.decisao, d.estimativa as decisao_estimativa, d.observacao as decisao_obs,
          d.decided_by, d.decided_at,
-         (a.uuid_ticket is not null) as tem_alinhamento
+         (a.uuid_ticket is not null) as tem_alinhamento,
+         coalesce((select array_agg(g2.raw_tag order by g2.raw_tag)
+                     from cockpit.ticket_tags g2
+                    where g2.uuid_ticket = t.uuid_ticket
+                      and g2.raw_tag <> 'GAP'), '{}') as tags
     from cockpit.tickets t
     join cockpit.ticket_tags g
       on g.uuid_ticket = t.uuid_ticket and g.raw_tag = 'GAP'
