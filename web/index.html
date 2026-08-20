@@ -1072,11 +1072,11 @@ function renderPorModulo(arvore) {
         <tfoot class="border-t-2 border-slate-300 font-semibold bg-slate-50">
           <tr>
             <td class="py-2.5 pr-3" colspan="3">Total geral</td>
-            <td class="py-2.5 pr-3 text-right font-mono">${fmtH(tot.estimadas)}</td>
-            <td class="py-2.5 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(tot.executadas)}</td>
-            <td class="py-2.5 pr-3 text-right font-mono text-totvs-purple">${fmtH(tot.planejadas)}</td>
-            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctExec)}</td>
-            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctTotal)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono tabular-nums">${fmtH(tot.estimadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono tabular-nums text-[#0a8f7a]">${fmtH(tot.executadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono tabular-nums text-totvs-purple">${fmtH(tot.planejadas)}</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtPct(tot.pctExec)}</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtPct(tot.pctTotal)}</td>
             <td class="py-2.5">${pctBar(tot.pctExec, tot.pctTotal)}</td>
           </tr>
         </tfoot>
@@ -1198,7 +1198,14 @@ function renderPorEtapa(arvore) {
       <span class="text-slate-500">${linhas.length} etapa(s), ${itens.length} atividade(s)</span>
     </div>
     <div class="overflow-x-auto -mx-5 px-5">
-      <table class="w-full text-sm">
+      <table class="w-full text-sm table-fixed min-w-[940px]">
+        <colgroup>
+          <col>
+          <col class="w-[86px]"><col class="w-[86px]">
+          <col class="w-[92px]"><col class="w-[96px]"><col class="w-[92px]">
+          <col class="w-[68px]"><col class="w-[68px]">
+          <col class="w-[132px]">
+        </colgroup>
         <thead class="text-xs text-slate-500 border-b border-slate-200">
           <tr>
             <th class="text-left  py-2 pr-3 font-medium">Etapa</th>
@@ -1209,7 +1216,7 @@ function renderPorEtapa(arvore) {
             <th class="text-right py-2 pr-3 font-medium">A Realizar</th>
             <th class="text-right py-2 pr-3 font-medium">% Exec</th>
             <th class="text-right py-2 pr-3 font-medium">% Total</th>
-            <th class="py-2 font-medium">Progresso</th>
+            <th class="text-left  py-2 font-medium">Progresso</th>
           </tr>
         </thead>
         <tbody>
@@ -1218,11 +1225,11 @@ function renderPorEtapa(arvore) {
         <tfoot class="border-t-2 border-slate-300 font-semibold bg-slate-50">
           <tr>
             <td class="py-2.5 pr-3" colspan="3">Total geral</td>
-            <td class="py-2.5 pr-3 text-right font-mono">${fmtH(tot.estimadas)}</td>
-            <td class="py-2.5 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(tot.executadas)}</td>
-            <td class="py-2.5 pr-3 text-right font-mono text-totvs-purple">${fmtH(tot.planejadas)}</td>
-            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctExec)}</td>
-            <td class="py-2.5 pr-3 text-right">${fmtPct(tot.pctTotal)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono tabular-nums">${fmtH(tot.estimadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono tabular-nums text-[#0a8f7a]">${fmtH(tot.executadas)}</td>
+            <td class="py-2.5 pr-3 text-right font-mono tabular-nums text-totvs-purple">${fmtH(tot.planejadas)}</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtPct(tot.pctExec)}</td>
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtPct(tot.pctTotal)}</td>
             <td class="py-2.5">${pctBar(tot.pctExec, tot.pctTotal)}</td>
           </tr>
         </tfoot>
@@ -1230,12 +1237,14 @@ function renderPorEtapa(arvore) {
     </div>
   `;
   // bind expansão
+  // As linhas-filhas agora são <tr> irmãs na MESMA tabela (uma por módulo/atividade),
+  // e não mais uma tabela aninhada — por isso o toggle percorre todas com querySelectorAll.
   $$('#d-etapas [data-etapa-row]').forEach(tr => {
     tr.addEventListener('click', () => {
       const k = tr.dataset.etapaRow;
-      const ch = document.querySelector(`[data-etapa-children="${CSS.escape(k)}"]`);
-      if (ch) ch.classList.toggle('hidden');
-      tr.querySelector('.chev').classList.toggle('rotate-90');
+      const abre = tr.querySelector('.chev').classList.toggle('rotate-90');
+      document.querySelectorAll(`[data-etapa-children="${CSS.escape(k)}"]`)
+        .forEach(ch => ch.classList.toggle('hidden', !abre));
     });
   });
 }
@@ -1249,52 +1258,57 @@ function rowEtapa({ etapa, lista, agg }) {
     .sort((a, b) => b.agg.estimadas - a.agg.estimadas);
 
   const key = etapa;
+  const kid = escapeAttr(key);
+
+  // Linha numérica no MESMO grid da tabela-pai. `ident` é o recuo em rem da 1ª coluna.
+  const linha = (rotulo, a, { ident, cls, barra }) => `
+    <tr data-etapa-children="${kid}" class="hidden border-b border-slate-100 ${cls.tr}">
+      <td class="py-1.5 pr-3 truncate ${cls.rot}" style="padding-left:${ident}rem" title="${escapeAttr(rotulo)}">${escapeHtml(rotulo)}</td>
+      <td class="py-1.5 pr-3 ${cls.data}">${fmtData(a.inicio)}</td>
+      <td class="py-1.5 pr-3 ${cls.data}">${fmtData(a.fim)}</td>
+      <td class="py-1.5 pr-3 text-right font-mono tabular-nums">${fmtH(a.estimadas)}</td>
+      <td class="py-1.5 pr-3 text-right font-mono tabular-nums text-[#0a8f7a]">${fmtH(a.executadas)}</td>
+      <td class="py-1.5 pr-3 text-right font-mono tabular-nums text-totvs-purple">${fmtH(a.planejadas)}</td>
+      <td class="py-1.5 pr-3 text-right tabular-nums">${fmtPct(a.pctExec)}</td>
+      <td class="py-1.5 pr-3 text-right tabular-nums">${fmtPct(a.pctTotal)}</td>
+      <td class="py-1.5">${barra ? pctBar(a.pctExec, a.pctTotal) : ''}</td>
+    </tr>`;
+
+  const filhas = modLinhas.map(({ mod, ls, agg: a }) => {
+    const modulo = linha(mod, a, {
+      ident: 1.75,
+      barra: true,
+      cls: { tr: 'bg-slate-50/60', rot: 'text-slate-700 font-medium', data: 'text-slate-500' },
+    });
+    // só detalha atividade quando o módulo tem mais de uma — senão seria a mesma linha repetida
+    const ativs = ls.length > 1 ? ls.map(it => linha('› ' + (it.atividade.descricao || ''), {
+      inicio: it.atividade.data_inicio,
+      fim: it.atividade.data_fim,
+      estimadas: Number(it.atividade.horas_previstas || 0),
+      executadas: Number(it.atividade.horas_realizadas || 0),
+      planejadas: aRealizar(it.atividade),
+      pctExec: it.atividade.horas_previstas > 0 ? (it.atividade.horas_realizadas / it.atividade.horas_previstas) * 100 : 0,
+      pctTotal: it.atividade.horas_previstas > 0 ? ((it.atividade.horas_realizadas + aRealizar(it.atividade)) / it.atividade.horas_previstas) * 100 : 0,
+    }, {
+      ident: 3.25,
+      barra: false,
+      cls: { tr: 'bg-slate-50/30', rot: 'text-slate-500 italic', data: 'text-slate-400' },
+    })).join('') : '';
+    return modulo + ativs;
+  }).join('');
+
   return `
-    <tr data-etapa-row="${escapeAttr(key)}" class="border-b border-slate-100 hover:bg-slate-50 cursor-pointer">
-      <td class="py-2 pr-3 font-medium text-slate-900"><span class="chev inline-block w-3 text-slate-400 transition-transform mr-1">▶</span>${escapeHtml(etapa)}</td>
+    <tr data-etapa-row="${kid}" class="border-b border-slate-100 hover:bg-slate-50 cursor-pointer">
+      <td class="py-2 pr-3 font-medium text-slate-900 truncate" title="${kid}"><span class="chev inline-block w-3 text-slate-400 transition-transform mr-1">▶</span>${escapeHtml(etapa)}</td>
       <td class="py-2 pr-3 text-slate-600">${fmtData(agg.inicio)}</td>
       <td class="py-2 pr-3 text-slate-600">${fmtData(agg.fim)}</td>
-      <td class="py-2 pr-3 text-right font-mono">${fmtH(agg.estimadas)}</td>
-      <td class="py-2 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(agg.executadas)}</td>
-      <td class="py-2 pr-3 text-right font-mono text-totvs-purple">${fmtH(agg.planejadas)}</td>
-      <td class="py-2 pr-3 text-right">${fmtPct(agg.pctExec)}</td>
-      <td class="py-2 pr-3 text-right">${fmtPct(agg.pctTotal)}</td>
+      <td class="py-2 pr-3 text-right font-mono tabular-nums">${fmtH(agg.estimadas)}</td>
+      <td class="py-2 pr-3 text-right font-mono tabular-nums text-[#0a8f7a]">${fmtH(agg.executadas)}</td>
+      <td class="py-2 pr-3 text-right font-mono tabular-nums text-totvs-purple">${fmtH(agg.planejadas)}</td>
+      <td class="py-2 pr-3 text-right tabular-nums">${fmtPct(agg.pctExec)}</td>
+      <td class="py-2 pr-3 text-right tabular-nums">${fmtPct(agg.pctTotal)}</td>
       <td class="py-2">${pctBar(agg.pctExec, agg.pctTotal)}</td>
-    </tr>
-    <tr data-etapa-children="${escapeAttr(key)}" class="hidden bg-slate-50/60">
-      <td colspan="9" class="px-3 py-2">
-        <table class="w-full text-xs">
-          <tbody>
-            ${modLinhas.map(({ mod, ls, agg: a }) => `
-              <tr class="border-b border-slate-100 last:border-0">
-                <td class="py-1.5 pr-3 text-slate-600 w-48 pl-6">${escapeHtml(mod)}</td>
-                <td class="py-1.5 pr-3 text-slate-500">${fmtData(a.inicio)}</td>
-                <td class="py-1.5 pr-3 text-slate-500">${fmtData(a.fim)}</td>
-                <td class="py-1.5 pr-3 text-right font-mono">${fmtH(a.estimadas)}</td>
-                <td class="py-1.5 pr-3 text-right font-mono text-[#0a8f7a]">${fmtH(a.executadas)}</td>
-                <td class="py-1.5 pr-3 text-right font-mono text-totvs-purple">${fmtH(a.planejadas)}</td>
-                <td class="py-1.5 pr-3 text-right">${fmtPct(a.pctExec)}</td>
-                <td class="py-1.5 pr-3 text-right">${fmtPct(a.pctTotal)}</td>
-                <td class="py-1.5">${pctBar(a.pctExec, a.pctTotal)}</td>
-              </tr>
-              ${ls.length > 1 ? ls.map(it => `
-                <tr class="text-slate-500">
-                  <td class="py-1 pr-3 pl-12 italic">› ${escapeHtml(it.atividade.descricao)}</td>
-                  <td class="py-1 pr-3">${fmtData(it.atividade.data_inicio)}</td>
-                  <td class="py-1 pr-3">${fmtData(it.atividade.data_fim)}</td>
-                  <td class="py-1 pr-3 text-right font-mono">${fmtH(it.atividade.horas_previstas)}</td>
-                  <td class="py-1 pr-3 text-right font-mono">${fmtH(it.atividade.horas_realizadas)}</td>
-                  <td class="py-1 pr-3 text-right font-mono">${fmtH(aRealizar(it.atividade))}</td>
-                  <td class="py-1 pr-3 text-right">${fmtPct(it.atividade.horas_previstas>0 ? (it.atividade.horas_realizadas/it.atividade.horas_previstas)*100 : 0)}</td>
-                  <td class="py-1 pr-3 text-right">${fmtPct(it.atividade.horas_previstas>0 ? ((it.atividade.horas_realizadas+aRealizar(it.atividade))/it.atividade.horas_previstas)*100 : 0)}</td>
-                  <td></td>
-                </tr>
-              `).join('') : ''}
-            `).join('')}
-          </tbody>
-        </table>
-      </td>
-    </tr>`;
+    </tr>` + filhas;
 }
 
 function escapeAttr(s) { return String(s).replace(/"/g, '&quot;'); }
