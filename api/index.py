@@ -791,6 +791,48 @@ def api_monitcad_evolucao(customer):
                   "tabelas": q(SQL_EVO_MATRIZ, (customer, amb))})
 
 
+@app.delete("/api/monitcad/<customer>/medicao")
+def api_monitcad_medicao_remover(customer):
+    """Apaga uma medição inteira — a daquela data, naquele ambiente.
+
+    Só admin: não há desfazer e a medição some do histórico de todo mundo. O
+    caso real é o import que entrou zerado: enquanto ele está lá, a série mostra
+    uma queda que não existiu."""
+    if (r := require_admin()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    amb = _ambiente()
+    data = _data_iso(request.args.get("data"))
+    if not data:
+        return _err(400, "Informe a data da medição (AAAA-MM-DD).")
+
+    ids = q("""select id from cockpit.monitcad_medicoes
+                where customer=%s and ambiente=%s and data_medicao=%s""",
+            (customer, amb, data))
+    if not ids:
+        return _err(404, f"Nenhuma medição de {data} na base {amb} deste cliente.")
+    linhas = 0
+    for a in ids:
+        r0 = q("select count(*) n from cockpit.monitcad_tabelas where medicao_id=%s",
+               (a["id"],), one=True)
+        linhas += int(r0["n"] if r0 else 0)
+        execute("delete from cockpit.monitcad_tabelas where medicao_id=%s", (a["id"],))
+        execute("delete from cockpit.monitcad_medicoes where id=%s", (a["id"],))
+
+    # ultima_medicao tem que recuar junto, senão o cabeçalho do projeto passa a
+    # apontar para uma medição que não existe mais
+    execute("""update cockpit.monitcad_projetos p
+                  set ultima_medicao = (select max(m.data_medicao)
+                                          from cockpit.monitcad_medicoes m
+                                         where m.customer = p.customer
+                                           and m.ambiente = 'producao'),
+                      updated_at = now()
+                where p.customer=%s""", (customer,))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "data": data,
+                  "medicoes": len(ids), "linhas": linhas})
+
+
 SCRIPT_TIPOS = ("cadastros", "movimentos")
 
 

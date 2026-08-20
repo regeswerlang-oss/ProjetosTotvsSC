@@ -1293,9 +1293,12 @@ function escapeHtml(s) {
 
 // ── "Ver como" (só admin): simula a visão de outro usuário, sem trocar de login.
 //    A simulação só restringe o escopo; nunca amplia (garantido no backend).
+let euSou = null;                       // /api/me — quem está logado (e se é admin)
+
 async function initViewAs() {
   let me;
   try { me = await api('/api/me'); } catch (_) { return; }
+  euSou = me;                           // usado por quem depende de admin (ex.: apagar medição)
   const sel = $('#view-as');
   const faixa = $('#simulando');
 
@@ -2258,6 +2261,8 @@ function pintaEvolucao() {
     // só a matriz é repintada: se repintasse tudo, o campo perderia o foco
     busca.addEventListener('input', () => { evoFiltro.q = busca.value; pintaMatriz(); });
   }
+  $$('#cad-conteudo [data-del-med]').forEach(b =>
+    b.addEventListener('click', () => apagaMedicao(b.dataset.delMed)));
   $$('#cad-conteudo [data-modo]').forEach(b => b.addEventListener('click', () => {
     evoFiltro.modo = b.dataset.modo;
     $$('#cad-conteudo [data-modo]').forEach(o => o.classList.toggle('is-on', o.dataset.modo === evoFiltro.modo));
@@ -2394,6 +2399,7 @@ function renderEvolucao(mod) {
       <p class="text-xs text-slate-400 mb-3">Uma linha por semana ISO, com a última medição da semana.</p>
       <div class="space-y-2">${linhasSem || '<p class="text-sm text-slate-400">Sem semana fechada.</p>'}</div>
       ${notaSemana}
+      ${listaMedicoes(mod)}
     </div>
     ${ranking}
     <div class="bg-white rounded-lg border border-slate-200 p-5">
@@ -2410,6 +2416,49 @@ function renderEvolucao(mod) {
       </div>
       <div id="evo-matriz">${matrizHTML(mod)}</div>
     </div>`;
+}
+
+/** Todas as medições, inclusive as que não fecham semana (essas não aparecem
+ *  no gráfico acima). É daqui que o admin apaga uma medição furada. */
+function listaMedicoes(mod) {
+  const adm = !!euSou?.is_admin;
+  const linhas = mod.meds.slice().reverse().map(m => {
+    const zerada = m.tabelas > 0 && m.realizado === 0;
+    return `<div class="flex items-center gap-3 py-1.5 border-t border-slate-100 text-xs">
+      <span class="w-28 ${m.fimSemana ? 'font-medium' : 'text-slate-500'}">${fmtData(m.data)}${m.hora ? ` ${escapeHtml(m.hora)}` : ''}</span>
+      <span class="w-12 text-slate-500">${rotSemana(m.semana)}</span>
+      <span class="w-24 text-slate-400">${m.fimSemana ? 'fecha a semana' : ''}</span>
+      <span class="flex-1"></span>
+      <span class="w-24 text-right tabular-nums ${zerada ? 'text-rose-600 font-semibold' : ''}">${fmtNum(m.realizado)}</span>
+      <span class="w-32 text-right text-slate-500">${m.comCarga}/${m.tabelas} tabelas</span>
+      ${adm ? `<button data-del-med="${m.data}" title="Apagar esta medição"
+                 class="px-2 py-0.5 rounded border border-rose-200 text-rose-700 hover:bg-rose-50">🗑</button>`
+            : '<span class="w-8"></span>'}
+    </div>`;
+  }).join('');
+  return `<details class="mt-3">
+    <summary class="text-xs text-slate-500 cursor-pointer hover:text-totvs-petroleo">
+      <span class="chev inline-block">▶</span> Todas as medições (${mod.meds.length})</summary>
+    <div class="mt-1">${linhas}</div>
+    ${adm ? '' : '<p class="text-[11px] text-slate-400 mt-2">Apagar medição é ação de administrador.</p>'}
+  </details>`;
+}
+
+async function apagaMedicao(data) {
+  const m = (cad.evoMod?.meds || []).find(x => x.data === data);
+  const rot = `${fmtData(data)} · ${AMB[cad.ambiente].label}`;
+  if (!confirm(`Apagar a medição de ${rot}?\n\n${m ? `${m.tabelas} tabela(s), ${fmtNum(m.realizado)} registro(s).` : ''}`
+             + '\n\nNão há desfazer — a medição some do histórico para todos.')) return;
+  try {
+    const j = await api(`/api/monitcad/${encodeURIComponent(cad.customer)}/medicao`
+                        + `?ambiente=${cad.ambiente}&data=${encodeURIComponent(data)}`,
+                        { method: 'DELETE' });
+    cad.evol = null; cad.evolChave = null; cad.dados = null;
+    carregaCadastros(cad.customer);     // refaz as duas visões com o histórico novo
+    alert(`Medição de ${rot} apagada (${j.linhas} linha(s)).`);
+  } catch (e) {
+    alert('Não foi possível apagar: ' + e.message);
+  }
 }
 
 /** Matriz tabela × medição, agrupada por módulo. Usa details.cad-grupo para

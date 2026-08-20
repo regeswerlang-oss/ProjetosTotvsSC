@@ -115,3 +115,29 @@ comentário.
 Testado com Playwright: 25 verificações cobrindo abrir, regenerar, colar,
 salvar (com o corpo do POST conferido), recarregar, remover, reabrir o modal e o
 mesmo fluxo em Movimentos.
+
+---
+
+# Apagar uma medição (admin)
+
+Duas medições furadas já custaram uma leitura errada do projeto: a da Olim que
+entrou zerada por causa do `QTD_REAL`, e uma da Digitro em que o arquivo da Olim
+foi subido no cliente errado — 63 tabelas e 41.194 registros idênticos linha a
+linha aos da outra base. Reimportar corrige quando a data volta a existir; não
+corrige quando a medição inteira não deveria estar ali.
+
+`DELETE /api/monitcad/<customer>/medicao?ambiente=&data=AAAA-MM-DD`, **só
+admin** (`require_admin`) — não há desfazer e a medição some do histórico de
+todo mundo.
+
+O detalhe fácil de esquecer: `monitcad_projetos.ultima_medicao` precisa recuar
+junto. Sem isso o cabeçalho do projeto aponta para uma medição que não existe
+mais — foi o que aconteceu na Digitro quando a exclusão foi feita direto no
+banco.
+
+Na tela, um `<details>` "Todas as medições (N)" dentro do card de evolução
+semanal. Ele existe por dois motivos: mostra também as medições que **não**
+fecham semana (essas não aparecem no gráfico, e foi justamente uma delas que
+precisou ser apagada), e marca em vermelho a que tem tabelas e nenhum registro.
+A lixeira só aparece para admin; para os demais, uma linha explica por quê. A
+confirmação diz data, base e quantas tabelas somem.
