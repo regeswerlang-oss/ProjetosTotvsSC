@@ -604,6 +604,14 @@ CSV_COLS = {
     "DTLEITURA": "_dt", "DATA": "_dt", "DATAMEDICAO": "_dt", "SEMANA": "_semana",
 }
 
+# Tabelas de CONFIGURAÇÃO do Protheus, não de cadastro do cliente: a contagem é
+# do dicionário/parametrização que já vem com o produto (dezenas de milhares de
+# linhas que ninguém "cadastra" no projeto), então elas poluíam a lista e nunca
+# teriam estimativa. Retiradas da análise em 23/08/2026. Filtramos na importação
+# para que um CSV gerado por um script antigo não as traga de volta.
+# SX5 por GRUPO (SX5_S4, SX5_T3...) continua valendo — aquilo é cadastro de verdade.
+TABELAS_IGNORADAS = {"SX5", "SX6", "SX7"}
+
 # Só para a mensagem de erro — os nomes na forma em que o usuário escreve
 QTD_ACEITOS = "QTDE, QTD, QTD_REAL, QUANTIDADE, REALIZADO, REGISTROS"
 
@@ -996,6 +1004,8 @@ def api_monitcad_upload(customer):
         ultima = max(ultima or dt, dt)
         linhas = []
         for t in (m.get("tabelas") or []):
+            if (t.get("tabela") or "").strip().upper() in TABELAS_IGNORADAS:
+                continue
             est = float(t.get("estimativa") or 0)
             real = float(t.get("realizado") or 0)
             pct = t.get("percentual")
