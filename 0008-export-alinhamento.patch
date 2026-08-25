@@ -1,0 +1,204 @@
+From 99ca75474b944c90edac221eb22a5f546b0f1208 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 25 Aug 2026 08:52:31 +0000
+Subject: [PATCH] Export: fileiras irmas na mesma tabela (corrige
+ desalinhamento do rascunho)
+
+---
+ ...-exportar-html-e-gmail-em-todas-as-abas.md |  35 ++++++
+ web/index.html                                | 108 ++++++++++++++----
+ 2 files changed, 120 insertions(+), 23 deletions(-)
+
+diff --git a/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md b/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
+index d192ad2..b5089fd 100644
+--- a/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
++++ b/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
+@@ -78,3 +78,38 @@ conteúdo e **zero** `class=` e `<button>`. Depois `/tmp/ver_rel.py` renderiza o
+ HTML gerado para inspeção visual. Medido em 25/08/2026 (stub): Resumo 6 KB,
+ Cronograma 162 KB, Por Módulo 62 KB, Por Etapa 54 KB, Consumo 58 KB, GAPs 92 KB,
+ Cadastros 21 KB, Transição 3 KB.
++
++## Correção do desalinhamento no rascunho (25/08/2026, mesmo dia)
++
++O rascunho do Gmail da visão **Cadastros → Evolução** saiu com as listas
++("Sem movimento", "Tabelas que diminuíram") desalinhadas: cada linha com a sua
++própria largura de coluna.
++
++**Causa.** Converter fileira em `<table>` estava certo, mas cada fileira virava
++uma tabela **independente** — e tabela independente calcula coluna
++independente. Dez linhas de uma lista, dez grades diferentes.
++
++**Correção.** Fileiras **irmãs e de mesma forma** entram na MESMA tabela, uma
++`<tr>` cada (`snapFilhos` agrupa, `snapLinhas` emite). A tabela vai com
++`table-layout:fixed`, então a primeira linha dita as colunas e as demais
++obedecem. A corrida quebra quando muda o número de colunas — aí é outra lista.
++
++Três detalhes que essa mudança obrigou, cada um por um motivo concreto:
++
++1. **Espaço em branco entre linhas não encerra a corrida.** As quebras do
++   template literal viram nós de texto; tratá-los como conteúdo separava o
++   cabeçalho da matriz das linhas de dados, cada um na sua tabela.
++2. **Mas espaço também não se joga fora sem olhar.** Entre rótulo e valor ele é
++   o espaço da frase. Fica retido e só é descartado se a corrida continuar.
++3. **`padding-right:8px` nas células geradas, menos na última.** O `gap` do flex
++   não existe em tabela; sem isso as colunas se encostam. Na última mexeria na
++   borda direita da linha.
++
++O valor de `<input>` também ganhou um espaço à esquerda: na tela quem separa o
++rótulo do número é a borda do campo, que no export não existe.
++
++**Como conferir:** `/tmp/evol_check.py` abre Cadastros → Evolução, exporta e
++mede, dentro do HTML gerado, a borda direita de cada célula contra a primeira
++linha de cada tabela — falha se divergir mais de 1px. Esperado:
++`TODAS ALINHADAS: True`. Precisa de stub com 4 medições (`monitcad_evolucao()`),
++senão a visão não tem ranking para desalinhar.
+diff --git a/web/index.html b/web/index.html
+index a302702..19af37f 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -3083,7 +3083,8 @@ function snapCampo(el) {
+   if (t === 'INPUT' && ['checkbox', 'radio'].includes(el.type)) return el.checked ? '☑' : '☐';
+   if (t === 'SELECT') return escapeHtml(el.selectedOptions?.[0]?.textContent || '');
+   const v = (el.value || '').trim();
+-  return v ? `<b>${escapeHtml(v)}</b>` : '';
++  // o espaço é do rótulo: na tela quem separa é a borda do campo, que aqui some
++  return v ? ` <b>${escapeHtml(v)}</b>` : '';
+ }
+ 
+ // Herdadas: só valem a pena no filho quando DIFEREM do pai — senão cada <td>
+@@ -3123,6 +3124,87 @@ function snapEstilo(cs, pai, tag, larguraTabela) {
+   return st.join(';');
+ }
+ 
++// Gmail não faz flex nem grid. Uma "fileira" (grid de várias colunas ou flex em
++// linha, com 2+ filhos) precisa virar <table> — senão os KPIs empilham em quatro
++// cartões gigantes e a lista de tabelas monitoradas desmonta.
++//
++// ARMADILHA que isso resolve: converter CADA fileira na sua própria <table> não
++// basta. Tabelas independentes calculam colunas independentes, então dez linhas
++// de uma lista saíam cada uma com uma largura de coluna — que é o desalinhamento
++// do rascunho do Gmail em 25/08/2026. Fileiras IRMÃS e de mesma forma têm que
++// entrar na MESMA tabela, uma <tr> cada.
++function colunasDaLinha(el, cs) {
++  const vis = [...el.children].filter(f => getComputedStyle(f).display !== 'none');
++  if (vis.length < 2) return 0;
++  const d = cs.display || '';
++  if (d.includes('grid') && (cs.gridTemplateColumns || '').split(/\s+/).filter(Boolean).length > 1) return vis.length;
++  if (d.includes('flex') && !(cs.flexDirection || '').startsWith('column')) return vis.length;
++  return 0;
++}
++
++function snapLinhas(corrida, opt) {
++  const trs = corrida.map(({ no, cs }) => {
++    const larg = no.getBoundingClientRect().width || 0;
++    const tds = [...no.children].map(f => {
++      const fcs = getComputedStyle(f);
++      if (fcs.display === 'none') return '';
++      const est = ['vertical-align:top'];
++      // o gap do flex não existe em tabela; sem isso as colunas se encostam.
++      // Na última célula não: mexeria na borda direita da linha.
++      if (f !== no.lastElementChild) est.push('padding-right:8px');
++      const w = parseFloat(fcs.width) || 0;
++      if (w > 0 && larg > 0) est.push(`width:${(100 * w / larg).toFixed(2)}%`);
++      // justify-between e ml-auto empurram para a direita no flex; em tabela
++      // quem faz isso é o text-align, senão o número volta a encostar à esquerda
++      if (fcs.textAlign === 'right' || fcs.marginLeft === 'auto' ||
++          (cs.justifyContent || '').includes('space-between') && f === no.lastElementChild) {
++        est.push('text-align:right');
++      }
++      return `<td style="${est.join(';')}">${snapNo(f, cs, opt)}</td>`;
++    }).join('');
++    if (!tds) return '';
++    const linha = [];
++    if (!ehVazio(cs.backgroundColor)) linha.push(`background-color:${cs.backgroundColor}`);
++    if (!ehVazio(cs.borderTop)) linha.push(`border-top:${cs.borderTop}`);
++    if (!ehVazio(cs.paddingTop)) linha.push(`padding-top:${cs.paddingTop}`);
++    return `<tr style="${linha.join(';')}">${tds}</tr>`;
++  }).join('');
++  // table-layout:fixed faz a PRIMEIRA linha ditar as colunas — é o que garante
++  // que as dez linhas fiquem na mesma grade.
++  return trs ? `<table style="width:100%;border-collapse:collapse;table-layout:fixed">${trs}</table>` : '';
++}
++
++/** Percorre os filhos agrupando fileiras irmãs de mesma forma numa tabela só. */
++function snapFilhos(pai, csPai, opt) {
++  let out = '', corrida = [], espaco = '';
++  const descarrega = () => { if (corrida.length) { out += snapLinhas(corrida, opt); corrida = []; } };
++  for (const f of pai.childNodes) {
++    // Espaço em branco entre duas linhas irmãs (as quebras do template literal)
++    // não pode encerrar a corrida — era o que separava o cabeçalho da matriz das
++    // linhas de dados, cada um na sua tabela e com colunas próprias. Mas também
++    // não pode ser jogado fora sem olhar: entre um rótulo e um valor ele é o
++    // espaço da frase ("Horas do projeto 4214"). Então fica retido e só é
++    // descartado se a corrida realmente continuar.
++    if (f.nodeType === 3 && !f.nodeValue.trim()) { espaco += f.nodeValue; continue; }
++    if (f.nodeType === 1) {
++      const cs = getComputedStyle(f);
++      const n = (cs.display === 'none' || cs.visibility === 'hidden') ? 0 : colunasDaLinha(f, cs);
++      if (n) {
++        // muda o número de colunas ⇒ é outra lista, abre tabela nova
++        if (corrida.length && corrida[0].n !== n) descarrega();
++        espaco = '';
++        corrida.push({ no: f, cs, n });
++        continue;
++      }
++    }
++    descarrega();
++    out += espaco + snapNo(f, csPai, opt);
++    espaco = '';
++  }
++  descarrega();
++  return out + espaco;
++}
++
+ function snapNo(no, pai, opt) {
+   if (no.nodeType === 3) return escapeHtml(no.nodeValue);
+   if (no.nodeType !== 1) return '';
+@@ -3133,22 +3215,6 @@ function snapNo(no, pai, opt) {
+   if (cs.display === 'none' || cs.visibility === 'hidden') return '';
+   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return snapCampo(no);
+ 
+-  // Gmail não faz flex nem grid: uma fileira de KPIs viraria uma pilha de
+-  // cartões gigantes. Fileira (grid de várias colunas ou flex em linha) com dois
+-  // filhos ou mais vira <table> de uma linha — que todo cliente de e-mail sabe
+-  // desenhar lado a lado.
+-  const filhos = [...no.children];
+-  const emLinha = filhos.length >= 2 && (
+-    (cs.display.includes('grid') && (cs.gridTemplateColumns || '').split(/\s+/).filter(Boolean).length > 1) ||
+-    (cs.display.includes('flex') && !(cs.flexDirection || '').startsWith('column')));
+-  if (emLinha) {
+-    const tds = filhos.map(f => {
+-      const dentro = snapNo(f, cs, opt);
+-      return dentro ? `<td style="vertical-align:top;padding-right:8px">${dentro}</td>` : '';
+-    }).join('');
+-    return tds ? `<table style="width:100%;border-collapse:collapse"><tr>${tds}</tr></table>` : '';
+-  }
+-
+   // Barra de progresso: div colorida, sem filho e baixinha. Sem a altura ela
+   // colapsa e o relatório perde o gráfico inteiro.
+   const folha = !no.firstElementChild;
+@@ -3169,8 +3235,7 @@ function snapNo(no, pai, opt) {
+   if (t === 'br' || t === 'hr') return `<${t}>`;
+   if (t === 'img') return `<img src="${escapeAttr(no.getAttribute('src') || '')}" style="max-width:100%">`;
+ 
+-  let dentro = '';
+-  for (const f of no.childNodes) dentro += snapNo(f, cs, opt);
++  const dentro = snapFilhos(no, cs, opt);
+   if (!dentro.trim() && !['TD', 'TH'].includes(tag) && !est.includes('height:')) return '';
+   const extra = (t === 'td' || t === 'th') && no.getAttribute('colspan')
+     ? ` colspan="${escapeAttr(no.getAttribute('colspan'))}"` : '';
+@@ -3179,10 +3244,7 @@ function snapNo(no, pai, opt) {
+ 
+ /** Snapshot do painel visível, já em HTML de e-mail. */
+ function snapshotAba(el, opt = {}) {
+-  if (!el) return '';
+-  let out = '';
+-  for (const f of el.childNodes) out += snapNo(f, null, opt);
+-  return out;
++  return el ? snapFilhos(el, null, opt) : '';
+ }
+ 
+ // ── Que painel cada aba exporta, e com que nome ──────────────────────────────
+-- 
+2.43.0
+

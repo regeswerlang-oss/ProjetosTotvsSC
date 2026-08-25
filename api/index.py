@@ -1033,11 +1033,180 @@ def api_monitcad_upload(customer):
                   "tabelas": n_tab, "ultima_medicao": ultima})
 
 
-# ── MOVIMENTOS — volume transacional, mesmo desenho dos cadastros ───────────
+# ── MOVIMENTOS — cobertura de cenários, não volume por tabela ───────────────
+# O total por tabela responde "tem movimento?". A pergunta que decide go-live é
+# outra: "qual cenário ainda não rodou?" — venda para contribuinte de outro
+# estado, NCM com ST, baixa com adiantamento, transferência entre contas. Numa
+# contagem por tabela isso tudo vira uma linha só.
+# Por isso a medição de movimentos carrega uma quebra dimensional
+# (cockpit.monitmov_dimensoes, alimentada pelo SQL D5) e é cruzada com a lista
+# de cenários combinados com o cliente (cockpit.monitmov_cenarios).
+# Spec: docs/specs/2026-08-25-movimentos-cobertura-cenarios.md
+
+# Colunas DIM1..DIM4 genéricas de propósito: incluir uma análise nova
+# (SD1 de entrada, SD3 de estoque) não muda layout de arquivo nem banco nem tela.
+MOV_CSV_COLS = {
+    "ANALISE": "analise", "ANALISE1": "analise", "TIPOANALISE": "analise",
+    "DESCRICAO": "descricao", "DESCR": "descricao", "OBSERVACAO": "descricao",
+    "DIM1NOME": "dim1_nome", "DIM2NOME": "dim2_nome",
+    "DIM3NOME": "dim3_nome", "DIM4NOME": "dim4_nome",
+    "DIM1": "dim1", "DIM2": "dim2", "DIM3": "dim3", "DIM4": "dim4",
+    "PERIODO": "periodo",
+    "QTDE": "qtde", "QTD": "qtde", "QUANTIDADE": "qtde", "REGISTROS": "qtde",
+    "CONTAGEM": "qtde", "LINHAS": "qtde", "REALIZADO": "qtde",
+    "QTDDOC": "qtd_doc", "QTDDOCS": "qtd_doc", "DOCUMENTOS": "qtd_doc",
+    "QTDDOCUMENTOS": "qtd_doc", "DOCS": "qtd_doc",
+    "DTLEITURA": "_dt", "DATA": "_dt", "DATAMEDICAO": "_dt", "SEMANA": "_semana",
+}
+
+# Uma linha em monitmov_itens por análise, derivada da quebra — assim os KPIs e
+# o gráfico por módulo que já existiam continuam de pé sem um segundo arquivo.
+MOV_ANALISES = {
+    "SD2_FISCAL":   ("SD2", "Fiscal",     "Itens de NF de saída (UF × contribuinte × NCM × CFOP)"),
+    "SE5_BANCARIO": ("SE5", "Financeiro", "Movimento bancário (operação × sentido × tipo)"),
+}
+
+
+def _periodo_datas(txt):
+    """'20260101-20991231' → (date, date). Aceita AAAAMMDD, AAAA-MM-DD e
+    DD/MM/AAAA dos dois lados; qualquer coisa fora disso vira (None, None) e o
+    período fica só como texto — não é motivo para recusar o arquivo."""
+    partes = re.split(r"\s*(?:-{1,2}|até|ate|to|a)\s*", (txt or "").strip(),
+                      maxsplit=1, flags=re.I)
+    if len(partes) != 2:
+        m = re.fullmatch(r"(\d{8})\D+(\d{8})", (txt or "").strip())
+        partes = [m.group(1), m.group(2)] if m else []
+    saida = []
+    for p in partes[:2]:
+        p = (p or "").strip()
+        if re.fullmatch(r"\d{8}", p):
+            saida.append(f"{p[0:4]}-{p[4:6]}-{p[6:8]}")
+        else:
+            saida.append(_dt_hora(p)[0])   # aceita DD/MM/AAAA além de ISO
+    return (saida + [None, None])[:2]
+
+
+def _num_br(v):
+    """Número do export do Protheus: '1.240' é mil duzentos e quarenta, mas
+    '1240.5' é um decimal. Só trata ponto como separador de milhar quando o
+    formato é inequívoco — trocar sempre quebraria a segunda forma."""
+    s = str(v if v is not None else "").strip()
+    if not s:
+        return 0.0
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"\d{1,3}(\.\d{3})+", s):
+        s = s.replace(".", "")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _csv_movimentos(texto):
+    """CSV do D5 → mesmo formato do JSON de importação. Uma medição por data
+    encontrada em DT_LEITURA."""
+    try:
+        dial = csv.Sniffer().sniff(texto[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dial = csv.excel
+    linhas = list(csv.reader(io.StringIO(texto), dial))
+    if not linhas:
+        raise ValueError("CSV vazio.")
+    cabec = [MOV_CSV_COLS.get(_norm_col(c)) for c in linhas[0]]
+    if "analise" not in cabec:
+        raise ValueError("CSV sem a coluna ANALISE. Esperado o layout do D5: "
+                         "ANALISE, DESCRICAO, DIM1_NOME, DIM1 … QTDE, QTD_DOC.")
+    # Mesma lição do import de cadastros: coluna de quantidade não reconhecida
+    # entraria como medição inteira zerada e pareceria base vazia.
+    if "qtde" not in cabec:
+        raise ValueError("CSV sem coluna de quantidade — aceito: QTDE, QTD, "
+                         "QUANTIDADE, REGISTROS, LINHAS. Cabeçalho recebido: "
+                         + ", ".join(c.strip() for c in linhas[0] if c.strip()))
+
+    por_data = {}
+    for linha in linhas[1:]:
+        if not any((c or "").strip() for c in linha):
+            continue
+        reg = {}
+        for col, val in zip(cabec, linha):
+            if col:
+                reg[col] = (val or "").strip()
+        if not reg.get("analise"):
+            continue
+        dt, hora = _dt_hora(reg.pop("_dt", ""))
+        if not dt:
+            raise ValueError("CSV sem data válida em DT_LEITURA (ex.: 25/08/2026 11:43).")
+        semana = reg.pop("_semana", "")
+        med = por_data.setdefault(dt, {
+            "data_iso": dt, "hora_medicao": hora,
+            "semana": int(re.sub(r"^.*W", "", semana) or 0) or None,
+            "periodo": reg.get("periodo") or "",
+            "dimensoes": [],
+        })
+        reg["qtde"] = _num_br(reg.get("qtde"))
+        reg["qtd_doc"] = _num_br(reg.get("qtd_doc")) if reg.get("qtd_doc") else None
+        med["dimensoes"].append(reg)
+    return {"medicoes": list(por_data.values())}
+
+
+def _norm_dim(v):
+    return (v or "").strip().upper()
+
+
+def _casa_cenario(cen, obs):
+    """Coringa '*' (ou vazio) casa com qualquer valor. Comparação é por texto
+    normalizado: o que vem do banco do cliente tem padding e caixa variável."""
+    if _norm_dim(cen["analise"]) != _norm_dim(obs["analise"]):
+        return False
+    for k in ("dim1", "dim2", "dim3", "dim4"):
+        alvo = _norm_dim(cen.get(k)) or "*"
+        if alvo == "*":
+            continue
+        if _norm_dim(obs.get(k)) != alvo:
+            return False
+    return True
+
+
+def _cobertura(dimensoes, cenarios):
+    """Cruza esperado × observado. Devolve a lista de cenários com status e a
+    lista do que foi observado sem cenário que case.
+
+    NÃO PREVISTO não é erro: numa base de produção é o normal enquanto a lista
+    de cenários não está fechada. Vira sinal depois que o cliente combinou tudo.
+    """
+    cobertura, casados = [], set()
+    for c in cenarios:
+        achou = [o for o in dimensoes if _casa_cenario(c, o)]
+        qtde = sum(float(o.get("qtde") or 0) for o in achou)
+        for o in achou:
+            casados.add(id(o))
+        cobertura.append({
+            **c,
+            "qtde": qtde,
+            "qtd_doc": sum(float(o.get("qtd_doc") or 0) for o in achou),
+            "ocorrencias": len(achou),
+            "status": ("COBERTO" if qtde > 0
+                       else ("FALTANTE" if c.get("esperado", True) else "OPCIONAL")),
+        })
+    # Só faz sentido apontar "não previsto" para a análise que já tem cenário
+    # combinado — senão a primeira medição do cliente vira uma lista de acusações.
+    com_cenario = {_norm_dim(c["analise"]) for c in cenarios}
+    nao_previstos = [o for o in dimensoes
+                     if id(o) not in casados
+                     and _norm_dim(o.get("analise")) in com_cenario
+                     and float(o.get("qtde") or 0) > 0]
+    ordem = {"FALTANTE": 0, "COBERTO": 1, "OPCIONAL": 2}
+    cobertura.sort(key=lambda c: (ordem.get(c["status"], 9), c["analise"],
+                                  c.get("descricao") or ""))
+    nao_previstos.sort(key=lambda o: -float(o.get("qtde") or 0))
+    return cobertura, nao_previstos
+
+
 @app.get("/api/monitmov/<customer>")
 def api_monitmov(customer):
-    """Última medição de MOVIMENTOS do cliente no ambiente pedido.
-    A importação ainda não tem layout definido — por enquanto só lê."""
+    """Última medição de MOVIMENTOS do cliente no ambiente pedido: totais por
+    análise, quebra dimensional e cobertura de cenários."""
     if (r := require_auth()):
         return r
     if (d := deny_customer(customer)):
@@ -1047,9 +1216,15 @@ def api_monitmov(customer):
                   from cockpit.monitmov_medicoes
                  where customer=%s and ambiente=%s order by data_medicao""",
              (customer, amb))
+    cenarios = q("""select id, analise, dim1, dim2, dim3, dim4, descricao,
+                           esperado, etapa, responsavel
+                      from cockpit.monitmov_cenarios where customer=%s
+                     order by analise, descricao""", (customer,))
     if not meds:
         return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": True,
-                      "itens": [], "modulos": [], "serie": [], "total_medicoes": 0})
+                      "itens": [], "modulos": [], "serie": [], "total_medicoes": 0,
+                      "dimensoes": [], "analises": [], "cenarios": cenarios,
+                      "cobertura": [], "nao_previstos": [], "a_classificar": []})
     ult = meds[-1]
     itens = q("""select tabela, descricao, modulo, filtro, quantidade, valor, periodo
                    from cockpit.monitmov_itens where medicao_id=%s
@@ -1066,10 +1241,236 @@ def api_monitmov(customer):
                   where m.customer=%s and m.ambiente=%s
                   group by m.data_medicao, m.semana order by m.data_medicao""",
               (customer, amb))
+    dimensoes = q("""select analise, descricao, dim1_nome, dim1, dim2_nome, dim2,
+                            dim3_nome, dim3, dim4_nome, dim4, periodo, qtde, qtd_doc
+                       from cockpit.monitmov_dimensoes where medicao_id=%s
+                      order by analise, qtde desc, dim1, dim2, dim3, dim4""",
+                  (ult["id"],))
+    analises = q("""select analise, count(*) as combinacoes,
+                           count(*) filter (where qtde > 0) as com_movimento,
+                           count(distinct dim1) as valores_dim1,
+                           max(dim1_nome) as dim1_nome, max(dim2_nome) as dim2_nome,
+                           max(dim3_nome) as dim3_nome, max(dim4_nome) as dim4_nome,
+                           sum(qtde) as qtde, sum(qtd_doc) as qtd_doc
+                      from cockpit.monitmov_dimensoes where medicao_id=%s
+                     group by analise order by analise""", (ult["id"],))
+    cobertura, nao_previstos = _cobertura(dimensoes, cenarios)
+    # Fila de trabalho do consultor: o que o de-para bancário ainda não sabe ler
+    a_classificar = [d for d in dimensoes if _norm_dim(d.get("dim1")) == "(A CLASSIFICAR)"]
     return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": False,
                   "ultima_medicao": ult["data_medicao"], "total_medicoes": len(meds),
                   "periodo_ini": ult["periodo_ini"], "periodo_fim": ult["periodo_fim"],
-                  "itens": itens, "modulos": modulos, "serie": serie})
+                  "itens": itens, "modulos": modulos, "serie": serie,
+                  "dimensoes": dimensoes, "analises": analises, "cenarios": cenarios,
+                  "cobertura": cobertura, "nao_previstos": nao_previstos,
+                  "a_classificar": a_classificar})
+
+
+@app.post("/api/monitmov/<customer>/upload")
+def api_monitmov_upload(customer):
+    """Importa o export do D5 (CSV) ou o mesmo conteúdo em JSON. Idempotente:
+    regrava a medição inteira daquela data, naquele ambiente."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de subir movimentos.")
+
+    if (f := request.files.get("arquivo")):
+        bruto, nome = f.read(), (f.filename or "")
+    else:
+        bruto, nome = request.get_data(), ""
+    if not bruto:
+        return _err(400, "Arquivo vazio.")
+    texto = None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            texto = bruto.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
+
+    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
+        or not texto.lstrip().startswith(("{", "["))
+    try:
+        body = _csv_movimentos(texto) if ehcsv else json.loads(texto)
+    except Exception as e:
+        return _err(400, f"{'CSV' if ehcsv else 'JSON'} inválido: {e}")
+    if not isinstance(body, dict) or not body.get("medicoes"):
+        return _err(400, "Arquivo sem medições.")
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+
+    amb = _ambiente()
+    n_med = n_dim = 0
+    ultima = None
+    for m in body["medicoes"]:
+        dt = _data_iso(m.get("data_iso") or m.get("data_medicao"))
+        if not dt:
+            continue
+        dims = m.get("dimensoes") or []
+        periodo = m.get("periodo") or (dims[0].get("periodo") if dims else "")
+        p_ini, p_fim = _periodo_datas(periodo)
+        for a in q("""select id from cockpit.monitmov_medicoes
+                       where customer=%s and data_medicao=%s and ambiente=%s""",
+                   (customer, dt, amb)):
+            execute("delete from cockpit.monitmov_dimensoes where medicao_id=%s", (a["id"],))
+            execute("delete from cockpit.monitmov_itens where medicao_id=%s", (a["id"],))
+            execute("delete from cockpit.monitmov_medicoes where id=%s", (a["id"],))
+        row = q("""insert into cockpit.monitmov_medicoes
+                     (customer, ambiente, data_medicao, semana, hora_medicao,
+                      periodo_ini, periodo_fim, origem, payload)
+                   values (%s,%s,%s,%s,%s,%s,%s,'upload',%s) returning id""",
+                (customer, amb, dt, m.get("semana"), m.get("hora_medicao"),
+                 p_ini, p_fim,
+                 json.dumps({k: v for k, v in m.items() if k != "dimensoes"})), one=True)
+        mid = row["id"]
+        n_med += 1
+        ultima = max(ultima or dt, dt)
+
+        linhas, porAnalise = [], {}
+        for x in dims:
+            analise = (x.get("analise") or "").strip().upper()
+            if not analise:
+                continue
+            qt = float(x.get("qtde") or 0)
+            qd = x.get("qtd_doc")
+            linhas.append((mid, customer, amb, dt, analise, x.get("descricao"),
+                           x.get("dim1_nome"), x.get("dim1"), x.get("dim2_nome"), x.get("dim2"),
+                           x.get("dim3_nome"), x.get("dim3"), x.get("dim4_nome"), x.get("dim4"),
+                           x.get("periodo") or periodo, qt,
+                           float(qd) if qd not in (None, "") else None))
+            ag = porAnalise.setdefault(analise, {"qtde": 0.0, "periodo": x.get("periodo") or periodo})
+            ag["qtde"] += qt
+        if linhas:
+            with db() as c, c.cursor() as cur:
+                execute_values(cur, """
+                    insert into cockpit.monitmov_dimensoes
+                      (medicao_id, customer, ambiente, data_medicao, analise, descricao,
+                       dim1_nome, dim1, dim2_nome, dim2, dim3_nome, dim3,
+                       dim4_nome, dim4, periodo, qtde, qtd_doc)
+                    values %s""", linhas, page_size=200)
+            n_dim += len(linhas)
+        # itens = um resumo por análise, para os KPIs e o gráfico por módulo
+        resumo = []
+        for analise, ag in porAnalise.items():
+            tab, mod, desc = MOV_ANALISES.get(
+                analise, (analise.split("_")[0], "(sem módulo)", analise))
+            resumo.append((mid, customer, amb, dt, tab, desc, mod, None,
+                           ag["qtde"], None, ag["periodo"]))
+        if resumo:
+            with db() as c, c.cursor() as cur:
+                execute_values(cur, """
+                    insert into cockpit.monitmov_itens
+                      (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
+                       modulo, filtro, quantidade, valor, periodo)
+                    values %s""", resumo, page_size=100)
+    return _json({"ok": True, "customer": customer, "ambiente": amb,
+                  "formato": "csv" if ehcsv else "json", "medicoes": n_med,
+                  "dimensoes": n_dim, "ultima_medicao": ultima})
+
+
+CEN_CAMPOS = ("analise", "dim1", "dim2", "dim3", "dim4", "descricao",
+              "esperado", "etapa", "responsavel")
+
+
+def _cenarios_do_txt(texto):
+    """Lê o CENARIOS_MONITOR.TXT — o mesmo arquivo que vai para a \\system\\ do
+    Protheus. Uma fonte, dois consumidores: o job TLPP e este painel."""
+    fora = []
+    for n, linha in enumerate(texto.splitlines(), 1):
+        linha = linha.strip()
+        if not linha or linha.startswith("#"):
+            continue
+        p = [c.strip() for c in linha.split(";")]
+        if len(p) < 5:
+            raise ValueError(f"Linha {n}: esperado ANALISE;DIM1;DIM2;DIM3;DIM4;"
+                             f"DESCRICAO;ESPERADO;ETAPA;RESPONSAVEL — veio {len(p)} campo(s).")
+        p += [""] * (9 - len(p))
+        fora.append({
+            "analise": p[0].upper(),
+            "dim1": p[1] or "*", "dim2": p[2] or "*",
+            "dim3": p[3] or "*", "dim4": p[4] or "*",
+            "descricao": p[5] or None,
+            "esperado": (p[6] or "S").strip().upper() not in ("N", "NAO", "NÃO", "0", "FALSE"),
+            "etapa": p[7] or None, "responsavel": p[8] or None,
+        })
+    if not fora:
+        raise ValueError("Nenhum cenário no arquivo (só comentários?).")
+    return fora
+
+
+@app.get("/api/monitmov/<customer>/cenarios")
+def api_monitmov_cenarios(customer):
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    return _json({"ok": True, "customer": customer,
+                  "cenarios": q("""select id, analise, dim1, dim2, dim3, dim4, descricao,
+                                          esperado, etapa, responsavel, updated_by, updated_at
+                                     from cockpit.monitmov_cenarios where customer=%s
+                                    order by analise, descricao""", (customer,))})
+
+
+@app.post("/api/monitmov/<customer>/cenarios")
+def api_monitmov_cenarios_salvar(customer):
+    """Substitui a lista inteira. O arquivo é a verdade — mesma regra do
+    TABELAS_MONITOR.TXT: editar em dois lugares é como as listas divergem."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de salvar cenários.")
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+    b = request.get_json(silent=True) or {}
+    if isinstance(b.get("texto"), str):
+        try:
+            cens = _cenarios_do_txt(b["texto"])
+        except Exception as e:
+            return _err(400, str(e))
+    elif isinstance(b.get("cenarios"), list):
+        cens = [{k: c.get(k) for k in CEN_CAMPOS} for c in b["cenarios"]]
+    else:
+        return _err(400, "Envie o conteúdo do CENARIOS_MONITOR.TXT em 'texto' "
+                         "ou a lista em 'cenarios'.")
+    execute("delete from cockpit.monitmov_cenarios where customer=%s", (customer,))
+    gravados = 0
+    for c in cens:
+        if not (c.get("analise") or "").strip():
+            continue
+        execute("""insert into cockpit.monitmov_cenarios
+                     (customer, analise, dim1, dim2, dim3, dim4, descricao,
+                      esperado, etapa, responsavel, updated_by, updated_at)
+                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                   on conflict (customer, analise, dim1, dim2, dim3, dim4)
+                   do update set descricao=excluded.descricao,
+                                 esperado=excluded.esperado, etapa=excluded.etapa,
+                                 responsavel=excluded.responsavel,
+                                 updated_by=excluded.updated_by, updated_at=now()""",
+                (customer, (c["analise"] or "").strip().upper(),
+                 (c.get("dim1") or "*").strip(), (c.get("dim2") or "*").strip(),
+                 (c.get("dim3") or "*").strip(), (c.get("dim4") or "*").strip(),
+                 c.get("descricao"), bool(c.get("esperado", True)),
+                 c.get("etapa"), c.get("responsavel"), current_user()))
+        gravados += 1
+    return _json({"ok": True, "customer": customer, "cenarios": gravados})
+
+
+@app.delete("/api/monitmov/<customer>/cenarios")
+def api_monitmov_cenarios_remover(customer):
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de remover cenários.")
+    execute("delete from cockpit.monitmov_cenarios where customer=%s", (customer,))
+    return _json({"ok": True, "customer": customer, "removidos": True})
 
 
 # ── GAPs (aba "GAPs") ───────────────────────────────────────────────────────

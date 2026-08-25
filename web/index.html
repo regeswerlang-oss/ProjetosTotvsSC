@@ -321,7 +321,11 @@
             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
               <button id="mov-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
-              <button id="mov-import" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">⬆ Importar movimentos</button>
+              <button id="mov-cenarios" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
+              <label id="mov-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+                ⬆ Importar movimentos (.csv / .json)
+                <input id="mov-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
+              </label>
             </div>
           </div>
           <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
@@ -2712,31 +2716,47 @@ function confirmaAmbiente(nomeArquivo, sugerido, aoConfirmar) {
 }
 
 // ============================================================================
-//  ABA MOVIMENTOS — volume transacional, mesmo par Produção/Teste
-//  A importação ainda não tem layout definido: o botão existe e explica o que
-//  falta, em vez de fingir que funciona.
+//  ABA MOVIMENTOS — cobertura de cenários, não volume por tabela
+//  "SD2 = 4.132" responde "tem movimento?". A pergunta que decide go-live é
+//  "qual cenário ainda não rodou?" — e essa só aparece na quebra por dimensão.
+//  Esperado vem do CENARIOS_MONITOR.TXT (o mesmo que vai para a \system\).
+//  Spec: docs/specs/2026-08-25-movimentos-cobertura-cenarios.md
 // ============================================================================
-const mov = { customer: null, ambiente: 'producao', dados: null };
+const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {} };
 
-// Conjunto núcleo de movimento — o que costuma pesar numa virada
-const PADRAO_MOVIMENTOS = [
-  ['Compras', 'SC1', 'Solicitacoes de Compra', 'C1_EMISSAO'],
-  ['Compras', 'SC7', 'Pedidos de Compra', 'C7_EMISSAO'],
-  ['Estoque', 'SD3', 'Movimentacoes Internas', 'D3_EMISSAO'],
-  ['Estoque', 'SB2', 'Saldos em Estoque', ''],
-  ['Faturamento', 'SC5', 'Pedidos de Venda (cabecalho)', 'C5_EMISSAO'],
-  ['Faturamento', 'SC6', 'Pedidos de Venda (itens)', 'C6_ENTREG'],
-  ['Faturamento', 'SF2', 'Notas Fiscais de Saida', 'F2_EMISSAO'],
-  ['Faturamento', 'SD2', 'Itens de NF de Saida', 'D2_EMISSAO'],
-  ['Compras', 'SF1', 'Notas Fiscais de Entrada', 'F1_EMISSAO'],
-  ['Compras', 'SD1', 'Itens de NF de Entrada', 'D1_EMISSAO'],
-  ['Financeiro', 'SE1', 'Titulos a Receber', 'E1_EMISSAO'],
-  ['Financeiro', 'SE2', 'Titulos a Pagar', 'E2_EMISSAO'],
-  ['Financeiro', 'SE5', 'Movimentacao Bancaria', 'E5_DATA'],
-  ['Contabilidade', 'CT2', 'Lancamentos Contabeis', 'CT2_DATA'],
-  ['PCP', 'SC2', 'Ordens de Producao', 'C2_EMISSAO'],
-  ['PCP', 'SD4', 'Empenhos', ''],
-];
+// Rótulo legível do E5_TIPODOC. Fica no front de propósito: a dimensão guarda
+// o CÓDIGO, senão trocar um texto aqui transformaria cenário coberto em
+// faltante. Fonte: Central de Atendimento TOTVS, "Descrições dos tipos de
+// movimentações do campo E5_TIPODOC".
+const TIPODOC = {
+  VL: 'Baixa de título', BA: 'Baixa de título', CP: 'Compensação CR/CP',
+  ES: 'Estorno de baixa', EC: 'Estorno de cheque', TE: 'Estorno de transferência',
+  E2: 'Estorno de desconto', TR: 'Transf. carteira descontada',
+  BD: 'Transf. borderô descontado', BL: 'Baixa por lote', CB: 'Canc. transf. desc.',
+  V2: 'Baixa carteira descontada', RA: 'Inclusão RA', PA: 'Inclusão PA',
+  TB: 'Transferência bancária', JR: 'Juros', MT: 'Multa', DC: 'Desconto',
+  CM: 'Correção monetária', CX: 'Correção monetária', VM: 'Variação monetária',
+  TL: 'Tolerância de recebimento', IS: 'Imposto substitutivo', DB: 'Despesa bancária',
+  OC: 'Outros créditos', OD: 'Outras despesas', AP: 'Aplicação', RF: 'Resgate de aplicação',
+  EP: 'Empréstimo', PE: 'Pagto de empréstimo', CH: 'Cheque', CD: 'Cheque pré-datado',
+  CA: 'Cheque avulso / cancelamento', DH: 'Dinheiro', 'R$': 'Dinheiro',
+  SG: 'Entrada no caixa', TC: 'Troco', LJ: 'Movimento SigaLoja',
+};
+
+const ST_MOV = {
+  COBERTO:  { cls: 'bg-emerald-100 text-emerald-800', rot: 'Coberto' },
+  FALTANTE: { cls: 'bg-rose-100 text-rose-800',       rot: 'Faltante' },
+  OPCIONAL: { cls: 'bg-slate-100 text-slate-600',     rot: 'Opcional' },
+};
+
+const dimRot = (v, nome) => {
+  const s = (v || '').trim();
+  if (!s) return '—';
+  if (nome === 'TIPO_DOC' && TIPODOC[s.toUpperCase()]) {
+    return `${escapeHtml(s)} <span class="text-slate-400">${escapeHtml(TIPODOC[s.toUpperCase()])}</span>`;
+  }
+  return escapeHtml(s);
+};
 
 function initMovimentos(ambiente = 'producao') {
   const cli = state.selected?.cli;
@@ -2762,83 +2782,281 @@ async function carregaMovimentos(customer) {
     return;
   }
   mov.dados = j;
+  mov.verTudo = {};
   if (j.vazio) {
     box.innerHTML = blocoVazioCad(
       `Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`,
-      '<p class="text-xs text-slate-400 mt-2">Use "🗄 Script SQL" para levantar o volume no banco. ' +
-      'A importação depende do layout ainda a definir — o botão explica o que falta.</p>');
+      `<p class="text-xs text-slate-400 mt-2">O caminho é: <b>🗄 Script SQL</b> gera a quebra por
+        dimensão, você roda no banco, exporta em CSV e sobe em <b>⬆ Importar movimentos</b>.
+        Depois <b>🎯 Cenários</b> registra o que era esperado — aí a tela passa a mostrar
+        cobertura, e não só volume.</p>`);
     return;
   }
-  const itens = j.itens || [], mods = j.modulos || [];
-  const total = itens.reduce((a, x) => a + Number(x.quantidade || 0), 0);
-  const maxMod = Math.max(1, ...mods.map(m => Number(m.registros || 0)));
+  desenhaMovimentos(j);
+}
+
+function desenhaMovimentos(j) {
+  const dims = j.dimensoes || [], cob = j.cobertura || [], analises = j.analises || [];
+  const cobertos = cob.filter(c => c.status === 'COBERTO').length;
+  const faltantes = cob.filter(c => c.status === 'FALTANTE');
+  const total = dims.reduce((a, x) => a + Number(x.qtde || 0), 0)
+    || (j.itens || []).reduce((a, x) => a + Number(x.quantidade || 0), 0);
   const kpi = (rot, val, sub, cls) => `
     <div class="rounded-lg p-4 ${cls}"><p class="text-xs opacity-80">${rot}</p>
       <p class="text-2xl font-totvs mt-1">${val}</p><p class="text-xs opacity-80 mt-0.5">${sub}</p></div>`;
+
   $('#mov-kpis').classList.remove('hidden');
   $('#mov-kpis').innerHTML =
-    kpi('Movimentos', fmtNum(total), 'na última medição', 'bg-totvs-petroleo text-white') +
-    kpi('Tabelas', String(itens.length), `${itens.filter(x => Number(x.quantidade) > 0).length} com movimento`, 'bg-totvs-blue text-totvs-petroleo') +
-    kpi('Módulos', String(mods.length), 'com tabela medida', 'bg-totvs-purple text-white') +
+    kpi('Cenários cobertos', cob.length ? `${cobertos}/${cob.length}` : '—',
+        cob.length ? `${faltantes.length} faltante(s)` : 'nenhum cenário combinado',
+        faltantes.length ? 'bg-rose-600 text-white' : 'bg-totvs-petroleo text-white') +
+    kpi('Movimentos', fmtNum(total), `${dims.length} combinação(ões) medida(s)`,
+        'bg-totvs-blue text-totvs-petroleo') +
+    kpi('Fora do combinado', String((j.nao_previstos || []).length),
+        `${(j.a_classificar || []).length} a classificar`, 'bg-totvs-purple text-white') +
     kpi('Período', j.periodo_ini ? `${fmtData(String(j.periodo_ini))} → ${fmtData(String(j.periodo_fim || ''))}` : '—',
-        `medição de ${fmtData(String(j.ultima_medicao || ''))}`, 'bg-white border border-slate-200 text-totvs-petroleo');
+        `medição de ${fmtData(String(j.ultima_medicao || ''))}`,
+        'bg-white border border-slate-200 text-totvs-petroleo');
 
-  box.innerHTML = `
-    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
-      <h3 class="text-sm font-semibold text-slate-700 mb-3">Movimentos por módulo</h3>
-      <div class="space-y-2">${mods.map(m => `
-        <div class="flex items-center gap-3 text-sm">
-          <span class="w-52 truncate">${escapeHtml(m.modulo)}</span>
-          <div class="flex-1 bar-track"><div class="bar-fill fill-exec" style="width:${(100 * Number(m.registros || 0) / maxMod).toFixed(1)}%"></div></div>
-          <span class="w-24 text-right tabular-nums font-medium">${fmtNum(m.registros)}</span>
-          <span class="w-28 text-right text-xs text-slate-500">${m.com_movimento}/${m.tabelas} tabelas</span>
-        </div>`).join('')}</div>
-    </div>
-    <div class="bg-white rounded-lg border border-slate-200 p-5 overflow-x-auto">
-      <h3 class="text-sm font-semibold text-slate-700 mb-3">Tabelas medidas</h3>
-      <table class="w-full text-sm">
-        <thead><tr class="text-xs text-slate-500 text-left">
-          <th class="pb-2 pr-3">Tabela</th><th class="pb-2 pr-3">Descrição</th>
-          <th class="pb-2 pr-3">Módulo</th><th class="pb-2 pr-3 text-right">Quantidade</th>
-          <th class="pb-2 pr-3 text-right">Valor</th><th class="pb-2">Período</th>
-        </tr></thead>
-        <tbody>${itens.map(x => `
-          <tr class="border-t border-slate-100">
-            <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
-            <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
-            <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(x.modulo || '—')}</td>
-            <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(x.quantidade)}</td>
-            <td class="py-2 pr-3 text-right tabular-nums">${x.valor != null ? fmtNum(x.valor) : '—'}</td>
-            <td class="py-2 text-xs">${escapeHtml(x.periodo || '—')}</td>
-          </tr>`).join('')}</tbody>
-      </table>
-    </div>`;
+  const partes = [];
+
+  // ── Cobertura ────────────────────────────────────────────────────────────
+  if (!cob.length) {
+    partes.push(`
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-5 mb-4 text-sm">
+        <p class="font-semibold text-amber-900">Ainda não há cenários combinados para este cliente.</p>
+        <p class="text-amber-800 mt-1">A medição abaixo mostra o que <b>aconteceu</b> na base.
+          Sem a lista do que <b>deveria</b> acontecer não dá para dizer o que falta — e essa lista
+          é a pauta da reunião, não um palpite nosso.</p>
+        <p class="text-amber-800 mt-1">Use <b>🎯 Cenários</b> e cole o
+          <span class="font-mono text-xs">CENARIOS_MONITOR.TXT</span>. O mesmo arquivo vai para a
+          <span class="font-mono text-xs">\\system\\</span> do Protheus e alimenta o e-mail de segunda.</p>
+      </div>`);
+  } else {
+    const porAnalise = new Map();
+    cob.forEach(c => porAnalise.set(c.analise, (porAnalise.get(c.analise) || []).concat([c])));
+    partes.push(`
+      <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-3">Cobertura de cenários</h3>
+        ${[...porAnalise.entries()].map(([an, itens]) => {
+          const ok = itens.filter(c => c.status === 'COBERTO').length;
+          return `
+          <div class="mb-4 last:mb-0">
+            <p class="text-xs font-semibold text-slate-500 mb-1">${escapeHtml(an)}
+              <span class="font-normal">· ${ok}/${itens.length} coberto(s)</span></p>
+            <div class="overflow-x-auto"><table class="w-full text-sm">
+              <thead><tr class="text-xs text-slate-500 text-left">
+                <th class="pb-2 pr-3">Cenário</th><th class="pb-2 pr-3">Combinação</th>
+                <th class="pb-2 pr-3">Etapa</th><th class="pb-2 pr-3">Responsável</th>
+                <th class="pb-2 pr-3 text-right">Qtde</th><th class="pb-2">Status</th>
+              </tr></thead>
+              <tbody>${itens.map(c => {
+                const st = ST_MOV[c.status] || ST_MOV.OPCIONAL;
+                const combo = [c.dim1, c.dim2, c.dim3, c.dim4]
+                  .map(v => (v || '*').trim()).join(' · ');
+                return `<tr class="border-t border-slate-100">
+                  <td class="py-2 pr-3">${escapeHtml(c.descricao || '(sem descrição)')}</td>
+                  <td class="py-2 pr-3 font-mono text-xs text-slate-500">${escapeHtml(combo)}</td>
+                  <td class="py-2 pr-3 text-xs">${escapeHtml(c.etapa || '—')}</td>
+                  <td class="py-2 pr-3 text-xs">${escapeHtml(c.responsavel || '—')}</td>
+                  <td class="py-2 pr-3 text-right tabular-nums ${c.qtde > 0 ? '' : 'text-slate-400'}">${fmtNum(c.qtde)}</td>
+                  <td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ${st.cls}">${st.rot}</span></td>
+                </tr>`;
+              }).join('')}</tbody>
+            </table></div>
+          </div>`;
+        }).join('')}
+      </div>`);
+  }
+
+  // ── Fila do consultor: o que o de-para bancário ainda não sabe ler ───────
+  if ((j.a_classificar || []).length) {
+    partes.push(`
+      <div class="bg-white rounded-lg border border-amber-300 p-5 mb-4">
+        <h3 class="text-sm font-semibold text-amber-900 mb-1">A classificar
+          <span class="font-normal text-slate-500">· ${j.a_classificar.length} combinação(ões)</span></h3>
+        <p class="text-xs text-slate-500 mb-3">Movimento bancário que nenhuma regra do de-para
+          reconheceu. Não é erro: é a lista do que precisa virar regra na primeira medição do
+          cliente. As dimensões cruas estão aqui — dá para decidir sem voltar ao banco.</p>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="text-xs text-slate-500 text-left">
+            <th class="pb-2 pr-3">Sentido</th><th class="pb-2 pr-3">Tipo doc.</th>
+            <th class="pb-2 pr-3">Tipo título</th><th class="pb-2 pr-3">Detalhe</th>
+            <th class="pb-2 text-right">Qtde</th>
+          </tr></thead>
+          <tbody>${j.a_classificar.map(d => `
+            <tr class="border-t border-slate-100">
+              <td class="py-2 pr-3">${escapeHtml(d.dim2 || '—')}</td>
+              <td class="py-2 pr-3 font-mono text-xs">${dimRot(d.dim3, 'TIPO_DOC')}</td>
+              <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(d.dim4 || '—')}</td>
+              <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(d.descricao || '—')}</td>
+              <td class="py-2 text-right tabular-nums">${fmtNum(d.qtde)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+      </div>`);
+  }
+
+  // ── Observado, por análise ───────────────────────────────────────────────
+  analises.forEach(a => {
+    const linhas = dims.filter(d => d.analise === a.analise);
+    const tudo = !!mov.verTudo[a.analise];
+    const corte = tudo ? linhas : linhas.slice(0, 20);
+    const nomes = [a.dim1_nome, a.dim2_nome, a.dim3_nome, a.dim4_nome];
+    partes.push(`
+      <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+        <div class="flex items-baseline gap-3 mb-3">
+          <h3 class="text-sm font-semibold text-slate-700">${escapeHtml(a.analise)}</h3>
+          <span class="text-xs text-slate-500">${fmtNum(a.qtde)} movimento(s) ·
+            ${a.combinacoes} combinação(ões) · ${fmtNum(a.qtd_doc)} documento(s)</span>
+          ${linhas.length > 20 ? `<button class="ml-auto text-xs text-totvs-petroleo underline"
+             data-vertudo="${escapeHtml(a.analise)}">${tudo ? 'mostrar só o topo' : `mostrar todas (${linhas.length})`}</button>` : ''}
+        </div>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="text-xs text-slate-500 text-left">
+            ${nomes.map(n => `<th class="pb-2 pr-3">${escapeHtml(n || '—')}</th>`).join('')}
+            <th class="pb-2 pr-3">Detalhe</th>
+            <th class="pb-2 pr-3 text-right">Qtde</th><th class="pb-2 text-right">Docs</th>
+          </tr></thead>
+          <tbody>${corte.map(d => `
+            <tr class="border-t border-slate-100">
+              <td class="py-2 pr-3 font-medium">${dimRot(d.dim1, a.dim1_nome)}</td>
+              <td class="py-2 pr-3">${dimRot(d.dim2, a.dim2_nome)}</td>
+              <td class="py-2 pr-3 font-mono text-xs">${dimRot(d.dim3, a.dim3_nome)}</td>
+              <td class="py-2 pr-3 font-mono text-xs">${dimRot(d.dim4, a.dim4_nome)}</td>
+              <td class="py-2 pr-3 text-xs text-slate-500 max-w-xs truncate"
+                  title="${escapeHtml(d.descricao || '')}">${escapeHtml(d.descricao || '—')}</td>
+              <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(d.qtde)}</td>
+              <td class="py-2 text-right tabular-nums text-slate-500">${d.qtd_doc != null ? fmtNum(d.qtd_doc) : '—'}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+        ${!tudo && linhas.length > 20
+          ? `<p class="text-xs text-slate-400 mt-2">Mostrando as 20 maiores de ${linhas.length}.</p>` : ''}
+      </div>`);
+  });
+
+  // Medição antiga (só total por tabela, sem quebra): mostra o que dá.
+  if (!dims.length && (j.itens || []).length) {
+    partes.push(`
+      <div class="bg-white rounded-lg border border-slate-200 p-5 overflow-x-auto">
+        <h3 class="text-sm font-semibold text-slate-700 mb-1">Tabelas medidas</h3>
+        <p class="text-xs text-slate-500 mb-3">Medição no formato antigo (total por tabela).
+          Rode o script novo para ter a quebra por cenário.</p>
+        <table class="w-full text-sm">
+          <thead><tr class="text-xs text-slate-500 text-left">
+            <th class="pb-2 pr-3">Tabela</th><th class="pb-2 pr-3">Descrição</th>
+            <th class="pb-2 pr-3">Módulo</th><th class="pb-2 text-right">Quantidade</th>
+          </tr></thead>
+          <tbody>${j.itens.map(x => `
+            <tr class="border-t border-slate-100">
+              <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
+              <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
+              <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(x.modulo || '—')}</td>
+              <td class="py-2 text-right tabular-nums">${fmtNum(x.quantidade)}</td>
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>`);
+  }
+
+  const box = $('#mov-conteudo');
+  box.innerHTML = partes.join('');
+  box.querySelectorAll('[data-vertudo]').forEach(b => b.addEventListener('click', () => {
+    const k = b.getAttribute('data-vertudo');
+    mov.verTudo[k] = !mov.verTudo[k];
+    desenhaMovimentos(mov.dados);
+  }));
 }
 
 $('#mov-reload').addEventListener('click', () => { mov.customer = null; initMovimentos(mov.ambiente); });
 
 $('#mov-sql').addEventListener('click', () => abreModalSQL('movimentos'));
 
-$('#mov-import').addEventListener('click', () => {
-  modal('Importar movimentos',
-    `<p class="text-sm">O layout de importação dos movimentos <b>ainda não está definido</b> —
-      este botão é o lugar dele.</p>
-     <p class="text-sm text-slate-600">O destino no banco já existe
-       (<span class="font-mono text-xs">cockpit.monitmov_medicoes</span> e
-       <span class="font-mono text-xs">monitmov_itens</span>), com o mesmo par
-       Produção/Teste dos cadastros e campos para quantidade, valor e período.</p>
-     <p class="text-sm text-slate-600">Para fechar o layout eu preciso de um arquivo de exemplo
-       e da resposta a três perguntas:</p>
-     <ul class="text-sm text-slate-600 list-disc pl-5 space-y-1">
-       <li>Uma linha por tabela (como nos cadastros) ou uma linha por documento?</li>
-       <li>Entra <b>valor</b> além da quantidade?</li>
-       <li>O período é fixo (mês) ou vem no arquivo?</li>
-     </ul>
-     <p class="text-xs text-slate-400">Quando o arquivo chegar, a importação vai perguntar
-       de qual base veio, igual à dos cadastros.</p>`,
-    'Entendi');
-  const m = document.body.lastElementChild;
-  m.querySelector('[data-ok]').addEventListener('click', () => m.remove());
+$('#mov-file').addEventListener('change', enviaMovimentos);
+
+async function enviaMovimentos(ev) {
+  const f = ev.target.files?.[0];
+  ev.target.value = '';
+  if (!f) return;
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de importar movimentos.'); return; }
+  const csv = /\.csv$/i.test(f.name);
+  const texto = await f.text();
+  if (!csv) {
+    try { JSON.parse(texto); }
+    catch (e) { alert('Arquivo não é um JSON nem um CSV válido: ' + e.message); return; }
+  }
+  // Mesma regra dos cadastros: produção e teste são séries independentes, e
+  // subir uma na outra contamina o acompanhamento do projeto.
+  confirmaAmbiente(f.name, mov.ambiente, async (amb, m) => {
+    m.ocupado(true, 'Enviando…');
+    try {
+      const j = await api(`/api/monitmov/${encodeURIComponent(cli)}/upload?ambiente=${amb}`, {
+        method: 'POST',
+        headers: { 'Content-Type': csv ? 'text/csv; charset=utf-8' : 'application/json' },
+        body: texto,
+      });
+      m.fecha();
+      alert(`${AMB[amb].label}: ${j.medicoes} medição(ões), ${j.dimensoes} combinação(ões) (${j.formato}).`);
+      mov.customer = null;
+      setSub(amb === 'teste' ? 'mov_teste' : 'mov_prod');
+    } catch (e) {
+      m.ocupado(false, 'Importar');
+      m.erro(e.message);
+    }
+  });
+}
+
+// ── Cenários esperados ─────────────────────────────────────────────────────
+// O TXT é a verdade: salvar substitui a lista inteira. Editar em dois lugares
+// é exatamente como as listas divergem.
+function cenariosParaTxt(cens) {
+  const cab = '# ANALISE;DIM1;DIM2;DIM3;DIM4;DESCRICAO;ESPERADO;ETAPA;RESPONSAVEL\n' +
+              '# * = qualquer valor · ESPERADO S/N · veja o CENARIOS_MONITOR.TXT do MONITCAD\n';
+  return cab + (cens || []).map(c => [
+    c.analise, c.dim1 || '*', c.dim2 || '*', c.dim3 || '*', c.dim4 || '*',
+    c.descricao || '', c.esperado === false ? 'N' : 'S', c.etapa || '', c.responsavel || '',
+  ].join(';')).join('\n') + (cens && cens.length ? '\n' : '');
+}
+
+$('#mov-cenarios').addEventListener('click', async () => {
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de editar os cenários.'); return; }
+  let atuais = [];
+  try {
+    atuais = (await api(`/api/monitmov/${encodeURIComponent(cli)}/cenarios`)).cenarios || [];
+  } catch (e) { /* lista vazia é um começo válido */ }
+
+  const m = modal('Cenários esperados de movimento',
+    `<p class="text-xs text-slate-500">Cole o conteúdo do
+       <span class="font-mono">CENARIOS_MONITOR.TXT</span>. É o mesmo arquivo que vai para a
+       <span class="font-mono">\\system\\</span> do Protheus — uma fonte, dois consumidores
+       (este painel e o e-mail de segunda).</p>
+     <p class="text-xs text-slate-500">Layout:
+       <span class="font-mono text-[11px]">ANALISE;DIM1;DIM2;DIM3;DIM4;DESCRICAO;ESPERADO;ETAPA;RESPONSAVEL</span>
+       · <span class="font-mono">*</span> casa com qualquer valor · linha com <span class="font-mono">#</span> é comentário.</p>
+     <textarea id="cen-txt" rows="16" spellcheck="false"
+       class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"></textarea>
+     <p class="text-xs text-slate-400">Salvar <b>substitui</b> a lista inteira deste cliente.
+       Vale para produção e teste: o que se espera do processo não muda porque a base mudou.</p>`,
+    'Salvar cenários');
+  m.campo('cen-txt').value = atuais.length ? cenariosParaTxt(atuais)
+    : cenariosParaTxt([]) + '# (nenhum cenário salvo ainda — cole a lista combinada com o cliente)\n';
+  m.aoConfirmar(async () => {
+    const texto = m.campo('cen-txt').value;
+    m.ocupado(true, 'Salvando…');
+    try {
+      const j = await api(`/api/monitmov/${encodeURIComponent(cli)}/cenarios`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texto }),
+      });
+      m.fecha();
+      alert(`${j.cenarios} cenário(s) salvos.`);
+      mov.customer = null;
+      initMovimentos(mov.ambiente);
+    } catch (e) {
+      m.ocupado(false, 'Salvar cenários');
+      m.erro(e.message);
+    }
+  });
 });
 
 // ============================================================================
@@ -3288,58 +3506,160 @@ const PADRAO_MONITCAD = [
 
 const sqlTxt = (s) => `'${String(s ?? '').replace(/'/g, "''")}'`;
 
+// ── Script de MOVIMENTOS: quebra dimensional, não contagem por tabela ──────
+// A versão blindada (CTE + ALL_TABLES + DBMS_XMLGEN, tabela inexistente não
+// derruba a query) está em _entregas/MONITCAD_D5_movimentos_dimensoes_ORACLE.sql
+// do projeto MONITCAD. Esta aqui é a legível, nos dois bancos: quem quiser a
+// outra cola no textarea e salva — o modal aceita script colado.
+function scriptMovimentosD5(sufixo, dialeto, ini, fim) {
+  const ora = dialeto === 'oracle';
+  const cat = (...p) => p.join(ora ? ' || ' : ' + ');
+  // Oracle: TRIM de brancos vira NULL. SQL Server: vira ''. Por isso o
+  // "campo vazio" é escrito diferente nos dois — e não dá para unificar com
+  // NULLIF(...,'') porque no Oracle '' É NULL e o NULLIF quebra.
+  const vazio = (c, txt) => ora
+    ? `NVL(TRIM(${c}),'${txt}')`
+    : `COALESCE(NULLIF(LTRIM(RTRIM(${c})),''),'${txt}')`;
+  const tr = (c) => ora ? `TRIM(${c})` : `LTRIM(RTRIM(${c}))`;
+  const agora = ora ? `TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI')`
+                    : `CONVERT(varchar(16), GETDATE(), 120)`;
+  const semana = ora ? `TO_CHAR(SYSDATE,'IYYY')||'-W'||TO_CHAR(SYSDATE,'IW')`
+                     : `CONCAT(DATEPART(year, GETDATE()), '-W', FORMAT(DATEPART(ISO_WEEK, GETDATE()), '00'))`;
+  const p1 = (ini || '').replace(/-/g, ''), p2 = (fim || '').replace(/-/g, '');
+  const periodo = p1 && p2 ? `${p1}-${p2}` : 'total';
+  const janela = (col) => p1 && p2 ? `\n   AND ${col} BETWEEN '${p1}' AND '${p2}'` : '';
+
+  // SD2 — UF e contribuinte vêm do cadastro do cliente, NCM do cadastro de
+  // produto, CFOP do próprio item.
+  const uf = vazio('A.EST', '(vazio)');
+  const contrib = `CASE ${tr('A.CONTRIB')} WHEN '1' THEN 'SIM' WHEN '2' THEN 'NAO' ELSE '(vazio)' END`;
+  const ncm = vazio('B.NCM', '(sem NCM)');
+  const cfop = vazio('D.D2_CF', '(vazio)');
+  const sd2 = `SELECT 'SD2_FISCAL' AS ANALISE, 'itens de NF de saida' AS DESCRICAO,
+       'UF' AS DIM1_NOME, ${uf} AS DIM1,
+       'CONTRIBUINTE' AS DIM2_NOME, ${contrib} AS DIM2,
+       'NCM' AS DIM3_NOME, ${ncm} AS DIM3,
+       'CFOP' AS DIM4_NOME, ${cfop} AS DIM4,
+       ${sqlTxt(periodo)} AS PERIODO, ${agora} AS DT_LEITURA, ${semana} AS SEMANA,
+       COUNT(*) AS QTDE,
+       COUNT(DISTINCT ${cat('D.D2_FILIAL', "'|'", 'D.D2_DOC', "'|'", 'D.D2_SERIE')}) AS QTD_DOC
+  FROM SD2${sufixo} D
+  LEFT JOIN (SELECT A1_COD, A1_LOJA, MAX(A1_EST) AS EST, MAX(A1_CONTRIB) AS CONTRIB
+               FROM SA1${sufixo} WHERE D_E_L_E_T_=' ' GROUP BY A1_COD, A1_LOJA) A
+    ON A.A1_COD = D.D2_CLIENTE AND A.A1_LOJA = D.D2_LOJA
+  LEFT JOIN (SELECT B1_COD, MAX(B1_POSIPI) AS NCM
+               FROM SB1${sufixo} WHERE D_E_L_E_T_=' ' GROUP BY B1_COD) B
+    ON B.B1_COD = D.D2_COD
+ WHERE D.D_E_L_E_T_=' '${janela('D.D2_EMISSAO')}
+ GROUP BY ${uf}, ${contrib}, ${ncm}, ${cfop}`;
+
+  // SE5 — a categoria é derivada; TIPODOC, tipo do título e motivo da baixa
+  // continuam nas colunas, então rótulo errado se conserta sem rodar de novo.
+  const oper = `CASE
+         WHEN ${tr('E.E5_SITUACA')} = 'E'
+           OR ${tr('E.E5_TIPODOC')} IN ('ES','EC','E2','TE','CB','CA') THEN 'ESTORNO / CANCELAMENTO'
+         WHEN ${tr('E.E5_TIPO')} IN ('RA','PA')
+           OR ${tr('E.E5_TIPODOC')} IN ('RA','PA')                     THEN 'ADIANTAMENTO'
+         WHEN ${tr('E.E5_TIPODOC')} = 'TB'                             THEN 'TRANSFERENCIA ENTRE CONTAS'
+         WHEN ${tr('E.E5_ORIGEM')} LIKE 'FINA100%'
+          AND ${tr('E.E5_TIPO')} ${ora ? 'IS NULL' : "= ''"}           THEN 'TRANSFERENCIA / MOV. MANUAL (FINA100)'
+         WHEN ${tr('E.E5_TIPODOC')} IN ('TR','BD','BL')                THEN 'TRANSFERENCIA CARTEIRA / BORDERO'
+         WHEN ${tr('E.E5_TIPODOC')} = 'CP'
+           OR ${tr('E.E5_MOTBX')} = 'CMP'                              THEN 'COMPENSACAO'
+         WHEN ${tr('E.E5_TIPODOC')} IN ('VL','BA','V2')
+          AND ${tr('E.E5_RECPAG')} = 'R'                               THEN 'BAIXA A RECEBER'
+         WHEN ${tr('E.E5_TIPODOC')} IN ('VL','BA','V2')
+          AND ${tr('E.E5_RECPAG')} = 'P'                               THEN 'BAIXA A PAGAR'
+         WHEN ${tr('E.E5_TIPODOC')} IN ('JR','MT','DC','CM','CX','VM','TL','IS',
+                                        'J2','M2','D2','C2','OG')      THEN 'ENCARGOS / DESCONTOS'
+         WHEN ${tr('E.E5_TIPODOC')} IN ('DB','OC','OD')                THEN 'TARIFAS E OUTROS LANCAMENTOS'
+         WHEN ${tr('E.E5_TIPODOC')} IN ('AP','RF','EP','PE')           THEN 'APLICACAO / EMPRESTIMO'
+         WHEN ${tr('E.E5_TIPODOC')} IN ('DH','R$','SG','TC','LJ','CH','CD') THEN 'CAIXA / CHEQUE / LOJA'
+         ELSE '(A CLASSIFICAR)'
+       END`;
+  const sentido = `CASE ${tr('E.E5_RECPAG')} WHEN 'R' THEN 'RECEBIMENTO' WHEN 'P' THEN 'PAGAMENTO' ELSE '(vazio)' END`;
+  const tipodoc = vazio('E.E5_TIPODOC', '(vazio)');
+  const tipotit = vazio('E.E5_TIPO', '(vazio)');
+  const detalhe = cat("'motbx='", vazio('E.E5_MOTBX', '-'), "' origem='", vazio('E.E5_ORIGEM', '-'));
+  const se5 = `SELECT 'SE5_BANCARIO' AS ANALISE, ${detalhe} AS DESCRICAO,
+       'OPERACAO' AS DIM1_NOME, ${oper} AS DIM1,
+       'SENTIDO' AS DIM2_NOME, ${sentido} AS DIM2,
+       'TIPO_DOC' AS DIM3_NOME, ${tipodoc} AS DIM3,
+       'TIPO_TITULO' AS DIM4_NOME, ${tipotit} AS DIM4,
+       ${sqlTxt(periodo)} AS PERIODO, ${agora} AS DT_LEITURA, ${semana} AS SEMANA,
+       COUNT(*) AS QTDE,
+       COUNT(DISTINCT ${cat('E.E5_PREFIXO', "'|'", 'E.E5_NUMERO', "'|'", 'E.E5_PARCELA', "'|'", 'E.E5_TIPO')}) AS QTD_DOC
+  FROM SE5${sufixo} E
+ WHERE E.D_E_L_E_T_=' '${janela('E.E5_DATA')}
+ GROUP BY ${oper},
+          ${sentido},
+          ${tipodoc},
+          ${tipotit},
+          ${detalhe}`;
+
+  return `-- ===========================================================================
+-- MOVIMENTOS · quebra por cenário (SD2 fiscal + SE5 bancário)
+-- Ambiente de destino: ${AMB[mov.ambiente].label.toUpperCase()}
+-- Gerado pela Gestão de Projetos TOTVS SC em ${new Date().toLocaleString('pt-BR')}
+--
+-- Rode no banco do Protheus (${ora ? 'Oracle' : 'SQL Server'}), exporte em CSV e
+-- suba em "⬆ Importar movimentos". O painel cruza com os cenários combinados
+-- com o cliente ("🎯 Cenários") e mostra coberto / faltante / não previsto.
+--
+-- Contagem por tabela não responde a pergunta que decide go-live. 4.000 notas
+-- emitidas não dizem se já se emitiu para contribuinte de outro estado — a
+-- quebra por UF × contribuinte × NCM × CFOP diz.
+--
+-- Sufixo das tabelas: ${sufixo} (ex.: SD2 → SD2${sufixo}).
+${p1 && p2 ? `-- Período: ${p1} a ${p2} (data do documento, char AAAAMMDD).`
+           : '-- Sem período: conta a base inteira. Informe as datas no modal para recortar.'}
+-- Cliente sem SIGALOJA/SIGAFIN etc.: apague o bloco da tabela que não existe —
+-- ou use a versão blindada, MONITCAD_D5_movimentos_dimensoes_ORACLE.sql, que
+-- ignora sozinha a tabela ausente.
+-- ===========================================================================
+
+${sd2}
+UNION ALL
+${se5}
+ORDER BY 1, 14 DESC;
+`;
+}
+
 function montaScriptSQL(tipo, sufixo, dialeto, ini, fim) {
-  const movimentos = tipo === 'movimentos';
-  const daMedicao = movimentos
-    ? (mov.dados?.itens || []).map(t => [t.modulo || '(sem módulo)', t.tabela, t.descricao || '', t.filtro || ''])
-    : (cad.dados?.tabelas || []).map(t => [t.modulo || '(sem módulo)', t.tabela, t.descricao || '', t.filtro || '']);
-  const padrao = movimentos ? PADRAO_MOVIMENTOS : PADRAO_MONITCAD.map(x => [...x, '']);
-  const linhas = daMedicao.length ? daMedicao : padrao;
+  if (tipo === 'movimentos') return scriptMovimentosD5(sufixo, dialeto, ini, fim);
+
+  const daMedicao = (cad.dados?.tabelas || [])
+    .map(t => [t.modulo || '(sem módulo)', t.tabela, t.descricao || '', t.filtro || '']);
+  const linhas = daMedicao.length ? daMedicao : PADRAO_MONITCAD.map(x => [...x, '']);
   const cliente = (state.selected?.projeto?.nome_cliente_projeto || '').trim();
-  const ambiente = movimentos ? mov.ambiente : cad.ambiente;
 
   const oracle = dialeto === 'oracle';
   const agora = oracle ? `TO_CHAR(SYSDATE,'YYYY-MM-DD HH24:MI')`
                        : `CONVERT(varchar(16), GETDATE(), 120)`;
   const semana = oracle ? `TO_CHAR(SYSDATE,'IYYY')||'-W'||TO_CHAR(SYSDATE,'IW')`
                         : `CONCAT(DATEPART(year, GETDATE()), '-W', FORMAT(DATEPART(ISO_WEEK, GETDATE()), '00'))`;
-  // No Protheus a data é char AAAAMMDD — comparação direta com string funciona
-  const p1 = (ini || '').replace(/-/g, ''), p2 = (fim || '').replace(/-/g, '');
 
-  const selects = linhas.map(([mod, tab, desc, quarto]) => {
-    const fisica = `${tab}${sufixo}`;
+  const selects = linhas.map(([mod, tab, desc, filtro]) => {
     let where = `WHERE D_E_L_E_T_=' '`;
-    if (movimentos) {
-      // no conjunto de movimentos o 4º campo é a COLUNA DE DATA do documento
-      if (quarto && p1 && p2) where += `\n   AND ${quarto} BETWEEN '${p1}' AND '${p2}'`;
-    } else if (quarto) {
-      where += ` AND ${quarto}`;
-    }
-    const periodo = movimentos ? `, ${sqlTxt(p1 && p2 ? `${p1}-${p2}` : 'total')} AS PERIODO` : '';
+    if (filtro) where += ` AND ${filtro}`;
     return `SELECT ${sqlTxt(mod)} AS MODULO, ${sqlTxt(tab)} AS TABELA, ${sqlTxt(desc)} AS DESCRICAO,
-       ${agora} AS DT_LEITURA, ${semana} AS SEMANA, COUNT(*) AS QTDE${periodo}
-  FROM ${fisica} ${where}`;
+       ${agora} AS DT_LEITURA, ${semana} AS SEMANA, COUNT(*) AS QTDE
+  FROM ${tab}${sufixo} ${where}`;
   });
 
-  const semData = movimentos ? linhas.filter(l => !l[3]).map(l => l[1]) : [];
-
   return `-- ===========================================================================
--- ${movimentos ? 'Volume de MOVIMENTOS' : 'Monitoramento de CADASTROS'}${cliente ? ' · ' + cliente : ''}
--- Ambiente de destino: ${AMB[ambiente].label.toUpperCase()}
+-- Monitoramento de CADASTROS${cliente ? ' · ' + cliente : ''}
+-- Ambiente de destino: ${AMB[cad.ambiente].label.toUpperCase()}
 -- Gerado pela Gestão de Projetos TOTVS SC em ${new Date().toLocaleString('pt-BR')}
 --
 -- Rode no banco do Protheus (${oracle ? 'Oracle' : 'SQL Server'}) e exporte o
--- resultado em CSV.${movimentos
-  ? ' A importação de movimentos ainda não tem layout definido.'
-  : ' Depois suba o arquivo em "⬆ Subir medição".'}
+-- resultado em CSV. Depois suba o arquivo em "⬆ Subir medição".
 --
--- ATENÇÃO: rode na base ${AMB[ambiente].label.toUpperCase()}. Produção e teste têm
+-- ATENÇÃO: rode na base ${AMB[cad.ambiente].label.toUpperCase()}. Produção e teste têm
 -- séries separadas no painel — o arquivo trocado polui a leitura do projeto.
 --
 -- Sufixo das tabelas: ${sufixo}  (ex.: SA1 → SA1${sufixo}). Troque se a empresa
 -- ou o grupo for outro. Mesma regra do job MONITCAD: D_E_L_E_T_=' '.
-${movimentos && p1 && p2 ? `-- Período: ${p1} a ${p2} (data do documento, char AAAAMMDD).` : ''}
-${semData.length ? `-- Sem coluna de data (contam o total, não o período): ${semData.join(', ')}.` : ''}
 ${daMedicao.length
   ? `-- Tabelas: as ${linhas.length} da última medição deste cliente/ambiente.`
   : `-- Tabelas: conjunto núcleo (${linhas.length}) — ainda não há medição neste
@@ -3350,6 +3670,7 @@ ${selects.join('\nUNION ALL\n')}
 ORDER BY 1, 2;
 `;
 }
+
 
 function abreModalSQL(tipo = 'cadastros') {
   const movimentos = tipo === 'movimentos';
