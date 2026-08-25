@@ -78,3 +78,38 @@ conteúdo e **zero** `class=` e `<button>`. Depois `/tmp/ver_rel.py` renderiza o
 HTML gerado para inspeção visual. Medido em 25/08/2026 (stub): Resumo 6 KB,
 Cronograma 162 KB, Por Módulo 62 KB, Por Etapa 54 KB, Consumo 58 KB, GAPs 92 KB,
 Cadastros 21 KB, Transição 3 KB.
+
+## Correção do desalinhamento no rascunho (25/08/2026, mesmo dia)
+
+O rascunho do Gmail da visão **Cadastros → Evolução** saiu com as listas
+("Sem movimento", "Tabelas que diminuíram") desalinhadas: cada linha com a sua
+própria largura de coluna.
+
+**Causa.** Converter fileira em `<table>` estava certo, mas cada fileira virava
+uma tabela **independente** — e tabela independente calcula coluna
+independente. Dez linhas de uma lista, dez grades diferentes.
+
+**Correção.** Fileiras **irmãs e de mesma forma** entram na MESMA tabela, uma
+`<tr>` cada (`snapFilhos` agrupa, `snapLinhas` emite). A tabela vai com
+`table-layout:fixed`, então a primeira linha dita as colunas e as demais
+obedecem. A corrida quebra quando muda o número de colunas — aí é outra lista.
+
+Três detalhes que essa mudança obrigou, cada um por um motivo concreto:
+
+1. **Espaço em branco entre linhas não encerra a corrida.** As quebras do
+   template literal viram nós de texto; tratá-los como conteúdo separava o
+   cabeçalho da matriz das linhas de dados, cada um na sua tabela.
+2. **Mas espaço também não se joga fora sem olhar.** Entre rótulo e valor ele é
+   o espaço da frase. Fica retido e só é descartado se a corrida continuar.
+3. **`padding-right:8px` nas células geradas, menos na última.** O `gap` do flex
+   não existe em tabela; sem isso as colunas se encostam. Na última mexeria na
+   borda direita da linha.
+
+O valor de `<input>` também ganhou um espaço à esquerda: na tela quem separa o
+rótulo do número é a borda do campo, que no export não existe.
+
+**Como conferir:** `/tmp/evol_check.py` abre Cadastros → Evolução, exporta e
+mede, dentro do HTML gerado, a borda direita de cada célula contra a primeira
+linha de cada tabela — falha se divergir mais de 1px. Esperado:
+`TODAS ALINHADAS: True`. Precisa de stub com 4 medições (`monitcad_evolucao()`),
+senão a visão não tem ranking para desalinhar.
