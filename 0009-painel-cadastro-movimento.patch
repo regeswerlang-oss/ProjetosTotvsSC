@@ -1,0 +1,218 @@
+From 9b81c40d12fea3f0a1910f2e0ef892d1d8954428 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 25 Aug 2026 10:04:47 +0000
+Subject: [PATCH] Cadastros: coluna painel separa cadastro de movimento
+
+---
+ api/index.py                                  | 50 +++++++++--
+ .../2026-08-25-painel-cadastro-x-movimento.md | 86 +++++++++++++++++++
+ 2 files changed, 129 insertions(+), 7 deletions(-)
+ create mode 100644 docs/specs/2026-08-25-painel-cadastro-x-movimento.md
+
+diff --git a/api/index.py b/api/index.py
+index a0bb206..a5ab564 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -701,6 +701,36 @@ CSV_COLS = {
+ # SX5 por GRUPO (SX5_S4, SX5_T3...) continua valendo — aquilo é cadastro de verdade.
+ TABELAS_IGNORADAS = {"SX5", "SX6", "SX7"}
+ 
++# Documento e saldo NÃO são carga de cadastro: nota fiscal, pedido, título,
++# ordem de produção, saldo de estoque e saldo contábil nascem da operação, não do
++# trabalho de cadastramento do projeto. Somados junto, distorciam a contagem da
++# aba Cadastros — e a pergunta que eles respondem ("a operação já rodou?") é a da
++# aba Movimentos/Cobertura, que trabalha por cenário, não por contagem de tabela.
++#
++# Estas tabelas continuam sendo IMPORTADAS (o histórico não se perde); só entram
++# com painel='movimento' e a aba Cadastros as filtra fora. Reversível: basta um
++# update em cockpit.monitcad_tabelas.painel.
++#
++# Classificar aqui, e não só no script do Protheus, é o que impede a tabela de
++# voltar quando alguém roda um script antigo — mesmo motivo do TABELAS_IGNORADAS.
++TABELAS_MOVIMENTO = {
++    "SC1", "SC7", "SC8",                       # compras: solicitação, pedido, cotação
++    "SC5", "SC6",                              # pedido de venda
++    "SF1", "SD1", "SF2", "SD2", "SF3",         # notas de entrada/saída e livros
++    "SE1", "SE2", "SEB",                       # títulos e retorno bancário
++    "SC2",                                     # ordem de produção
++    "SB2", "SB8", "SB9", "SBF", "SBJ",         # saldos de estoque
++    "SN3", "SN4",                              # saldos e movimentos do ativo
++    "CV3",                                     # saldos contábeis
++    "SL1", "SL2",                              # venda frente de loja
++    "AB3", "AB4", "AB5",                       # orçamentos de serviço
++    "AB6", "AB7", "AB8", "AB9", "ABC",         # ordens de serviço e apontamentos
++}
++
++
++def _painel_da_tabela(tabela):
++    return "movimento" if (tabela or "").strip().upper() in TABELAS_MOVIMENTO else "cadastro"
++
+ # Só para a mensagem de erro — os nomes na forma em que o usuário escreve
+ QTD_ACEITOS = "QTDE, QTD, QTD_REAL, QUANTIDADE, REALIZADO, REGISTROS"
+ 
+@@ -792,10 +822,14 @@ def api_monitcad(customer):
+         return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
+                       "vazio": True, "tabelas": [], "serie": [], "total_medicoes": 0})
+     ult = meds[-1]
++    # painel='cadastro': documento e saldo vivem na aba Movimentos (ver
++    # TABELAS_MOVIMENTO). O filtro precisa estar em TODAS as consultas da aba —
++    # deixar de fora a dos módulos ou a da série faria os totais brigarem com a
++    # lista logo abaixo deles.
+     tabelas = q("""select tabela, descricao, modulo, filtro, realizado, estimativa,
+                           percentual, data_prev, etapa, responsavel, status
+                      from cockpit.monitcad_tabelas
+-                    where medicao_id=%s
++                    where medicao_id=%s and painel='cadastro'
+                     order by modulo nulls last, realizado desc, tabela""", (ult["id"],))
+     # Sem monitcad.estimativas cadastradas não existe % de carga — só contagem.
+     tem_est = any(float(t["estimativa"] or 0) > 0 for t in tabelas)
+@@ -804,7 +838,8 @@ def api_monitcad(customer):
+                           count(*) filter (where realizado > 0) as com_carga,
+                           sum(realizado) as registros
+                      from cockpit.monitcad_tabelas
+-                    where medicao_id=%s group by 1 order by 4 desc, 1""", (ult["id"],))
++                    where medicao_id=%s and painel='cadastro'
++                    group by 1 order by 4 desc, 1""", (ult["id"],))
+     serie = q("""select m.data_medicao, m.semana,
+                         sum(t.realizado)  as realizado,
+                         sum(t.estimativa) as estimativa,
+@@ -814,7 +849,7 @@ def api_monitcad(customer):
+                              else null end as pct
+                    from cockpit.monitcad_medicoes m
+                    join cockpit.monitcad_tabelas t on t.medicao_id = m.id
+-                  where m.customer=%s and m.ambiente=%s
++                  where m.customer=%s and m.ambiente=%s and t.painel='cadastro'
+                   group by m.data_medicao, m.semana
+                   order by m.data_medicao""", (customer, amb))
+     return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
+@@ -838,7 +873,7 @@ select m.data_medicao, m.semana_iso, m.fim_semana, m.hora_medicao,
+        sum(t.realizado)                        as realizado,
+        sum(t.estimativa)                       as estimativa
+   from med m
+-  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
++  join cockpit.monitcad_tabelas t on t.medicao_id = m.id and t.painel = 'cadastro'
+  group by 1, 2, 3, 4
+  order by 1
+ """
+@@ -857,7 +892,7 @@ select t.tabela,
+        max(t.estimativa) filter (where t.medicao_id = (select id from ult)) as estimativa,
+        jsonb_object_agg(to_char(m.data_medicao,'YYYY-MM-DD'), t.realizado)  as serie
+   from med m
+-  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
++  join cockpit.monitcad_tabelas t on t.medicao_id = m.id and t.painel = 'cadastro'
+  group by t.tabela
+  order by max(t.modulo) nulls last, t.tabela
+ """
+@@ -1103,14 +1138,15 @@ def api_monitcad_upload(customer):
+             linhas.append((mid, customer, amb, dt, t.get("tabela"), t.get("descricao"),
+                            t.get("modulo"), t.get("filtro"), real, est, pct,
+                            _data_iso(t.get("data_prev")), t.get("etapa"),
+-                           t.get("responsavel"), t.get("status")))
++                           t.get("responsavel"), t.get("status"),
++                           _painel_da_tabela(t.get("tabela"))))
+         if linhas:
+             with db() as c, c.cursor() as cur:
+                 execute_values(cur, """
+                     insert into cockpit.monitcad_tabelas
+                       (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
+                        modulo, filtro, realizado, estimativa, percentual, data_prev,
+-                       etapa, responsavel, status)
++                       etapa, responsavel, status, painel)
+                     values %s""", linhas, page_size=200)
+             n_tab += len(linhas)
+ 
+diff --git a/docs/specs/2026-08-25-painel-cadastro-x-movimento.md b/docs/specs/2026-08-25-painel-cadastro-x-movimento.md
+new file mode 100644
+index 0000000..9a0bae9
+--- /dev/null
++++ b/docs/specs/2026-08-25-painel-cadastro-x-movimento.md
+@@ -0,0 +1,86 @@
++# Separar cadastro de movimento na aba Cadastros — 25/08/2026
++
++## O pedido e o que ele encontrou
++
++"Mover estas tabelas da aba Cadastros para a aba Movimentos, ajustando o banco."
++Duas descobertas mudaram a forma da solução:
++
++1. **Não existia classificação.** `cockpit.monitcad_tabelas` guarda
++   `tabela, descricao, modulo, realizado, estimativa…` e a aba mostrava **tudo**
++   o que veio na medição. Não havia campo para virar de um painel para o outro.
++2. **A aba Movimentos não conta tabelas.** Desde `77f792f` ela é cobertura de
++   cenários (`monitmov_dimensoes` / `monitmov_itens` / `monitmov_cenarios`, com
++   análise e dim1..dim4). Não há linha de "SD2 = 277" para receber.
++
++Ou seja: **migrar registro de um painel para o outro é impossível** — as duas
++pontas têm formatos diferentes. O que faz sentido é a tabela **sair de
++Cadastros**, e é isso que foi feito.
++
++## A coluna `painel`
++
++`cockpit.monitcad_tabelas.painel` — `'cadastro'` (default) ou `'movimento'`,
++com check constraint e índice `(medicao_id, painel)`.
++
++Default `'cadastro'` de propósito: linha nova sem classificação continua onde
++sempre esteve, então nenhuma importação antiga quebra.
++
++Marcadas em 25/08/2026: **32 tabelas, 278 linhas de histórico**. O histórico
++**não** foi apagado — a decisão é reversível com um `update`.
++
++| Grupo | Tabelas |
++|---|---|
++| Compras | SC1, SC7, SC8 |
++| Faturamento | SC5, SC6 |
++| Notas e livros | SF1, SD1, SF2, SD2, SF3 |
++| Financeiro | SE1, SE2, SEB |
++| PCP | SC2 |
++| Saldos de estoque | SB2, SB8, SB9, SBF, SBJ |
++| Ativo | SN3, SN4 |
++| Contábil | CV3 |
++| Loja | SL1, SL2 |
++| Field Service | AB3, AB4, AB5, AB6, AB7, AB8, AB9, ABC |
++
++Critério: **documento e saldo nascem da operação, não do cadastramento.** Somados
++junto, distorciam a contagem do projeto — e a pergunta que respondem ("a operação
++já rodou?") é a da aba Cobertura, por cenário, não por contagem de tabela.
++
++## Onde o filtro precisa estar
++
++`painel='cadastro'` entra em **todas** as consultas da aba, não só na lista:
++
++- lista de tabelas da última medição;
++- agregado por módulo;
++- série histórica (`/api/monitcad/<customer>`);
++- `SQL_EVO_MEDICOES` e `SQL_EVO_MATRIZ` (visão Evolução).
++
++Esquecer uma delas faz o total do KPI brigar com a soma da lista logo abaixo —
++o tipo de inconsistência que destrói a confiança no painel inteiro.
++
++## O importador classifica — e é isso que segura
++
++`TABELAS_MOVIMENTO` em `api/index.py` + `_painel_da_tabela()`: o insert do
++`/upload` já grava o painel. **Sem isso, a próxima medição gerada por um script
++antigo traria SD2 de volta como `'cadastro'` e a tabela reapareceria na aba.**
++Mesmo raciocínio do `TABELAS_IGNORADAS` (SX5/SX6/SX7): a regra mora no
++importador, não só no script do Protheus, porque o script tem cópias por cliente
++e uma delas sempre fica para trás.
++
++## Efeito medido (25/08/2026, última medição de cada cliente)
++
++| Cliente | Ambiente | Tabelas cad. | Tabelas mov. | Registros cad. | Registros mov. |
++|---|---|---:|---:|---:|---:|
++| 000348D0 | produção | 43 | 13 | 484 | 178 |
++| 000348D0 | teste | 43 | 13 | 484 | 178 |
++| TFEHXQ00 | produção | 57 | 14 | 867 | 0 |
++| TFEHXQ00 | teste | 122 | 32 | 41.512 | 3.177 |
++
++A Dígitro perde 178 registros do KPI de Cadastros e o Olim/teste 3.177 — é a
++correção pretendida, não perda de dado: as linhas continuam na tabela.
++
++## Reverter
++
++```sql
++update cockpit.monitcad_tabelas set painel = 'cadastro' where painel = 'movimento';
++```
++
++E tirar as tabelas de `TABELAS_MOVIMENTO`, senão o próximo import remarca.
+-- 
+2.43.0
+
