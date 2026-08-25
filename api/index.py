@@ -701,6 +701,37 @@ CSV_COLS = {
 # SX5 por GRUPO (SX5_S4, SX5_T3...) continua valendo — aquilo é cadastro de verdade.
 TABELAS_IGNORADAS = {"SX5", "SX6", "SX7"}
 
+# Documento e saldo NÃO são carga de cadastro: nota fiscal, pedido, título,
+# ordem de produção, saldo de estoque e saldo contábil nascem da operação, não do
+# trabalho de cadastramento do projeto. Somados junto, distorciam a contagem da
+# aba Cadastros — e a pergunta que eles respondem ("a operação já rodou?") é a da
+# aba Movimentos/Cobertura, que trabalha por cenário, não por contagem de tabela.
+#
+# Estas tabelas continuam sendo IMPORTADAS (o histórico não se perde); só entram
+# com painel='movimento' e a aba Cadastros as filtra fora. Reversível: basta um
+# update em cockpit.monitcad_tabelas.painel.
+#
+# Classificar aqui, e não só no script do Protheus, é o que impede a tabela de
+# voltar quando alguém roda um script antigo — mesmo motivo do TABELAS_IGNORADAS.
+TABELAS_MOVIMENTO = {
+    "SC1", "SC7", "SC8",                       # compras: solicitação, pedido, cotação
+    "SC5", "SC6",                              # pedido de venda
+    "SF1", "SD1", "SF2", "SD2", "SF3",         # notas de entrada/saída e livros
+    "SE1", "SE2", "SEB",                       # títulos e retorno bancário
+    "SC2",                                     # ordem de produção
+    "SB2", "SB8", "SB9", "SBF", "SBJ",         # saldos de estoque
+    "SN3", "SN4",                              # saldos e movimentos do ativo
+    "CV3",                                     # saldos contábeis
+    "SL1", "SL2",                              # venda frente de loja
+    "AB3", "AB4", "AB5",                       # orçamentos de serviço
+    "AB6", "AB7", "AB8", "AB9", "ABC",         # ordens de serviço e apontamentos
+    "CN9", "CNB",                              # contratos: cabeçalho e itens da planilha
+}
+
+
+def _painel_da_tabela(tabela):
+    return "movimento" if (tabela or "").strip().upper() in TABELAS_MOVIMENTO else "cadastro"
+
 # Só para a mensagem de erro — os nomes na forma em que o usuário escreve
 QTD_ACEITOS = "QTDE, QTD, QTD_REAL, QUANTIDADE, REALIZADO, REGISTROS"
 
@@ -792,10 +823,14 @@ def api_monitcad(customer):
         return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
                       "vazio": True, "tabelas": [], "serie": [], "total_medicoes": 0})
     ult = meds[-1]
+    # painel='cadastro': documento e saldo vivem na aba Movimentos (ver
+    # TABELAS_MOVIMENTO). O filtro precisa estar em TODAS as consultas da aba —
+    # deixar de fora a dos módulos ou a da série faria os totais brigarem com a
+    # lista logo abaixo deles.
     tabelas = q("""select tabela, descricao, modulo, filtro, realizado, estimativa,
                           percentual, data_prev, etapa, responsavel, status
                      from cockpit.monitcad_tabelas
-                    where medicao_id=%s
+                    where medicao_id=%s and painel='cadastro'
                     order by modulo nulls last, realizado desc, tabela""", (ult["id"],))
     # Sem monitcad.estimativas cadastradas não existe % de carga — só contagem.
     tem_est = any(float(t["estimativa"] or 0) > 0 for t in tabelas)
@@ -804,7 +839,8 @@ def api_monitcad(customer):
                           count(*) filter (where realizado > 0) as com_carga,
                           sum(realizado) as registros
                      from cockpit.monitcad_tabelas
-                    where medicao_id=%s group by 1 order by 4 desc, 1""", (ult["id"],))
+                    where medicao_id=%s and painel='cadastro'
+                    group by 1 order by 4 desc, 1""", (ult["id"],))
     serie = q("""select m.data_medicao, m.semana,
                         sum(t.realizado)  as realizado,
                         sum(t.estimativa) as estimativa,
@@ -814,7 +850,7 @@ def api_monitcad(customer):
                              else null end as pct
                    from cockpit.monitcad_medicoes m
                    join cockpit.monitcad_tabelas t on t.medicao_id = m.id
-                  where m.customer=%s and m.ambiente=%s
+                  where m.customer=%s and m.ambiente=%s and t.painel='cadastro'
                   group by m.data_medicao, m.semana
                   order by m.data_medicao""", (customer, amb))
     return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
@@ -838,7 +874,7 @@ select m.data_medicao, m.semana_iso, m.fim_semana, m.hora_medicao,
        sum(t.realizado)                        as realizado,
        sum(t.estimativa)                       as estimativa
   from med m
-  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
+  join cockpit.monitcad_tabelas t on t.medicao_id = m.id and t.painel = 'cadastro'
  group by 1, 2, 3, 4
  order by 1
 """
@@ -857,7 +893,7 @@ select t.tabela,
        max(t.estimativa) filter (where t.medicao_id = (select id from ult)) as estimativa,
        jsonb_object_agg(to_char(m.data_medicao,'YYYY-MM-DD'), t.realizado)  as serie
   from med m
-  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
+  join cockpit.monitcad_tabelas t on t.medicao_id = m.id and t.painel = 'cadastro'
  group by t.tabela
  order by max(t.modulo) nulls last, t.tabela
 """
@@ -1103,14 +1139,15 @@ def api_monitcad_upload(customer):
             linhas.append((mid, customer, amb, dt, t.get("tabela"), t.get("descricao"),
                            t.get("modulo"), t.get("filtro"), real, est, pct,
                            _data_iso(t.get("data_prev")), t.get("etapa"),
-                           t.get("responsavel"), t.get("status")))
+                           t.get("responsavel"), t.get("status"),
+                           _painel_da_tabela(t.get("tabela"))))
         if linhas:
             with db() as c, c.cursor() as cur:
                 execute_values(cur, """
                     insert into cockpit.monitcad_tabelas
                       (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
                        modulo, filtro, realizado, estimativa, percentual, data_prev,
-                       etapa, responsavel, status)
+                       etapa, responsavel, status, painel)
                     values %s""", linhas, page_size=200)
             n_tab += len(linhas)
 
