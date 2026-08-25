@@ -173,8 +173,13 @@
             <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
           <div id="tab-acoes" class="flex items-center gap-2 text-xs pb-2 hidden">
-            <button data-act="expand-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Expandir</button>
-            <button data-act="collapse-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Recolher</button>
+            <span id="acoes-arvore" class="flex items-center gap-2">
+              <button data-act="expand-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Expandir</button>
+              <button data-act="collapse-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Recolher</button>
+              <span class="w-px h-4 bg-slate-200"></span>
+            </span>
+            <button id="ab-html"  class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">⬇ Exportar HTML</button>
+            <button id="ab-email" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">✉ Rascunho no Gmail</button>
           </div>
         </div>
 
@@ -298,8 +303,6 @@
             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
               <button id="cad-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
-              <button id="cad-html" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⬇ Exportar HTML</button>
-              <button id="cad-email" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">✉ Rascunho no Gmail</button>
               <label id="cad-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
                 ⬆ Subir medição (.csv / .json)
                 <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
@@ -1444,8 +1447,10 @@ function setTab(nome) {
     b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${on ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
   });
   TABS.forEach(t => $(`#tab-${t}`).classList.toggle('hidden', t !== nome));
-  // Expandir/Recolher só faz sentido nas abas com árvore
-  $('#tab-acoes').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(nome));
+  // A barra de ações acompanha TODAS as abas: exportar e rascunho valem em
+  // qualquer uma. Só Expandir/Recolher continua restrito às abas com árvore.
+  $('#tab-acoes').classList.remove('hidden');
+  $('#acoes-arvore').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(nome));
   // Carga preguiçosa: todas seguem o cliente do projeto aberto
   if (nome === 'consumo') renderConsumo();
   if (nome === 'gaps') initGaps();
@@ -2066,9 +2071,6 @@ function initCadastros(ambiente = 'producao') {
  *  quer continuar nela ao pular de Produção para Testes. */
 function aplicaVisao() {
   $$('.cad-visao-btn').forEach(b => b.classList.toggle('is-on', b.dataset.visao === cad.visao));
-  // Exportar HTML e rascunho de e-mail retratam a ÚLTIMA medição — não fazem
-  // sentido na visão de evolução, e um botão que mente é pior que um ausente
-  ['#cad-html', '#cad-email'].forEach(sel => $(sel).classList.toggle('hidden', cad.visao !== 'atual'));
   if (cad.visao === 'evolucao') carregaEvolucao(); else pintaAtual();
 }
 
@@ -3056,17 +3058,202 @@ function relatorioCadastrosHTML() {
 </div></body></html>`;
 }
 
-$('#cad-html').addEventListener('click', () => {
-  const html = relatorioCadastrosHTML();
-  if (!html) { alert('Não há medição para exportar.'); return; }
-  const nome = `status-cadastros-${(cad.customer || '').toLowerCase()}-${(cad.dados.ultima_medicao || '').replace(/-/g, '')}.html`;
-  const url = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
-  const a = Object.assign(document.createElement('a'), { href: url, download: nome });
+// ============================================================================
+//  EXPORTAR HTML / RASCUNHO NO GMAIL — vale para TODAS as abas
+// ============================================================================
+// Duas formas de virar relatório:
+//
+//  1. Relatório CURADO (só Cadastros hoje): HTML escrito à mão, com os números
+//     recalculados a partir de cad.dados. Sai melhor, mas custa manutenção.
+//  2. SNAPSHOT da aba: percorre o DOM do painel visível e troca as classes do
+//     Tailwind por style inline. Não conhece nenhuma aba em particular, então
+//     funciona nas que existem e nas que ainda vão existir — que é justamente o
+//     pedido. Gmail ignora <style> e class, por isso tudo precisa ser inline.
+//
+// O snapshot exporta O QUE ESTÁ NA TELA: filtro aplicado, linha recolhida e
+// sub-aba escolhida entram (ou não) exatamente como o usuário deixou.
+
+const SNAP_FORA = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'BUTTON', 'TEMPLATE', 'IFRAME']);
+
+/** Campo de formulário vira TEXTO com o valor atual. Sumir com o <input> deixava
+ *  o rótulo órfão ("Horas do projeto —") e escondia justamente o que o usuário
+ *  ajustou antes de exportar. */
+function snapCampo(el) {
+  const t = el.tagName.toUpperCase();
+  if (t === 'INPUT' && ['checkbox', 'radio'].includes(el.type)) return el.checked ? '☑' : '☐';
+  if (t === 'SELECT') return escapeHtml(el.selectedOptions?.[0]?.textContent || '');
+  const v = (el.value || '').trim();
+  return v ? `<b>${escapeHtml(v)}</b>` : '';
+}
+
+// Herdadas: só valem a pena no filho quando DIFEREM do pai — senão cada <td>
+// carregaria a fonte inteira e o e-mail viraria um monstro de 2 MB.
+const SNAP_HERDA = ['color', 'font-family', 'font-size', 'font-weight', 'font-style',
+                    'text-align', 'text-transform', 'letter-spacing', 'line-height',
+                    'white-space'];
+
+const ehVazio = (v) => !v || v === '0px' || v === 'none' || v === 'normal' ||
+                       v === 'auto' || v === 'rgba(0, 0, 0, 0)' || v === 'transparent' ||
+                       /^0px none/.test(v) || v === 'baseline' || v === '0px 0px';
+
+function snapEstilo(cs, pai, tag, larguraTabela) {
+  const st = [];
+  for (const p of SNAP_HERDA) {
+    const v = cs.getPropertyValue(p);
+    if (v && (!pai || pai.getPropertyValue(p) !== v)) st.push(`${p}:${v}`);
+  }
+  for (const p of ['background-color', 'border-radius', 'vertical-align',
+                   'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
+                   'margin-top', 'margin-bottom',
+                   'border-top', 'border-right', 'border-bottom', 'border-left']) {
+    const v = cs.getPropertyValue(p);
+    if (!ehVazio(v)) st.push(`${p}:${v}`);
+  }
+  const dec = cs.getPropertyValue('text-decoration-line');
+  if (dec && dec !== 'none') st.push(`text-decoration:${dec}`);
+  // Largura da célula em PORCENTAGEM, não em px: o px foi medido na tela do
+  // usuário (1440, 1920…) e estouraria o cartão de 900px do relatório. A
+  // proporção entre as colunas é o que importa, e ela sobrevive à conversão.
+  if (tag === 'TD' || tag === 'TH') {
+    const w = parseFloat(cs.getPropertyValue('width')) || 0;
+    if (w > 0 && larguraTabela > 0) st.push(`width:${(100 * w / larguraTabela).toFixed(2)}%`);
+  } else if (tag === 'TABLE') {
+    st.push('width:100%', 'border-collapse:collapse');
+  }
+  return st.join(';');
+}
+
+function snapNo(no, pai, opt) {
+  if (no.nodeType === 3) return escapeHtml(no.nodeValue);
+  if (no.nodeType !== 1) return '';
+  const tag = no.tagName.toUpperCase();
+  if (SNAP_FORA.has(tag)) return '';
+  if (tag === 'SVG') return opt.email ? '' : no.outerHTML;   // Gmail derruba SVG
+  const cs = getComputedStyle(no);
+  if (cs.display === 'none' || cs.visibility === 'hidden') return '';
+  if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return snapCampo(no);
+
+  // Gmail não faz flex nem grid: uma fileira de KPIs viraria uma pilha de
+  // cartões gigantes. Fileira (grid de várias colunas ou flex em linha) com dois
+  // filhos ou mais vira <table> de uma linha — que todo cliente de e-mail sabe
+  // desenhar lado a lado.
+  const filhos = [...no.children];
+  const emLinha = filhos.length >= 2 && (
+    (cs.display.includes('grid') && (cs.gridTemplateColumns || '').split(/\s+/).filter(Boolean).length > 1) ||
+    (cs.display.includes('flex') && !(cs.flexDirection || '').startsWith('column')));
+  if (emLinha) {
+    const tds = filhos.map(f => {
+      const dentro = snapNo(f, cs, opt);
+      return dentro ? `<td style="vertical-align:top;padding-right:8px">${dentro}</td>` : '';
+    }).join('');
+    return tds ? `<table style="width:100%;border-collapse:collapse"><tr>${tds}</tr></table>` : '';
+  }
+
+  // Barra de progresso: div colorida, sem filho e baixinha. Sem a altura ela
+  // colapsa e o relatório perde o gráfico inteiro.
+  const folha = !no.firstElementChild;
+  const alt = parseFloat(cs.height) || 0;
+  const tab = (tag === 'TD' || tag === 'TH') ? no.closest('table') : null;
+  let est = snapEstilo(cs, pai, tag, tab ? tab.getBoundingClientRect().width : 0);
+  // Barra de progresso e quadradinho de legenda: div/span colorido, sem filho e
+  // baixinho. Sem altura ele colapsa; e sem inline-block um <span> com largura
+  // simplesmente não aparece — era o que sumia da legenda.
+  if (folha && alt > 0 && alt <= 24 && !ehVazio(cs.backgroundColor)) {
+    est += `${est ? ';' : ''}display:inline-block;height:${cs.height};width:${cs.width}`;
+  }
+  // Tabela vira <table>; o resto do layout (grid/flex) vira <div> empilhado —
+  // Gmail não faz flex nem grid, então insistir nisso só quebraria o alinhamento.
+  const t = ['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'TD', 'TH',
+             'H1', 'H2', 'H3', 'H4', 'P', 'SPAN', 'B', 'STRONG', 'EM', 'I',
+             'UL', 'OL', 'LI', 'BR', 'HR', 'IMG'].includes(tag) ? tag.toLowerCase() : 'div';
+  if (t === 'br' || t === 'hr') return `<${t}>`;
+  if (t === 'img') return `<img src="${escapeAttr(no.getAttribute('src') || '')}" style="max-width:100%">`;
+
+  let dentro = '';
+  for (const f of no.childNodes) dentro += snapNo(f, cs, opt);
+  if (!dentro.trim() && !['TD', 'TH'].includes(tag) && !est.includes('height:')) return '';
+  const extra = (t === 'td' || t === 'th') && no.getAttribute('colspan')
+    ? ` colspan="${escapeAttr(no.getAttribute('colspan'))}"` : '';
+  return `<${t}${extra}${est ? ` style="${est}"` : ''}>${dentro}</${t}>`;
+}
+
+/** Snapshot do painel visível, já em HTML de e-mail. */
+function snapshotAba(el, opt = {}) {
+  if (!el) return '';
+  let out = '';
+  for (const f of el.childNodes) out += snapNo(f, null, opt);
+  return out;
+}
+
+// ── Que painel cada aba exporta, e com que nome ──────────────────────────────
+const RELATORIOS = {
+  resumo:    { titulo: 'Resumo do Projeto',       alvo: '#tab-resumo' },
+  crono:     { titulo: 'Cronograma',              alvo: '#d-crono' },
+  modulos:   { titulo: 'Apontamentos por Módulo', alvo: '#d-modulos' },
+  etapas:    { titulo: 'Apontamentos por Etapa',  alvo: '#d-etapas' },
+  consumo:   { titulo: 'Consumo por Etapa',       alvo: '#tab-consumo' },
+  gaps:      { titulo: 'GAPs',                    alvo: '#tab-gaps' },
+  cadastros: { titulo: 'Status dos Cadastros',    alvo: '#tab-cadastros', curado: relatorioCadastrosHTML },
+  transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
+};
+
+/** Cabeçalho/rodapé comuns — o que identifica de QUEM e de QUANDO é o número.
+ *  Relatório sem cliente e sem data circula por e-mail e vira armadilha. */
+function molduraRelatorio(titulo, corpo, extra = '') {
+  const p = state.selected?.projeto || {};
+  const cliente = (p.nome_cliente_projeto || '').trim() || '—';
+  const C = { petroleo: '#002233', cinza: '#545454' };
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+<title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title></head>
+<body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
+<div style="max-width:900px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
+  <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
+  <h1 style="margin:4px 0 2px;font-size:22px">${escapeHtml(titulo)}</h1>
+  <p style="margin:0;color:${C.cinza};font-size:13px">
+    ${escapeHtml((p.descricao_projeto || p.projeto || '').trim())}${p.projeto_id ? ` · ${escapeHtml(p.projeto_id)}` : ''}${extra}</p>
+  <div style="margin-top:16px">${corpo}</div>
+  <p style="margin-top:24px;color:#9C9C9C;font-size:11px">
+    Gerado pela Gestão de Projetos TOTVS SC em ${new Date().toLocaleString('pt-BR')}.</p>
+</div></body></html>`;
+}
+
+/** Relatório da aba ATIVA. `email` estreita para o que o Gmail aguenta. */
+function relatorioDaAba({ email = false } = {}) {
+  const aba = state.tab || 'resumo';
+  const r = RELATORIOS[aba];
+  if (!r) return null;
+  // A aba Cadastros tem relatório escrito à mão — melhor que o snapshot, mas só
+  // vale na visão "atual"; na de evolução o snapshot é que conta a história.
+  if (r.curado && !(aba === 'cadastros' && cad.visao === 'evolucao')) {
+    const h = r.curado();
+    if (h) return { titulo: r.titulo, html: h, aba };
+  }
+  const el = $(r.alvo);
+  const corpo = snapshotAba(el, { email });
+  if (!corpo.trim()) return null;
+  let extra = '';
+  if (aba === 'cadastros' || aba === 'transicao') {
+    const a = AMB[cad.ambiente]; if (a) extra = ` · ${a.label}`;
+  }
+  return { titulo: r.titulo, html: molduraRelatorio(r.titulo, corpo, extra), aba };
+}
+
+function nomeArquivoRel(aba) {
+  const cli = (state.selected?.cli || '').toLowerCase() || 'projeto';
+  const hoje = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  return `${aba}-${cli}-${hoje}.html`;
+}
+
+$('#ab-html').addEventListener('click', () => {
+  const r = relatorioDaAba();
+  if (!r) { alert('Não há nada nesta aba para exportar. Abra os dados primeiro.'); return; }
+  const url = URL.createObjectURL(new Blob([r.html], { type: 'text/html;charset=utf-8' }));
+  const a = Object.assign(document.createElement('a'), { href: url, download: nomeArquivoRel(r.aba) });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 });
 
-$('#cad-email').addEventListener('click', () => abreModalEmail());
+$('#ab-email').addEventListener('click', () => abreModalEmail());
 
 // ============================================================================
 //  CADASTROS — script SQL que levanta a contagem no banco do Protheus
@@ -3356,19 +3543,22 @@ const campo = (id, rot, valor = '', tipo = 'text', dica = '') => `
   </label>`;
 
 function abreModalEmail() {
-  const html = relatorioCadastrosHTML();
-  if (!html) { alert('Não há medição para enviar.'); return; }
-  const j = cad.dados;
-  const cliente = (state.selected?.projeto?.nome_cliente_projeto || j.projeto?.cliente_nome || '').trim();
-  const assunto = `Status dos Cadastros · ${cliente} · ${fmtData(String(j.ultima_medicao || ''))}`;
+  // O corpo é o relatório da aba ATIVA — o mesmo que o "Exportar HTML" baixa,
+  // só que sem SVG, que o Gmail derruba.
+  const r = relatorioDaAba({ email: true });
+  if (!r) { alert('Não há nada nesta aba para enviar. Abra os dados primeiro.'); return; }
+  const html = r.html;
+  const cliente = (state.selected?.projeto?.nome_cliente_projeto || '').trim();
+  const hoje = new Date().toLocaleDateString('pt-BR');
+  const assunto = [r.titulo, cliente, hoje].filter(Boolean).join(' · ');
 
   const m = modal('Criar rascunho no Gmail',
     campo('em-para', 'Para (separe por vírgula)') +
     campo('em-cc', 'Cc (opcional)') +
     campo('em-assunto', 'Assunto', assunto) +
-    `<p class="text-xs text-slate-500">O corpo vai com o relatório completo: KPIs, registros por
-     módulo, evolução por medição e todas as tabelas. O rascunho é criado na sua conta —
-     nada é enviado.</p>`,
+    `<p class="text-xs text-slate-500">O corpo leva a aba <b>${escapeHtml(r.titulo)}</b> como
+     está na tela agora — filtro aplicado, linha recolhida e sub-aba escolhida entram do
+     mesmo jeito. O rascunho é criado na sua conta: nada é enviado.</p>`,
     'Criar rascunho');
 
   m.aoConfirmar(async () => {
