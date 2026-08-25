@@ -5,9 +5,14 @@ Projetos · TOTVS SC — backend serverless (Vercel)
 =================================================
 Porte do Projetos/server.py + pci_client.py para função serverless.
 
-- Lista de projetos: lida de cockpit.projetos (Supabase), sincronizada sob
-  demanda pelo botão "Atualizar" (POST /api/sync?page=N, paginado pelo front
-  para não estourar o timeout de 60s).
+- Lista de projetos: lida de cockpit.projetos (Supabase), sincronizada de HORA
+  em HORA pelo pg_cron do Supabase (jobid 7 "projetos-sync" -> GET
+  /api/cron/sync com Bearer CRON_SECRET) e sob demanda pelo botão "Sincronizar
+  API" (POST /api/sync?page=N, paginado pelo front para não estourar os 60s).
+- RECORTE: só entram projetos da regional (região do coordenador titular ou
+  auxiliar em SYNC_REGIOES), de clientes de cockpit.clientes, ou de clientes da
+  regional com projeto ainda vivo. Ver no_recorte() — e a MESMA regra em SQL em
+  purga_fora_do_recorte().
 - Detalhe (mapa/cronograma): AO VIVO na API PCI, com cache curto em memória.
 - Login e recorte por cliente: mesmos do ecossistema (cockpit.usuarios_login +
   cockpit.usuario_clientes). Admin vê todos os clientes.
@@ -33,6 +38,22 @@ TASKS_USER = os.environ.get("TASKS_USERNAME", "")
 TASKS_PASS = os.environ.get("TASKS_PASSWORD", "")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-insecure-secret")
 CRON_SECRET = os.environ.get("CRON_SECRET", "")
+
+# ── Recorte do sync (regional SC Sul + clientes do Cockpit) ─────────────────
+# A API PCI devolve os ~1.7 mil projetos de TODA a TOTVS SC. Só interessam os da
+# regional e os dos clientes atendidos: sem isso a lista vira palheiro e o cron
+# grava 700 projetos que ninguém abre. Um projeto entra se a REGIÃO do
+# coordenador (titular OU auxiliar) estiver em SYNC_REGIOES, ou se o cliente
+# estiver em cockpit.clientes. SYNC_REGIOES vazio = sem filtro (volta ao antigo).
+SYNC_REGIOES = {r.strip() for r in os.environ.get("SYNC_REGIOES", "201,202,211").split(",")
+                if r.strip()}
+# O cron apaga o que está fora do recorte (projeto que trocou de coordenador/
+# região some da base). SYNC_PURGE=0 desliga.
+SYNC_PURGE = os.environ.get("SYNC_PURGE", "1").strip().lower() not in ("0", "false", "off")
+# Terceiro critério: cliente DA regional cujo projeto ainda está vivo, mesmo com
+# coordenador de outra região (ex.: PRODUZA/203, GROWTH/601, SOLFACIL/302 — todos
+# clientes 201). Sem o corte por status isso arrastaria 644 projetos finalizados.
+SYNC_ENCERRADOS = {"finalizado", "cancelado"}
 SESSION_TTL = 12 * 3600
 COOKIE_NAME = "proj_sess"
 
@@ -394,6 +415,7 @@ def api_view_as():
 @app.get("/api/health")
 def api_health():
     info = {"ok": True, "service": "projetos-vercel",
+            "recorte": {"regioes": sorted(SYNC_REGIOES), "purga": SYNC_PURGE},
             "env": {"DATABASE_URL": bool(DATABASE_URL), "TASKS_USERNAME": bool(TASKS_USER),
                     "TASKS_PASSWORD": bool(TASKS_PASS), "SESSION_SECRET": SESSION_SECRET != "dev-insecure-secret"},
             "db": False}
@@ -465,7 +487,7 @@ def api_sync():
     data = pci_get(LISTA_URL, {"page": page, "pageSize": size})
     if not isinstance(data, dict):
         return _err(502, "Resposta inesperada da API PCI.")
-    items = data.get("items") or []
+    items, ignorados = filtra_recorte(data.get("items") or [])
     for p in items:
         cod = p.get("codigo_projeto")
         if not cod:
@@ -489,7 +511,69 @@ def api_sync():
               p.get("status_projeto"), p.get("tipo_projeto"), p.get("versao_projeto"),
               json.dumps(p)))
     return _json({"ok": True, "page": page, "gravados": len(items),
-                  "hasNext": bool(data.get("hasNext"))})
+                  "ignorados": ignorados, "hasNext": bool(data.get("hasNext"))})
+
+
+# ── Recorte: quem entra na base ─────────────────────────────────────────────
+_CLIENTES_CACHE = {"t": 0.0, "v": frozenset()}
+
+
+def clientes_cockpit(force=False):
+    """customers liberados em cockpit.clientes — cache de 5 min.
+    Se o banco falhar, devolve o último valor conhecido (nunca vazio por erro:
+    conjunto vazio + regiões vazias apagaria a base inteira na purga)."""
+    if not force and _CLIENTES_CACHE["v"] and time.time() - _CLIENTES_CACHE["t"] < 300:
+        return _CLIENTES_CACHE["v"]
+    try:
+        v = frozenset(str(r["customer"] or "").strip()
+                      for r in q("select customer from cockpit.clientes"))
+    except Exception:
+        return _CLIENTES_CACHE["v"]
+    if v:
+        _CLIENTES_CACHE.update(t=time.time(), v=v)
+    return v
+
+
+def no_recorte(p, clientes=None):
+    """True se o projeto é da regional (região do coordenador titular ou auxiliar)
+    ou de um cliente do Cockpit."""
+    if not SYNC_REGIOES:
+        return True
+    for k in ("regiao_coordenador_projeto", "regiao_coordenador_auxiliar"):
+        if str(p.get(k) or "").strip() in SYNC_REGIOES:
+            return True
+    if str(p.get("regiao_cliente_projeto") or "").strip() in SYNC_REGIOES \
+            and str(p.get("status_projeto") or "").strip().lower() not in SYNC_ENCERRADOS:
+        return True
+    cli = str(p.get("codigo_cliente_projeto") or "").strip()
+    return bool(cli) and cli in (clientes if clientes is not None else clientes_cockpit())
+
+
+def filtra_recorte(items, clientes=None):
+    if not SYNC_REGIOES:
+        return list(items), 0
+    clientes = clientes_cockpit() if clientes is None else clientes
+    dentro = [p for p in items if no_recorte(p, clientes)]
+    return dentro, len(items) - len(dentro)
+
+
+def purga_fora_do_recorte():
+    """Apaga de cockpit.projetos o que não casa mais com o recorte. Roda no fim do
+    cron; a regra SQL é a MESMA do no_recorte() — mexeu numa, mexa na outra."""
+    if not (SYNC_PURGE and SYNC_REGIOES):
+        return 0
+    regs = list(SYNC_REGIOES)
+    with db() as c, c.cursor() as cur:
+        cur.execute("""
+            delete from cockpit.projetos
+             where coalesce(btrim(raw->>'regiao_coordenador_projeto'), '') <> all(%s)
+               and coalesce(btrim(raw->>'regiao_coordenador_auxiliar'), '') <> all(%s)
+               and not (coalesce(btrim(raw->>'regiao_cliente_projeto'), '') = any(%s)
+                        and lower(coalesce(btrim(status_projeto), '')) <> all(%s))
+               and coalesce(btrim(codigo_cliente_projeto), '') not in (
+                     select coalesce(btrim(customer), '') from cockpit.clientes)
+        """, (regs, regs, regs, list(SYNC_ENCERRADOS)))
+        return cur.rowcount or 0
 
 
 # ── Sync completo para o CRON (pg_cron + pg_net) ────────────────────────────
@@ -539,17 +623,20 @@ def api_cron_sync():
     if not _cron_autorizado():
         return _err(401, "CRON_SECRET inválido ou ausente.")
     ini = time.time()
-    page, total, paginas = 1, 0, 0
+    page, total, paginas, ignorados = 1, 0, 0, 0
+    clientes = clientes_cockpit(force=True)
     while page <= 50:
         data = pci_get(LISTA_URL, {"page": page, "pageSize": 200})
         if not isinstance(data, dict):
             break
-        items = data.get("items") or []
+        items, fora = filtra_recorte(data.get("items") or [], clientes)
+        ignorados += fora
         total += _upsert_projetos(items)
         paginas += 1
         if not data.get("hasNext"):
             break
         page += 1
+    apagados = purga_fora_do_recorte()
     dur = int((time.time() - ini) * 1000)
     try:
         execute("""insert into cockpit.sync_log
@@ -559,7 +646,9 @@ def api_cron_sync():
                 (ini, dur, total, total))
     except Exception:
         pass
-    return _json({"ok": True, "paginas": paginas, "projetos": total, "duration_ms": dur})
+    return _json({"ok": True, "paginas": paginas, "projetos": total,
+                  "ignorados": ignorados, "apagados": apagados,
+                  "regioes": sorted(SYNC_REGIOES), "duration_ms": dur})
 
 
 # ── MONITCAD — status dos cadastros (aba "Cadastros") ───────────────────────

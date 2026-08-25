@@ -102,7 +102,7 @@
               class="hidden px-2 py-1.5 rounded-md bg-white/10 text-totvs-white text-xs border border-white/20">
         <option value="">👁 Ver como…</option>
       </select>
-      <button id="btn-sync" class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base">⟳ Sincronizar API</button>
+      <button id="btn-sync" class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base (só a regional e os clientes da carteira). O cron do Supabase já faz isso de hora em hora.">⟳ Sincronizar API</button>
       <button id="btn-refresh" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde transition-colors">↻ Atualizar</button>
     </div>
   </div>
@@ -1401,17 +1401,18 @@ $('#btn-sync').addEventListener('click', async () => {
   if (!confirm('Sincronizar a lista de projetos da API PCI? Pode levar alguns segundos.')) return;
   b.disabled = true;
   const txt = b.textContent;
-  let page = 1, total = 0;
+  let page = 1, total = 0, fora = 0;
   try {
     while (page <= 50) {
       b.textContent = `⟳ Sincronizando… pág ${page}`;
       const j = await api(`/api/sync?page=${page}`, { method: 'POST' });
-      total += j.gravados || 0;
+      total += j.gravados || 0; fora += j.ignorados || 0;
       if (!j.hasNext) break;
       page++;
     }
     b.textContent = txt; b.disabled = false;
-    alert(`Sincronização concluída: ${total} projeto(s) atualizados.`);
+    alert(`Sincronização concluída: ${total} projeto(s) atualizados.`
+      + (fora ? ` ${fora} fora da regional/carteira foram ignorados.` : ''));
     carregaLista();
   } catch (e) {
     b.textContent = txt; b.disabled = false;

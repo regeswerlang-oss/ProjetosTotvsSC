@@ -27,6 +27,9 @@ do resto). Sem build command.
 | `TASKS_PASSWORD` | senha do AD |
 | `TASKS_SC_BASE_URL` | `https://api.tscst.com.br/restAPI` |
 | `SESSION_SECRET` | `python3 -c "import secrets;print(secrets.token_hex(32))"` |
+| `CRON_SECRET` | segredo do `Authorization: Bearer` do `/api/cron/sync` (pg_cron jobid 7) |
+| `SYNC_REGIOES` | regiões do recorte — default `201,202,211`; **vazio desliga o filtro** |
+| `SYNC_PURGE` | `1` (default) apaga da base o que sai do recorte; `0` só para de gravar |
 
 Aplique a Production + Preview e faça **Redeploy** (variáveis só valem em deploy novo).
 
@@ -34,9 +37,11 @@ Aplique a Production + Preview e faça **Redeploy** (variáveis só valem em dep
 
 1. Abra a URL → cai em `/login`. Entre com o mesmo e-mail/senha dos outros apps
    (a base `cockpit.usuarios_login` é compartilhada).
-2. Clique em **⟳ Sincronizar API** — ele puxa os ~1735 projetos da API PCI,
-   página a página, e grava em `cockpit.projetos`. Só precisa na 1ª vez e quando
-   quiser atualizar.
+2. A base se atualiza sozinha **de hora em hora** (pg_cron do Supabase, jobid 7
+   `projetos-sync` → `GET /api/cron/sync` com o `CRON_SECRET`). O botão
+   **⟳ Sincronizar API** é só para forçar na hora.
+   Só entram projetos da regional ou da carteira — ver
+   `docs/specs/2026-08-25-recorte-regional-e-cron-horario.md`.
 3. **↻ Atualizar** recarrega a lista do Supabase (rápido, sem bater na API).
 
 ## Diagnóstico
