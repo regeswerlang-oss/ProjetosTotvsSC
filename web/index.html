@@ -170,6 +170,7 @@
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
             <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
             <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
+            <button data-tab="cobertura" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cobertura</button>
             <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
           <div id="tab-acoes" class="flex items-center gap-2 text-xs pb-2 hidden">
@@ -331,6 +332,27 @@
           <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
           <div id="mov-conteudo"></div>
         </div>
+        </div>
+
+        <!-- Aba Cobertura — cenários de movimento, testes × produção lado a lado.
+             Exportar HTML e Rascunho no Gmail ficam na barra de ações do topo,
+             que vale para todas as abas. -->
+        <div id="tab-cobertura" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="cob-cliente-nome" class="font-medium"></span>
+            <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">Testes × Produção</span>
+            <button id="cob-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+            <div class="ml-auto flex items-center gap-2">
+              <button id="cob-cenarios" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
+              <label id="cob-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+                ⬆ Importar análise (.csv / .json)
+                <input id="cob-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
+              </label>
+            </div>
+          </div>
+          <div id="cob-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
+          <div id="cob-conteudo"></div>
         </div>
 
         <!-- Aba Transição — painel de status do cliente do projeto aberto -->
@@ -1427,7 +1449,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'cadastros', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'cadastros', 'cobertura', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -1459,6 +1481,7 @@ function setTab(nome) {
   if (nome === 'consumo') renderConsumo();
   if (nome === 'gaps') initGaps();
   if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
+  if (nome === 'cobertura') initCobertura();
   if (nome === 'transicao') initTransicao();
 }
 
@@ -2972,7 +2995,9 @@ $('#mov-sql').addEventListener('click', () => abreModalSQL('movimentos'));
 
 $('#mov-file').addEventListener('change', enviaMovimentos);
 
-async function enviaMovimentos(ev) {
+// `depois` deixa a mesma rotina servir a sub-aba Movimentos e a aba
+// Cobertura: quem chamou decide para onde a tela vai depois de importar.
+async function enviaMovimentos(ev, depois) {
   const f = ev.target.files?.[0];
   ev.target.value = '';
   if (!f) return;
@@ -2997,7 +3022,8 @@ async function enviaMovimentos(ev) {
       m.fecha();
       alert(`${AMB[amb].label}: ${j.medicoes} medição(ões), ${j.dimensoes} combinação(ões) (${j.formato}).`);
       mov.customer = null;
-      setSub(amb === 'teste' ? 'mov_teste' : 'mov_prod');
+      if (depois) depois(amb);
+      else setSub(amb === 'teste' ? 'mov_teste' : 'mov_prod');
     } catch (e) {
       m.ocupado(false, 'Importar');
       m.erro(e.message);
@@ -3017,7 +3043,9 @@ function cenariosParaTxt(cens) {
   ].join(';')).join('\n') + (cens && cens.length ? '\n' : '');
 }
 
-$('#mov-cenarios').addEventListener('click', async () => {
+// Reaproveitada pelos dois botões 🎯 Cenários (sub-aba e aba Cobertura).
+// `depois` roda depois de salvar; sem ele, recarrega a sub-aba Movimentos.
+async function abreModalCenarios(depois) {
   const cli = state.selected?.cli;
   if (!cli) { alert('Abra um projeto antes de editar os cenários.'); return; }
   let atuais = [];
@@ -3050,14 +3078,351 @@ $('#mov-cenarios').addEventListener('click', async () => {
       });
       m.fecha();
       alert(`${j.cenarios} cenário(s) salvos.`);
-      mov.customer = null;
-      initMovimentos(mov.ambiente);
+      if (depois) depois();
+      else { mov.customer = null; initMovimentos(mov.ambiente); }
     } catch (e) {
       m.ocupado(false, 'Salvar cenários');
       m.erro(e.message);
     }
   });
-});
+}
+
+$('#mov-cenarios').addEventListener('click', () => abreModalCenarios());
+
+// ============================================================================
+//  ABA COBERTURA — leitura executiva dos cenários de movimento
+//  A sub-aba Movimentos mostra UMA base por vez, que é o que serve para
+//  trabalhar. Esta aba serve para DECIDIR: põe teste e produção lado a lado.
+//  Cenário coberto em teste e zerado em produção é o achado que interessa numa
+//  virada — e é justamente o que nenhuma das duas sub-abas isoladas mostra.
+//  Exportar HTML e Rascunho no Gmail vêm da barra de ações do topo (a aba está
+//  registrada em RELATORIOS com relatório curado).
+// ============================================================================
+const cob = { customer: null, prod: null, teste: null, carregando: false };
+
+const ST_COB = {
+  COBERTO:      { cls: 'bg-emerald-100 text-emerald-800', rot: 'Coberto',      cor: '#047857' },
+  SO_TESTE:     { cls: 'bg-amber-100 text-amber-900',     rot: 'Só em teste',  cor: '#B45309' },
+  FALTANTE:     { cls: 'bg-rose-100 text-rose-800',       rot: 'Faltante',     cor: '#BE123C' },
+  OPCIONAL:     { cls: 'bg-slate-100 text-slate-600',     rot: 'Opcional',     cor: '#64748B' },
+};
+
+const chaveCen = (c) => [c.analise, c.dim1, c.dim2, c.dim3, c.dim4]
+  .map(v => (v || '*').trim().toUpperCase()).join('|');
+
+function initCobertura() {
+  const cli = state.selected?.cli;
+  $('#cob-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (cob.customer === cli && (cob.prod || cob.teste)) { desenhaCobertura(); return; }
+  carregaCobertura(cli);
+}
+
+async function carregaCobertura(customer) {
+  cob.customer = customer || null;
+  const box = $('#cob-conteudo');
+  $('#cob-kpis').classList.add('hidden');
+  if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver a cobertura de cenários.'); return; }
+  box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando cobertura…</div>';
+  cob.carregando = true;
+  try {
+    // As duas bases juntas: é a comparação que dá sentido à aba.
+    const [prod, teste] = await Promise.all([
+      api(`/api/monitmov/${encodeURIComponent(customer)}?ambiente=producao`),
+      api(`/api/monitmov/${encodeURIComponent(customer)}?ambiente=teste`),
+    ]);
+    cob.prod = prod; cob.teste = teste;
+  } catch (e) {
+    box.innerHTML = blocoErro('Não foi possível carregar a cobertura', e, () => carregaCobertura(customer));
+    return;
+  } finally {
+    cob.carregando = false;
+  }
+  desenhaCobertura();
+}
+
+/** Junta os dois ambientes por cenário. Um só array, duas colunas de medida. */
+function consolidaCobertura() {
+  const p = cob.prod || {}, t = cob.teste || {};
+  const cenarios = (p.cenarios && p.cenarios.length ? p.cenarios : t.cenarios) || [];
+  const qtdePor = (j) => {
+    const m = new Map();
+    (j.cobertura || []).forEach(c => m.set(chaveCen(c), Number(c.qtde || 0)));
+    return m;
+  };
+  const mp = qtdePor(p), mt = qtdePor(t);
+  return cenarios.map(c => {
+    const k = chaveCen(c);
+    const qp = mp.get(k) || 0, qt = mt.get(k) || 0;
+    let status;
+    if (qp > 0) status = 'COBERTO';
+    else if (qt > 0) status = 'SO_TESTE';
+    else status = c.esperado === false ? 'OPCIONAL' : 'FALTANTE';
+    return { ...c, qtde_prod: qp, qtde_teste: qt, status };
+  });
+}
+
+function desenhaCobertura() {
+  const box = $('#cob-conteudo');
+  const p = cob.prod || {}, t = cob.teste || {};
+  const linhas = consolidaCobertura();
+  const semMedicao = p.vazio !== false && t.vazio !== false;
+
+  if (!linhas.length) {
+    $('#cob-kpis').classList.add('hidden');
+    box.innerHTML = blocoVazioCad(
+      'Nenhum cenário combinado para este cliente.',
+      `<p class="text-xs text-slate-400 mt-2">A cobertura compara o que <b>deveria</b> acontecer
+        com o que aconteceu. Sem a lista do que deveria, não há o que comparar — e essa lista é
+        a pauta da reunião com o cliente, não um palpite nosso.</p>
+       <p class="text-xs text-slate-400 mt-2">Use <b>🎯 Cenários</b> e cole o
+        <span class="font-mono">CENARIOS_MONITOR.TXT</span>${semMedicao
+          ? ', e <b>⬆ Importar análise</b> para subir a medição do D5.'
+          : '.'}</p>`);
+    return;
+  }
+
+  const cont = (s) => linhas.filter(l => l.status === s).length;
+  const faltantes = cont('FALTANTE'), soTeste = cont('SO_TESTE'), cobertos = cont('COBERTO');
+  const naoPrev = [
+    ...(p.nao_previstos || []).map(x => ({ ...x, base: 'Produção' })),
+    ...(t.nao_previstos || []).map(x => ({ ...x, base: 'Testes' })),
+  ];
+  const aClass = [
+    ...(p.a_classificar || []).map(x => ({ ...x, base: 'Produção' })),
+    ...(t.a_classificar || []).map(x => ({ ...x, base: 'Testes' })),
+  ];
+
+  const kpi = (rot, val, sub, cls) => `
+    <div class="rounded-lg p-4 ${cls}"><p class="text-xs opacity-80">${rot}</p>
+      <p class="text-2xl font-totvs mt-1">${val}</p><p class="text-xs opacity-80 mt-0.5">${sub}</p></div>`;
+  $('#cob-kpis').classList.remove('hidden');
+  $('#cob-kpis').innerHTML =
+    kpi('Cobertos em produção', `${cobertos}/${linhas.length}`,
+        `${linhas.length} cenário(s) combinados`,
+        faltantes ? 'bg-rose-600 text-white' : 'bg-totvs-petroleo text-white') +
+    kpi('Só em teste', String(soTeste), 'rodou em homologação, não em produção',
+        soTeste ? 'bg-amber-500 text-white' : 'bg-totvs-blue text-totvs-petroleo') +
+    kpi('Faltantes', String(faltantes), 'sem movimento em nenhuma base',
+        'bg-totvs-purple text-white') +
+    kpi('Últimas medições',
+        p.vazio === false ? fmtData(String(p.ultima_medicao || '')) : '—',
+        `testes: ${t.vazio === false ? fmtData(String(t.ultima_medicao || '')) : '—'}`,
+        'bg-white border border-slate-200 text-totvs-petroleo');
+
+  const partes = [];
+
+  if (semMedicao) {
+    partes.push(`
+      <div class="bg-amber-50 border border-amber-200 rounded-lg p-5 mb-4 text-sm">
+        <p class="font-semibold text-amber-900">Cenários combinados, mas nenhuma medição importada.</p>
+        <p class="text-amber-800 mt-1">Todo cenário aparece como faltante porque ainda não há com
+          o que comparar. Rode o script da sub-aba Movimentos (🗄 Script SQL) e suba o CSV em
+          <b>⬆ Importar análise</b>.</p>
+      </div>`);
+  }
+
+  // ── Cobertura consolidada, por análise ──────────────────────────────────
+  const porAnalise = new Map();
+  linhas.forEach(l => porAnalise.set(l.analise, (porAnalise.get(l.analise) || []).concat([l])));
+  const ordem = { FALTANTE: 0, SO_TESTE: 1, COBERTO: 2, OPCIONAL: 3 };
+
+  partes.push(`
+    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+      <div class="flex items-baseline gap-3 mb-3">
+        <h3 class="text-sm font-semibold text-slate-700">Cenários · testes × produção</h3>
+        <span class="text-xs text-slate-500">faltante e "só em teste" vêm primeiro</span>
+      </div>
+      ${[...porAnalise.entries()].map(([an, itens]) => {
+        const ok = itens.filter(l => l.status === 'COBERTO').length;
+        const ord = [...itens].sort((a, b) =>
+          (ordem[a.status] - ordem[b.status]) || (a.descricao || '').localeCompare(b.descricao || ''));
+        return `
+        <div class="mb-4 last:mb-0">
+          <p class="text-xs font-semibold text-slate-500 mb-1">${escapeHtml(an)}
+            <span class="font-normal">· ${ok}/${itens.length} coberto(s) em produção</span></p>
+          <div class="overflow-x-auto"><table class="w-full text-sm">
+            <thead><tr class="text-xs text-slate-500 text-left">
+              <th class="pb-2 pr-3">Cenário</th><th class="pb-2 pr-3">Etapa</th>
+              <th class="pb-2 pr-3">Responsável</th>
+              <th class="pb-2 pr-3 text-right">Testes</th>
+              <th class="pb-2 pr-3 text-right">Produção</th><th class="pb-2">Status</th>
+            </tr></thead>
+            <tbody>${ord.map(l => {
+              const st = ST_COB[l.status] || ST_COB.OPCIONAL;
+              const combo = [l.dim1, l.dim2, l.dim3, l.dim4].map(v => (v || '*').trim()).join(' · ');
+              return `<tr class="border-t border-slate-100">
+                <td class="py-2 pr-3">
+                  <div>${escapeHtml(l.descricao || '(sem descrição)')}</div>
+                  <div class="font-mono text-[11px] text-slate-400">${escapeHtml(combo)}</div>
+                </td>
+                <td class="py-2 pr-3 text-xs">${escapeHtml(l.etapa || '—')}</td>
+                <td class="py-2 pr-3 text-xs">${escapeHtml(l.responsavel || '—')}</td>
+                <td class="py-2 pr-3 text-right tabular-nums ${l.qtde_teste > 0 ? '' : 'text-slate-300'}">${fmtNum(l.qtde_teste)}</td>
+                <td class="py-2 pr-3 text-right tabular-nums font-semibold ${l.qtde_prod > 0 ? '' : 'text-slate-300'}">${fmtNum(l.qtde_prod)}</td>
+                <td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-semibold ${st.cls}">${st.rot}</span></td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table></div>
+        </div>`;
+      }).join('')}
+    </div>`);
+
+  if (aClass.length) {
+    partes.push(`
+      <div class="bg-white rounded-lg border border-amber-300 p-5 mb-4">
+        <h3 class="text-sm font-semibold text-amber-900 mb-1">A classificar
+          <span class="font-normal text-slate-500">· ${aClass.length} combinação(ões)</span></h3>
+        <p class="text-xs text-slate-500 mb-3">Movimento bancário que nenhuma regra do de-para
+          reconheceu. Vira regra na próxima rodada — não é erro.</p>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="text-xs text-slate-500 text-left">
+            <th class="pb-2 pr-3">Base</th><th class="pb-2 pr-3">Sentido</th>
+            <th class="pb-2 pr-3">Tipo doc.</th><th class="pb-2 pr-3">Tipo título</th>
+            <th class="pb-2 pr-3">Detalhe</th><th class="pb-2 text-right">Qtde</th>
+          </tr></thead>
+          <tbody>${aClass.map(d => `
+            <tr class="border-t border-slate-100">
+              <td class="py-2 pr-3 text-xs">${escapeHtml(d.base)}</td>
+              <td class="py-2 pr-3">${escapeHtml(d.dim2 || '—')}</td>
+              <td class="py-2 pr-3 font-mono text-xs">${dimRot(d.dim3, 'TIPO_DOC')}</td>
+              <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(d.dim4 || '—')}</td>
+              <td class="py-2 pr-3 text-xs text-slate-500">${escapeHtml(d.descricao || '—')}</td>
+              <td class="py-2 text-right tabular-nums">${fmtNum(d.qtde)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+      </div>`);
+  }
+
+  if (naoPrev.length) {
+    partes.push(`
+      <div class="bg-white rounded-lg border border-slate-200 p-5">
+        <h3 class="text-sm font-semibold text-slate-700 mb-1">Fora do combinado
+          <span class="font-normal text-slate-500">· ${naoPrev.length} combinação(ões)</span></h3>
+        <p class="text-xs text-slate-500 mb-3">Movimento medido que não casa com nenhum cenário
+          da lista. Ou falta cenário na lista, ou está acontecendo operação fora do combinado.</p>
+        <div class="overflow-x-auto"><table class="w-full text-sm">
+          <thead><tr class="text-xs text-slate-500 text-left">
+            <th class="pb-2 pr-3">Base</th><th class="pb-2 pr-3">Análise</th>
+            <th class="pb-2 pr-3">Combinação</th><th class="pb-2 text-right">Qtde</th>
+          </tr></thead>
+          <tbody>${naoPrev.map(d => `
+            <tr class="border-t border-slate-100">
+              <td class="py-2 pr-3 text-xs">${escapeHtml(d.base)}</td>
+              <td class="py-2 pr-3 text-xs">${escapeHtml(d.analise || '')}</td>
+              <td class="py-2 pr-3 font-mono text-xs">${escapeHtml([d.dim1, d.dim2, d.dim3, d.dim4].filter(Boolean).join(' · '))}</td>
+              <td class="py-2 text-right tabular-nums">${fmtNum(d.qtde)}</td>
+            </tr>`).join('')}</tbody>
+        </table></div>
+      </div>`);
+  }
+
+  box.innerHTML = partes.join('');
+}
+
+/** Relatório curado da aba — o que vai no HTML exportado e no rascunho.
+ *  Sem SVG e sem classe utilitária: o Gmail derruba os dois. */
+function relatorioCoberturaHTML() {
+  const linhas = consolidaCobertura();
+  if (!linhas.length) return null;
+  const p = cob.prod || {}, t = cob.teste || {};
+  const cont = (s) => linhas.filter(l => l.status === s).length;
+  const C = { petroleo: '#002233', blue: '#00DBFF', roxo: '#A44DFF', cinza: '#545454',
+              borda: '#e2e8f0', claro: '#f8fafc' };
+  const cel = `padding:6px 10px;border-top:1px solid ${C.borda};font-size:13px`;
+  const kpi = (rot, val, sub, bg, fg) => `
+    <td style="padding:0 6px 0 0;width:25%;vertical-align:top">
+      <div style="background:${bg};color:${fg};border-radius:8px;padding:14px 16px">
+        <div style="font-size:11px;opacity:.85">${rot}</div>
+        <div style="font-size:24px;font-weight:700;margin-top:2px">${val}</div>
+        <div style="font-size:11px;opacity:.85">${sub}</div>
+      </div></td>`;
+
+  const kpis = kpi('Cobertos em produção', `${cont('COBERTO')}/${linhas.length}`,
+                   'cenários combinados', C.petroleo, '#fff')
+    + kpi('Só em teste', String(cont('SO_TESTE')), 'não rodou em produção', '#B45309', '#fff')
+    + kpi('Faltantes', String(cont('FALTANTE')), 'sem movimento em nenhuma base', C.roxo, '#fff')
+    + kpi('Última medição',
+          p.vazio === false ? fmtData(String(p.ultima_medicao || '')) : '—',
+          `testes: ${t.vazio === false ? fmtData(String(t.ultima_medicao || '')) : '—'}`,
+          '#fff', C.cinza);
+
+  const ordem = { FALTANTE: 0, SO_TESTE: 1, COBERTO: 2, OPCIONAL: 3 };
+  const porAnalise = new Map();
+  linhas.forEach(l => porAnalise.set(l.analise, (porAnalise.get(l.analise) || []).concat([l])));
+
+  const blocos = [...porAnalise.entries()].map(([an, itens]) => {
+    const ok = itens.filter(l => l.status === 'COBERTO').length;
+    const ord = [...itens].sort((a, b) =>
+      (ordem[a.status] - ordem[b.status]) || (a.descricao || '').localeCompare(b.descricao || ''));
+    return `
+      <h3 style="font-size:14px;margin:18px 0 6px;color:${C.petroleo}">${escapeHtml(an)}
+        <span style="font-weight:400;color:${C.cinza}">· ${ok}/${itens.length} coberto(s) em produção</span></h3>
+      <table style="width:100%;border-collapse:collapse">
+        <tr style="background:${C.claro};font-size:11px;color:${C.cinza};text-align:left">
+          <th style="padding:6px 10px">Cenário</th><th style="padding:6px 10px">Etapa</th>
+          <th style="padding:6px 10px">Responsável</th>
+          <th style="padding:6px 10px;text-align:right">Testes</th>
+          <th style="padding:6px 10px;text-align:right">Produção</th>
+          <th style="padding:6px 10px">Status</th>
+        </tr>
+        ${ord.map(l => {
+          const st = ST_COB[l.status] || ST_COB.OPCIONAL;
+          const combo = [l.dim1, l.dim2, l.dim3, l.dim4].map(v => (v || '*').trim()).join(' · ');
+          return `<tr>
+            <td style="${cel}">${escapeHtml(l.descricao || '(sem descrição)')}
+              <div style="font-size:11px;color:#94a3b8">${escapeHtml(combo)}</div></td>
+            <td style="${cel}">${escapeHtml(l.etapa || '—')}</td>
+            <td style="${cel}">${escapeHtml(l.responsavel || '—')}</td>
+            <td style="${cel};text-align:right;color:${C.cinza}">${fmtNum(l.qtde_teste)}</td>
+            <td style="${cel};text-align:right;font-weight:600">${fmtNum(l.qtde_prod)}</td>
+            <td style="${cel};color:${st.cor};font-weight:600">${st.rot}</td>
+          </tr>`;
+        }).join('')}
+      </table>`;
+  }).join('');
+
+  const naoPrev = [
+    ...(p.nao_previstos || []).map(x => ({ ...x, base: 'Produção' })),
+    ...(t.nao_previstos || []).map(x => ({ ...x, base: 'Testes' })),
+  ];
+  const fora = naoPrev.length ? `
+    <h3 style="font-size:14px;margin:18px 0 6px;color:${C.petroleo}">Fora do combinado
+      <span style="font-weight:400;color:${C.cinza}">· ${naoPrev.length} combinação(ões)</span></h3>
+    <p style="font-size:12px;color:${C.cinza};margin:0 0 6px">Movimento medido que não casa com
+      nenhum cenário da lista.</p>
+    <table style="width:100%;border-collapse:collapse">
+      <tr style="background:${C.claro};font-size:11px;color:${C.cinza};text-align:left">
+        <th style="padding:6px 10px">Base</th><th style="padding:6px 10px">Análise</th>
+        <th style="padding:6px 10px">Combinação</th>
+        <th style="padding:6px 10px;text-align:right">Qtde</th></tr>
+      ${naoPrev.map(d => `<tr>
+        <td style="${cel}">${escapeHtml(d.base)}</td>
+        <td style="${cel}">${escapeHtml(d.analise || '')}</td>
+        <td style="${cel};color:${C.cinza}">${escapeHtml([d.dim1, d.dim2, d.dim3, d.dim4].filter(Boolean).join(' · '))}</td>
+        <td style="${cel};text-align:right">${fmtNum(d.qtde)}</td></tr>`).join('')}
+    </table>` : '';
+
+  const corpo = `
+    <table style="width:100%;border-collapse:separate;border-spacing:0"><tr>${kpis}</tr></table>
+    <p style="font-size:12px;color:${C.cinza};margin:16px 0 0">
+      Cobertura mede se o cenário <b>já aconteceu</b> na base, não o volume. "Só em teste" é o
+      cenário que rodou em homologação e ainda não rodou em produção.</p>
+    ${blocos}${fora}`;
+
+  const amb = ` · testes × produção`;
+  return molduraRelatorio('Cobertura de Cenários', corpo, amb);
+}
+
+$('#cob-reload').addEventListener('click', () => { cob.customer = null; initCobertura(); });
+
+$('#cob-cenarios').addEventListener('click', () => abreModalCenarios(() => {
+  cob.customer = null; mov.customer = null; initCobertura();
+}));
+
+$('#cob-file').addEventListener('change', (ev) => enviaMovimentos(ev, () => {
+  cob.customer = null; mov.customer = null; initCobertura();
+}));
 
 // ============================================================================
 //  ABA TRANSIÇÃO — painel de status entregue ao cliente
@@ -3474,6 +3839,7 @@ const RELATORIOS = {
   consumo:   { titulo: 'Consumo por Etapa',       alvo: '#tab-consumo' },
   gaps:      { titulo: 'GAPs',                    alvo: '#tab-gaps' },
   cadastros: { titulo: 'Status dos Cadastros',    alvo: '#tab-cadastros', curado: relatorioCadastrosHTML },
+  cobertura: { titulo: 'Cobertura de Cenários',   alvo: '#tab-cobertura', curado: relatorioCoberturaHTML },
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
 };
 

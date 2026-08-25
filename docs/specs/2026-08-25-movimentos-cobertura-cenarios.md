@@ -150,6 +150,27 @@ O SQL do job é portável de propósito — nada de `NVL` nem de concatenação 
 `||`/`+`, que mudam entre Oracle e SQL Server. "Campo vazio" é testado com
 `IS NULL OR = ''`: no Oracle pega o primeiro, no SQL Server o segundo.
 
+## Aba Cobertura (adendo de 25/08/2026)
+
+A sub-aba Movimentos mostra **uma base por vez** — é o que serve para trabalhar.
+Para decidir, o que importa é outra coisa: **testes × produção lado a lado**.
+
+Daí a aba de topo `Cobertura`, que carrega os dois ambientes e classifica cada
+cenário em `COBERTO` (produção > 0), `SÓ EM TESTE` (rodou em homologação e não em
+produção), `FALTANTE` ou `OPCIONAL`. "Só em teste" é o achado que nenhuma das duas
+sub-abas isoladas consegue mostrar, e é exatamente a conversa de uma virada.
+
+As duas convivem de propósito: a sub-aba é a bancada, a aba é a leitura executiva.
+
+- Botões próprios: `🎯 Cenários` (mesmo modal da sub-aba) e
+  `⬆ Importar análise` (mesmo endpoint de upload).
+- `⬇ Exportar HTML` e `✉ Rascunho no Gmail` **não** foram duplicados: a barra de
+  ações do topo já vale para todas as abas. Bastou registrar a aba em
+  `RELATORIOS` com `curado: relatorioCoberturaHTML` — relatório sem SVG e sem
+  classe utilitária, que é o que o Gmail aceita.
+- `enviaMovimentos(ev, depois)` e `abreModalCenarios(depois)` ganharam um callback
+  em vez de serem duplicadas: quem chamou decide para onde a tela vai depois.
+
 ## Ordem de adoção
 
 1. Roda o D5 no cliente e olha o resultado **antes** de combinar cenário nenhum:
