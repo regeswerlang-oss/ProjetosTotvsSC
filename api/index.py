@@ -1636,6 +1636,55 @@ def _customer_do_ticket(uuid):
     return r["customer"] if r else None
 
 
+# ── TAREFAS — a mesma leitura dos GAPs, sem a tag GAP obrigatória ───────────
+# A aba GAPs existe para decidir escopo, então parte de uma tag só. Esta aqui é
+# de garimpo: o recorte é o que o usuário marcar. Duas diferenças que importam:
+#   1. sem o `join ... raw_tag = 'GAP'`, entra TODO ticket do cliente;
+#   2. o array de tags NÃO exclui 'GAP' — aqui ela é uma tag como outra qualquer
+#      e precisa aparecer para poder ser marcada no filtro.
+# `eh_gap` vem junto para a lista poder marcar quais já são GAP sem uma segunda
+# consulta.
+SQL_TAREFAS = """
+  select t.uuid_ticket, t.raw->>'id' as id, t.titulo, t.status_tasks,
+         t.status_temporario, t.etapa_gap, t.classificacao_gap, t.produto,
+         t.competencia, t.projeto, t.prioridade, t.time_estimate, t.aging_dias,
+         t.due_date, t.atrasado, t.bloqueado, t.user_assigned,
+         u.nome as responsavel_nome, t.assigned_customer, t.observador,
+         t.ult_ocorr_texto, t.ult_ocorr_data, t.ult_ocorr_autor, t.updated_at,
+         d.decisao, d.estimativa as decisao_estimativa, d.observacao as decisao_obs,
+         d.decided_by, d.decided_at,
+         (a.uuid_ticket is not null) as tem_alinhamento,
+         exists (select 1 from cockpit.ticket_tags g3
+                  where g3.uuid_ticket = t.uuid_ticket and g3.raw_tag = 'GAP') as eh_gap,
+         coalesce((select array_agg(g2.raw_tag order by g2.raw_tag)
+                     from cockpit.ticket_tags g2
+                    where g2.uuid_ticket = t.uuid_ticket), '{}') as tags
+    from cockpit.tickets t
+    left join cockpit.usuarios u on u.codigo = t.user_assigned
+    left join cockpit.decisoes d on d.uuid_ticket = t.uuid_ticket
+    left join cockpit.gap_alinhamentos a on a.uuid_ticket = t.uuid_ticket
+   where t.customer = %s
+   order by t.time_estimate desc nulls last, t.titulo
+"""
+
+
+@app.get("/api/tarefas/<customer>")
+def api_tarefas(customer):
+    """Todos os tickets do cliente. O detalhe continua em /api/gaps/ticket/<uuid>:
+    aquela rota autoriza pelo cliente DONO do ticket e nunca exigiu a tag GAP,
+    então serve para qualquer tarefa sem rota nova."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    itens = q(SQL_TAREFAS, (customer,))
+    horas = sum(float(t["time_estimate"] or 0) for t in itens)
+    return _json({"ok": True, "customer": customer, "total": len(itens),
+                  "horas_estimadas": horas,
+                  "gaps": sum(1 for t in itens if t["eh_gap"]),
+                  "tarefas": itens})
+
+
 def _guarda_ticket(uuid):
     """Autoriza pelo cliente DONO do ticket — nunca pelo que o front mandou."""
     cust = _customer_do_ticket(uuid)
