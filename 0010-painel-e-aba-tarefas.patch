@@ -1,0 +1,723 @@
+From 8b5e464d12b900bf6f3b8112c12a564d53126de8 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 25 Aug 2026 10:04:47 +0000
+Subject: [PATCH 1/2] Cadastros: coluna painel separa cadastro de movimento
+
+---
+ api/index.py                                  | 50 +++++++++--
+ .../2026-08-25-painel-cadastro-x-movimento.md | 86 +++++++++++++++++++
+ 2 files changed, 129 insertions(+), 7 deletions(-)
+ create mode 100644 docs/specs/2026-08-25-painel-cadastro-x-movimento.md
+
+diff --git a/api/index.py b/api/index.py
+index a0bb206..a5ab564 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -701,6 +701,36 @@ CSV_COLS = {
+ # SX5 por GRUPO (SX5_S4, SX5_T3...) continua valendo — aquilo é cadastro de verdade.
+ TABELAS_IGNORADAS = {"SX5", "SX6", "SX7"}
+ 
++# Documento e saldo NÃO são carga de cadastro: nota fiscal, pedido, título,
++# ordem de produção, saldo de estoque e saldo contábil nascem da operação, não do
++# trabalho de cadastramento do projeto. Somados junto, distorciam a contagem da
++# aba Cadastros — e a pergunta que eles respondem ("a operação já rodou?") é a da
++# aba Movimentos/Cobertura, que trabalha por cenário, não por contagem de tabela.
++#
++# Estas tabelas continuam sendo IMPORTADAS (o histórico não se perde); só entram
++# com painel='movimento' e a aba Cadastros as filtra fora. Reversível: basta um
++# update em cockpit.monitcad_tabelas.painel.
++#
++# Classificar aqui, e não só no script do Protheus, é o que impede a tabela de
++# voltar quando alguém roda um script antigo — mesmo motivo do TABELAS_IGNORADAS.
++TABELAS_MOVIMENTO = {
++    "SC1", "SC7", "SC8",                       # compras: solicitação, pedido, cotação
++    "SC5", "SC6",                              # pedido de venda
++    "SF1", "SD1", "SF2", "SD2", "SF3",         # notas de entrada/saída e livros
++    "SE1", "SE2", "SEB",                       # títulos e retorno bancário
++    "SC2",                                     # ordem de produção
++    "SB2", "SB8", "SB9", "SBF", "SBJ",         # saldos de estoque
++    "SN3", "SN4",                              # saldos e movimentos do ativo
++    "CV3",                                     # saldos contábeis
++    "SL1", "SL2",                              # venda frente de loja
++    "AB3", "AB4", "AB5",                       # orçamentos de serviço
++    "AB6", "AB7", "AB8", "AB9", "ABC",         # ordens de serviço e apontamentos
++}
++
++
++def _painel_da_tabela(tabela):
++    return "movimento" if (tabela or "").strip().upper() in TABELAS_MOVIMENTO else "cadastro"
++
+ # Só para a mensagem de erro — os nomes na forma em que o usuário escreve
+ QTD_ACEITOS = "QTDE, QTD, QTD_REAL, QUANTIDADE, REALIZADO, REGISTROS"
+ 
+@@ -792,10 +822,14 @@ def api_monitcad(customer):
+         return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
+                       "vazio": True, "tabelas": [], "serie": [], "total_medicoes": 0})
+     ult = meds[-1]
++    # painel='cadastro': documento e saldo vivem na aba Movimentos (ver
++    # TABELAS_MOVIMENTO). O filtro precisa estar em TODAS as consultas da aba —
++    # deixar de fora a dos módulos ou a da série faria os totais brigarem com a
++    # lista logo abaixo deles.
+     tabelas = q("""select tabela, descricao, modulo, filtro, realizado, estimativa,
+                           percentual, data_prev, etapa, responsavel, status
+                      from cockpit.monitcad_tabelas
+-                    where medicao_id=%s
++                    where medicao_id=%s and painel='cadastro'
+                     order by modulo nulls last, realizado desc, tabela""", (ult["id"],))
+     # Sem monitcad.estimativas cadastradas não existe % de carga — só contagem.
+     tem_est = any(float(t["estimativa"] or 0) > 0 for t in tabelas)
+@@ -804,7 +838,8 @@ def api_monitcad(customer):
+                           count(*) filter (where realizado > 0) as com_carga,
+                           sum(realizado) as registros
+                      from cockpit.monitcad_tabelas
+-                    where medicao_id=%s group by 1 order by 4 desc, 1""", (ult["id"],))
++                    where medicao_id=%s and painel='cadastro'
++                    group by 1 order by 4 desc, 1""", (ult["id"],))
+     serie = q("""select m.data_medicao, m.semana,
+                         sum(t.realizado)  as realizado,
+                         sum(t.estimativa) as estimativa,
+@@ -814,7 +849,7 @@ def api_monitcad(customer):
+                              else null end as pct
+                    from cockpit.monitcad_medicoes m
+                    join cockpit.monitcad_tabelas t on t.medicao_id = m.id
+-                  where m.customer=%s and m.ambiente=%s
++                  where m.customer=%s and m.ambiente=%s and t.painel='cadastro'
+                   group by m.data_medicao, m.semana
+                   order by m.data_medicao""", (customer, amb))
+     return _json({"ok": True, "customer": customer, "projeto": proj, "ambiente": amb,
+@@ -838,7 +873,7 @@ select m.data_medicao, m.semana_iso, m.fim_semana, m.hora_medicao,
+        sum(t.realizado)                        as realizado,
+        sum(t.estimativa)                       as estimativa
+   from med m
+-  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
++  join cockpit.monitcad_tabelas t on t.medicao_id = m.id and t.painel = 'cadastro'
+  group by 1, 2, 3, 4
+  order by 1
+ """
+@@ -857,7 +892,7 @@ select t.tabela,
+        max(t.estimativa) filter (where t.medicao_id = (select id from ult)) as estimativa,
+        jsonb_object_agg(to_char(m.data_medicao,'YYYY-MM-DD'), t.realizado)  as serie
+   from med m
+-  join cockpit.monitcad_tabelas t on t.medicao_id = m.id
++  join cockpit.monitcad_tabelas t on t.medicao_id = m.id and t.painel = 'cadastro'
+  group by t.tabela
+  order by max(t.modulo) nulls last, t.tabela
+ """
+@@ -1103,14 +1138,15 @@ def api_monitcad_upload(customer):
+             linhas.append((mid, customer, amb, dt, t.get("tabela"), t.get("descricao"),
+                            t.get("modulo"), t.get("filtro"), real, est, pct,
+                            _data_iso(t.get("data_prev")), t.get("etapa"),
+-                           t.get("responsavel"), t.get("status")))
++                           t.get("responsavel"), t.get("status"),
++                           _painel_da_tabela(t.get("tabela"))))
+         if linhas:
+             with db() as c, c.cursor() as cur:
+                 execute_values(cur, """
+                     insert into cockpit.monitcad_tabelas
+                       (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
+                        modulo, filtro, realizado, estimativa, percentual, data_prev,
+-                       etapa, responsavel, status)
++                       etapa, responsavel, status, painel)
+                     values %s""", linhas, page_size=200)
+             n_tab += len(linhas)
+ 
+diff --git a/docs/specs/2026-08-25-painel-cadastro-x-movimento.md b/docs/specs/2026-08-25-painel-cadastro-x-movimento.md
+new file mode 100644
+index 0000000..9a0bae9
+--- /dev/null
++++ b/docs/specs/2026-08-25-painel-cadastro-x-movimento.md
+@@ -0,0 +1,86 @@
++# Separar cadastro de movimento na aba Cadastros — 25/08/2026
++
++## O pedido e o que ele encontrou
++
++"Mover estas tabelas da aba Cadastros para a aba Movimentos, ajustando o banco."
++Duas descobertas mudaram a forma da solução:
++
++1. **Não existia classificação.** `cockpit.monitcad_tabelas` guarda
++   `tabela, descricao, modulo, realizado, estimativa…` e a aba mostrava **tudo**
++   o que veio na medição. Não havia campo para virar de um painel para o outro.
++2. **A aba Movimentos não conta tabelas.** Desde `77f792f` ela é cobertura de
++   cenários (`monitmov_dimensoes` / `monitmov_itens` / `monitmov_cenarios`, com
++   análise e dim1..dim4). Não há linha de "SD2 = 277" para receber.
++
++Ou seja: **migrar registro de um painel para o outro é impossível** — as duas
++pontas têm formatos diferentes. O que faz sentido é a tabela **sair de
++Cadastros**, e é isso que foi feito.
++
++## A coluna `painel`
++
++`cockpit.monitcad_tabelas.painel` — `'cadastro'` (default) ou `'movimento'`,
++com check constraint e índice `(medicao_id, painel)`.
++
++Default `'cadastro'` de propósito: linha nova sem classificação continua onde
++sempre esteve, então nenhuma importação antiga quebra.
++
++Marcadas em 25/08/2026: **32 tabelas, 278 linhas de histórico**. O histórico
++**não** foi apagado — a decisão é reversível com um `update`.
++
++| Grupo | Tabelas |
++|---|---|
++| Compras | SC1, SC7, SC8 |
++| Faturamento | SC5, SC6 |
++| Notas e livros | SF1, SD1, SF2, SD2, SF3 |
++| Financeiro | SE1, SE2, SEB |
++| PCP | SC2 |
++| Saldos de estoque | SB2, SB8, SB9, SBF, SBJ |
++| Ativo | SN3, SN4 |
++| Contábil | CV3 |
++| Loja | SL1, SL2 |
++| Field Service | AB3, AB4, AB5, AB6, AB7, AB8, AB9, ABC |
++
++Critério: **documento e saldo nascem da operação, não do cadastramento.** Somados
++junto, distorciam a contagem do projeto — e a pergunta que respondem ("a operação
++já rodou?") é a da aba Cobertura, por cenário, não por contagem de tabela.
++
++## Onde o filtro precisa estar
++
++`painel='cadastro'` entra em **todas** as consultas da aba, não só na lista:
++
++- lista de tabelas da última medição;
++- agregado por módulo;
++- série histórica (`/api/monitcad/<customer>`);
++- `SQL_EVO_MEDICOES` e `SQL_EVO_MATRIZ` (visão Evolução).
++
++Esquecer uma delas faz o total do KPI brigar com a soma da lista logo abaixo —
++o tipo de inconsistência que destrói a confiança no painel inteiro.
++
++## O importador classifica — e é isso que segura
++
++`TABELAS_MOVIMENTO` em `api/index.py` + `_painel_da_tabela()`: o insert do
++`/upload` já grava o painel. **Sem isso, a próxima medição gerada por um script
++antigo traria SD2 de volta como `'cadastro'` e a tabela reapareceria na aba.**
++Mesmo raciocínio do `TABELAS_IGNORADAS` (SX5/SX6/SX7): a regra mora no
++importador, não só no script do Protheus, porque o script tem cópias por cliente
++e uma delas sempre fica para trás.
++
++## Efeito medido (25/08/2026, última medição de cada cliente)
++
++| Cliente | Ambiente | Tabelas cad. | Tabelas mov. | Registros cad. | Registros mov. |
++|---|---|---:|---:|---:|---:|
++| 000348D0 | produção | 43 | 13 | 484 | 178 |
++| 000348D0 | teste | 43 | 13 | 484 | 178 |
++| TFEHXQ00 | produção | 57 | 14 | 867 | 0 |
++| TFEHXQ00 | teste | 122 | 32 | 41.512 | 3.177 |
++
++A Dígitro perde 178 registros do KPI de Cadastros e o Olim/teste 3.177 — é a
++correção pretendida, não perda de dado: as linhas continuam na tabela.
++
++## Reverter
++
++```sql
++update cockpit.monitcad_tabelas set painel = 'cadastro' where painel = 'movimento';
++```
++
++E tirar as tabelas de `TABELAS_MOVIMENTO`, senão o próximo import remarca.
+-- 
+2.43.0
+
+From ceeea8997c278d689d8e3352464d1e087346527a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 26 Aug 2026 13:01:55 +0000
+Subject: [PATCH 2/2] Aba Tarefas: tickets do cliente com filtro multi-tag E/OU
+
+---
+ api/index.py                         |  49 ++++
+ docs/specs/2026-08-26-aba-tarefas.md |  59 +++++
+ web/index.html                       | 319 ++++++++++++++++++++++++++-
+ 3 files changed, 426 insertions(+), 1 deletion(-)
+ create mode 100644 docs/specs/2026-08-26-aba-tarefas.md
+
+diff --git a/api/index.py b/api/index.py
+index a5ab564..1436ae1 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -1635,6 +1635,55 @@ def _customer_do_ticket(uuid):
+     return r["customer"] if r else None
+ 
+ 
++# ── TAREFAS — a mesma leitura dos GAPs, sem a tag GAP obrigatória ───────────
++# A aba GAPs existe para decidir escopo, então parte de uma tag só. Esta aqui é
++# de garimpo: o recorte é o que o usuário marcar. Duas diferenças que importam:
++#   1. sem o `join ... raw_tag = 'GAP'`, entra TODO ticket do cliente;
++#   2. o array de tags NÃO exclui 'GAP' — aqui ela é uma tag como outra qualquer
++#      e precisa aparecer para poder ser marcada no filtro.
++# `eh_gap` vem junto para a lista poder marcar quais já são GAP sem uma segunda
++# consulta.
++SQL_TAREFAS = """
++  select t.uuid_ticket, t.raw->>'id' as id, t.titulo, t.status_tasks,
++         t.status_temporario, t.etapa_gap, t.classificacao_gap, t.produto,
++         t.competencia, t.projeto, t.prioridade, t.time_estimate, t.aging_dias,
++         t.due_date, t.atrasado, t.bloqueado, t.user_assigned,
++         u.nome as responsavel_nome, t.assigned_customer, t.observador,
++         t.ult_ocorr_texto, t.ult_ocorr_data, t.ult_ocorr_autor, t.updated_at,
++         d.decisao, d.estimativa as decisao_estimativa, d.observacao as decisao_obs,
++         d.decided_by, d.decided_at,
++         (a.uuid_ticket is not null) as tem_alinhamento,
++         exists (select 1 from cockpit.ticket_tags g3
++                  where g3.uuid_ticket = t.uuid_ticket and g3.raw_tag = 'GAP') as eh_gap,
++         coalesce((select array_agg(g2.raw_tag order by g2.raw_tag)
++                     from cockpit.ticket_tags g2
++                    where g2.uuid_ticket = t.uuid_ticket), '{}') as tags
++    from cockpit.tickets t
++    left join cockpit.usuarios u on u.codigo = t.user_assigned
++    left join cockpit.decisoes d on d.uuid_ticket = t.uuid_ticket
++    left join cockpit.gap_alinhamentos a on a.uuid_ticket = t.uuid_ticket
++   where t.customer = %s
++   order by t.time_estimate desc nulls last, t.titulo
++"""
++
++
++@app.get("/api/tarefas/<customer>")
++def api_tarefas(customer):
++    """Todos os tickets do cliente. O detalhe continua em /api/gaps/ticket/<uuid>:
++    aquela rota autoriza pelo cliente DONO do ticket e nunca exigiu a tag GAP,
++    então serve para qualquer tarefa sem rota nova."""
++    if (r := require_auth()):
++        return r
++    if (d := deny_customer(customer)):
++        return d
++    itens = q(SQL_TAREFAS, (customer,))
++    horas = sum(float(t["time_estimate"] or 0) for t in itens)
++    return _json({"ok": True, "customer": customer, "total": len(itens),
++                  "horas_estimadas": horas,
++                  "gaps": sum(1 for t in itens if t["eh_gap"]),
++                  "tarefas": itens})
++
++
+ def _guarda_ticket(uuid):
+     """Autoriza pelo cliente DONO do ticket — nunca pelo que o front mandou."""
+     cust = _customer_do_ticket(uuid)
+diff --git a/docs/specs/2026-08-26-aba-tarefas.md b/docs/specs/2026-08-26-aba-tarefas.md
+new file mode 100644
+index 0000000..14f89ae
+--- /dev/null
++++ b/docs/specs/2026-08-26-aba-tarefas.md
+@@ -0,0 +1,59 @@
++# Aba Tarefas — 26/08/2026
++
++Décima aba do detalhe do projeto, ao lado de GAPs. Mesma leitura, **sem a tag
++GAP obrigatória**: entra todo ticket do cliente e o recorte é o que o usuário
++marcar no filtro de tags.
++
++## Por que é uma cópia, e não um componente compartilhado
++
++Decisão do usuário, com o custo na mesa. A aba GAPs é onde se decide escopo com
++o cliente e não pode regredir por causa de um ajuste feito aqui. Em troca,
++**melhoria numa não chega sozinha na outra** — ordenação, coluna nova ou correção
++precisam ser aplicadas duas vezes. Quem mexer numa das duas: olhe a outra.
++
++O que **é** compartilhado, de propósito: `DECISAO`, `GAP_STATUS`, `chipsTags`,
++`selosGap`, `semAcento` e o **drawer** (`abreGap`). A rota de detalhe
++`/api/gaps/ticket/<uuid>` autoriza pelo cliente **dono** do ticket e nunca
++exigiu a tag GAP — então serve para qualquer tarefa, sem rota nova.
++
++## Três diferenças de comportamento
++
++1. **Sem o `join ... raw_tag = 'GAP'`** (`SQL_TAREFAS`): entra todo ticket.
++2. **A tag `GAP` aparece** na coluna e no filtro. Na aba GAPs ela é removida do
++   array — lá toda linha tem a tag por definição, então só ocuparia espaço. Aqui
++   ela é o que separa "o que já virou GAP" do resto, e precisa ser marcável.
++   `eh_gap` vem no payload para o KPI, evitando uma segunda consulta.
++3. **Filtro de tags é OU por padrão**, com botão para E. Numa tela de garimpo o
++   normal é juntar assuntos ("INTEGRACAO ou PRIORIDADE"); cruzar é a exceção. Na
++   aba GAPs continua sendo só E, e isso não mudou.
++
++O contador no botão mostra o modo junto com a quantidade — `(2 E)` / `(2 OU)`.
++Sem essa dica, duas telas com o mesmo par de tags marcado e resultados diferentes
++pareceriam bug.
++
++## KPIs
++
++Tarefas no filtro · horas estimadas · em aberto (o que não está Resolvido nem
++Cancelado) · marcadas como GAP.
++
++## Volume
++
++Dígitro 268 tickets (78 GAP, 190 não-GAP, 29 sem tag nenhuma), 71 tags distintas;
++2.100 tickets na base inteira. Carrega tudo de uma vez, sem paginação — é o mesmo
++que a aba GAPs já faz e o maior cliente tem poucas centenas.
++
++## Cuidado ao mexer
++
++- **`data-gap` é o atributo da linha nas DUAS abas.** É o que faz o drawer
++  funcionar sem alteração. Renomear aqui quebra o clique.
++- O botão E/OU vive dentro de um `<details>`: sem `preventDefault()` o clique
++  fecha o dropdown antes de aplicar o filtro.
++- Tag que some do cliente é retirada do filtro no reload (`tar.tags.delete`) —
++  senão a tela ficaria filtrando por algo que não existe mais e mostrando zero.
++
++## Como conferir
++
++`/tmp/tarefas_check.py`: aba presente, 20 itens sem filtro (12 GAP + 8 comuns),
++`GAP` entre as tags do filtro, união **cresce** e interseção **encolhe** ao marcar
++a segunda tag, ordenação inverte, kanban monta as colunas, drawer abre e o export
++da aba sai com conteúdo.
+diff --git a/web/index.html b/web/index.html
+index c9dedd5..5bc4f72 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -169,6 +169,7 @@
+             <button data-tab="consumo"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
+             <span class="w-px bg-slate-200 mx-2 my-2"></span>
+             <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
++            <button data-tab="tarefas"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Tarefas</button>
+             <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
+             <button data-tab="cobertura" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cobertura</button>
+             <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
+@@ -279,6 +280,58 @@
+           <div id="gap-conteudo"></div>
+         </div>
+ 
++        <!-- Aba Tarefas — a mesma leitura da GAPs, sem a tag GAP obrigatória.
++             Cópia deliberada (não um componente compartilhado): a GAPs é a tela
++             de decisão de escopo e não pode regredir por causa de um ajuste
++             feito aqui. O preço é conhecido: melhoria numa não chega na outra. -->
++        <div id="tab-tarefas" class="p-5 hidden">
++          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
++            <span class="text-xs text-slate-500">Cliente</span>
++            <span id="tar-cliente-nome" class="font-medium"></span>
++            <div class="inline-flex rounded-md border border-slate-300 overflow-hidden">
++              <button data-modo="lista"  class="tar-modo px-3 py-1.5 bg-totvs-blue text-totvs-petroleo font-semibold">Lista</button>
++              <button data-modo="kanban" class="tar-modo px-3 py-1.5 bg-white text-slate-600 hover:bg-slate-50">Kanban</button>
++            </div>
++            <input id="tar-busca" type="search" placeholder="Buscar por título, id, produto…"
++                   class="flex-1 min-w-[220px] px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++            <select id="tar-etapa" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++              <option value="">Todas as etapas</option>
++            </select>
++            <select id="tar-resp" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++              <option value="">Todo responsável</option>
++            </select>
++            <details id="tar-tags-drop" class="relative">
++              <summary class="px-3 py-1.5 border border-slate-300 rounded-md bg-white cursor-pointer select-none whitespace-nowrap">
++                Tags <span id="tar-tags-n" class="text-xs text-slate-500"></span>
++              </summary>
++              <div class="absolute z-20 mt-1 w-80 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg p-2">
++                <div class="flex items-center justify-between px-1 pb-2 text-xs gap-2">
++                  <div class="inline-flex rounded border border-slate-300 overflow-hidden">
++                    <button data-tarmodo="ou" class="tar-tagmodo px-2 py-0.5 bg-totvs-blue text-totvs-petroleo font-semibold" title="Qualquer uma das marcadas">OU</button>
++                    <button data-tarmodo="e"  class="tar-tagmodo px-2 py-0.5 bg-white text-slate-600 hover:bg-slate-50" title="Todas as marcadas ao mesmo tempo">E</button>
++                  </div>
++                  <span id="tar-tags-dica" class="flex-1 text-slate-500">qualquer uma</span>
++                  <button id="tar-tags-limpar" class="text-totvs-blue hover:underline">limpar</button>
++                </div>
++                <div id="tar-tags-lista" class="space-y-0.5"></div>
++              </div>
++            </details>
++            <select id="tar-decisao" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++              <option value="">Toda decisão</option>
++              <option value="_sem">Sem decisão</option>
++              <option value="aprovar">Aprovado</option>
++              <option value="segunda_fase">2ª fase</option>
++              <option value="contorno">Contorno</option>
++              <option value="entendimento_projeto">Entendimento do projeto</option>
++              <option value="recusar">Recusado</option>
++              <option value="pendente">Pendente</option>
++            </select>
++            <button id="tar-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
++          </div>
++          <div id="tar-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
++          <div id="tar-conteudo"></div>
++        </div>
++
+         <!-- Aba Cadastros — guarda-chuva. Dentro dela, quatro sub-abas:
+              Cadastros/Movimentos × Base Produção/Base de Testes. -->
+         <div id="tab-cadastros" class="p-5 hidden">
+@@ -1450,7 +1503,7 @@ document.addEventListener('click', e => {
+ // ============================================================================
+ //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
+ // ============================================================================
+-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'cadastros', 'cobertura', 'transicao'];
++const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'transicao'];
+ 
+ // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
+ // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
+@@ -1481,6 +1534,7 @@ function setTab(nome) {
+   // Carga preguiçosa: todas seguem o cliente do projeto aberto
+   if (nome === 'consumo') renderConsumo();
+   if (nome === 'gaps') initGaps();
++  if (nome === 'tarefas') initTarefas();
+   if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
+   if (nome === 'cobertura') initCobertura();
+   if (nome === 'transicao') initTransicao();
+@@ -1935,6 +1989,268 @@ $('#tab-gaps').addEventListener('click', e => {
+   if (linha) abreGap(linha.dataset.gap);
+ });
+ 
++// ============================================================================
++//  ABA TAREFAS — todos os tickets do cliente, recortados por tag
++// ============================================================================
++// Cópia da aba GAPs, por decisão explícita (25/08/2026): a GAPs é a tela onde se
++// decide escopo com o cliente e não pode regredir por um ajuste feito aqui. O
++// preço está assumido — melhoria numa não chega sozinha na outra.
++//
++// Três diferenças de comportamento em relação à GAPs:
++//   1. entra TODO ticket do cliente, não só o marcado com a tag GAP;
++//   2. a tag `GAP` APARECE na lista e no filtro — aqui ela é uma tag como
++//      qualquer outra, e é o que permite separar "o que já virou GAP" do resto;
++//   3. o filtro de tags é OU por padrão, com botão para E. Numa tela de garimpo
++//      o normal é juntar assuntos ("INTEGRACAO ou PRIORIDADE"); cruzar é a
++//      exceção. Na GAPs continua sendo só E.
++const tar = {
++  customer: null, itens: [], modo: 'lista',
++  tags: new Set(), tagModo: 'ou',            // ou | e
++  ord: { col: 'time_estimate', dir: -1 },
++};
++
++const TAR_COLS = {
++  id: { rot: 'Task', val: t => t.id || '' },
++  titulo: { rot: 'Título', val: t => t.titulo || '' },
++  etapa_gap: { rot: 'Etapa', val: t => t.etapa_gap || '' },
++  status_tasks: { rot: 'Status', val: t => t.status_tasks || '' },
++  produto: { rot: 'Produto', val: t => t.produto || '' },
++  tags: { rot: 'Tags', val: t => (t.tags || []).join(', ') },
++  time_estimate: { rot: 'Horas', val: t => Number(t.time_estimate || 0), num: true },
++  responsavel_nome: { rot: 'Responsável', val: t => (t.responsavel_nome || t.user_assigned || '').trim() },
++  observador: { rot: 'Observadores', val: t => t.observador || '' },
++  decisao: { rot: 'Decisão', val: t => DECISAO[t.decisao]?.label || '' },
++};
++
++async function initTarefas() {
++  const cli = state.selected?.cli;
++  $('#tar-cliente-nome').textContent =
++    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
++  if (tar.customer === cli) return;
++  tar.customer = cli;
++  if (!cli) { $('#tar-conteudo').innerHTML = blocoVazioCad('Abra um projeto para ver as tarefas do cliente.'); return; }
++  $('#tar-conteudo').innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando tarefas…</div>';
++  try {
++    const j = await api(`/api/tarefas/${encodeURIComponent(cli)}`);
++    tar.itens = j.tarefas || [];
++  } catch (e) {
++    tar.customer = null;
++    $('#tar-conteudo').innerHTML = blocoErro('Não foi possível carregar as tarefas', e, initTarefas);
++    return;
++  }
++  const etapas = [...new Set(tar.itens.map(t => t.etapa_gap).filter(Boolean))].sort();
++  $('#tar-etapa').innerHTML = '<option value="">Todas as etapas</option>' +
++    etapas.map(e => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join('');
++
++  const resps = [...new Set(tar.itens
++    .map(t => (t.responsavel_nome || t.user_assigned || '').trim()).filter(Boolean))]
++    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
++  $('#tar-resp').innerHTML = '<option value="">Todo responsável</option>' +
++    resps.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
++
++  pintaTagsTarefas();
++  renderTarefas();
++}
++
++/** Tags por frequência: as que realmente cortam a lista vêm primeiro. */
++function pintaTagsTarefas() {
++  const cont = new Map();
++  tar.itens.forEach(t => (t.tags || []).forEach(x => cont.set(x, (cont.get(x) || 0) + 1)));
++  tar.tags.forEach(x => { if (!cont.has(x)) tar.tags.delete(x); });   // sumiu do cliente
++  $('#tar-tags-lista').innerHTML = [...cont.entries()]
++    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'pt-BR'))
++    .map(([x, n]) => `
++      <label class="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer text-sm">
++        <input type="checkbox" value="${escapeHtml(x)}" ${tar.tags.has(x) ? 'checked' : ''} class="accent-totvs-blue">
++        <span class="flex-1 truncate font-mono text-xs">${escapeHtml(x)}</span>
++        <span class="text-xs text-slate-400">${n}</span>
++      </label>`).join('') || '<p class="text-xs text-slate-400 px-1">Nenhuma tag neste cliente.</p>';
++  $('#tar-tags-lista').querySelectorAll('input').forEach(c =>
++    c.addEventListener('change', () => {
++      if (c.checked) tar.tags.add(c.value); else tar.tags.delete(c.value);
++      renderTarefas();
++    }));
++}
++
++function tarefasFiltradas() {
++  const q = semAcento($('#tar-busca').value.trim());
++  const etapa = $('#tar-etapa').value;
++  const dec = $('#tar-decisao').value;
++  const resp = $('#tar-resp').value;
++  return tar.itens.filter(t => {
++    if (etapa && t.etapa_gap !== etapa) return false;
++    if (dec === '_sem' && t.decisao) return false;
++    if (dec && dec !== '_sem' && t.decisao !== dec) return false;
++    if (resp && (t.responsavel_nome || t.user_assigned || '').trim() !== resp) return false;
++    if (tar.tags.size) {
++      const suas = new Set(t.tags || []);
++      if (tar.tagModo === 'e') {
++        for (const x of tar.tags) if (!suas.has(x)) return false;     // interseção
++      } else {
++        let algum = false;
++        for (const x of tar.tags) if (suas.has(x)) { algum = true; break; }
++        if (!algum) return false;                                     // união
++      }
++    }
++    if (q) {
++      const alvo = semAcento(`${t.id || ''} ${t.titulo || ''} ${t.produto || ''} ${t.competencia || ''} ${t.responsavel_nome || ''}`);
++      if (!alvo.includes(q)) return false;
++    }
++    return true;
++  });
++}
++
++function ordenaTarefas(itens) {
++  const c = TAR_COLS[tar.ord.col] || TAR_COLS.time_estimate;
++  const d = tar.ord.dir;
++  return itens.slice().sort((a, b) => {
++    const va = c.val(a), vb = c.val(b);
++    if (c.num) return (va - vb) * d;
++    if (!va && vb) return 1;                  // vazio sempre no fim
++    if (va && !vb) return -1;
++    return String(va).localeCompare(String(vb), 'pt-BR') * d;
++  });
++}
++
++function renderTarefas() {
++  const itens = ordenaTarefas(tarefasFiltradas());
++  const horas = itens.reduce((a, t) => a + Number(t.time_estimate || 0), 0);
++  const gaps = itens.filter(t => t.eh_gap).length;
++  const abertas = itens.filter(t => !['Resolvido', 'Cancelado'].includes(t.status_tasks || '')).length;
++
++  const kpi = (rot, val, sub, cls) => `
++    <div class="rounded-lg p-4 ${cls}">
++      <p class="text-xs opacity-80">${rot}</p>
++      <p class="text-2xl font-totvs mt-1">${val}</p>
++      <p class="text-xs opacity-80 mt-0.5">${sub}</p>
++    </div>`;
++  $('#tar-kpis').innerHTML =
++    kpi('Tarefas', String(itens.length),
++        itens.length === tar.itens.length ? 'do cliente' : `de ${tar.itens.length} no total`,
++        'bg-totvs-petroleo text-white') +
++    kpi('Horas estimadas', fmtNum(horas), 'soma das estimativas', 'bg-totvs-blue text-totvs-petroleo') +
++    kpi('Em aberto', String(abertas), `${itens.length - abertas} resolvida(s)/cancelada(s)`, 'bg-totvs-purple text-white') +
++    kpi('Marcadas como GAP', String(gaps), `${itens.length - gaps} sem a tag`, 'bg-white border border-slate-200 text-totvs-petroleo');
++
++  $('#tar-tags-n').textContent = tar.tags.size ? `(${tar.tags.size} ${tar.tagModo.toUpperCase()})` : '';
++  $('#tar-conteudo').innerHTML = itens.length === 0
++    ? blocoVazioCad('Nenhuma tarefa para este filtro.')
++    : (tar.modo === 'kanban' ? kanbanTarefas(itens) : listaTarefas(itens));
++}
++
++function thTar(col, extra = '') {
++  const c = TAR_COLS[col];
++  const on = tar.ord.col === col;
++  const seta = on ? (tar.ord.dir === 1 ? '▲' : '▼') : '<span class="opacity-0 group-hover:opacity-40">▲</span>';
++  return `<th class="p-3 ${extra} cursor-pointer select-none group hover:text-totvs-petroleo"
++              data-ord="${col}" title="Ordenar por ${c.rot}">
++    ${c.rot} <span class="text-[10px] ${on ? 'text-totvs-blue' : ''}">${seta}</span></th>`;
++}
++
++function listaTarefas(itens) {
++  return `
++    <div class="bg-white rounded-lg border border-slate-200 overflow-x-auto">
++      <table class="w-full text-sm">
++        <thead><tr class="text-xs text-slate-500 text-left border-b border-slate-200">
++          ${thTar('id')}${thTar('titulo')}${thTar('etapa_gap')}${thTar('status_tasks')}
++          ${thTar('produto')}${thTar('tags')}${thTar('time_estimate', 'text-right')}
++          ${thTar('responsavel_nome')}${thTar('observador')}${thTar('decisao')}
++        </tr></thead>
++        <tbody>${itens.map(t => `
++          <tr data-gap="${t.uuid_ticket}" class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer">
++            <td class="p-3 font-mono text-xs">${escapeHtml(t.id || '—')}</td>
++            <td class="p-3 font-medium">${escapeHtml(t.titulo || '—')}</td>
++            <td class="p-3 text-xs">${escapeHtml(t.etapa_gap || '—')}</td>
++            <td class="p-3 text-xs">${escapeHtml(t.status_tasks || '—')}</td>
++            <td class="p-3 text-xs text-slate-500">${escapeHtml(t.produto || '—')}</td>
++            <td class="p-3">${chipsTags(t.tags)}</td>
++            <td class="p-3 text-right tabular-nums">${t.time_estimate ? fmtNum(t.time_estimate) : '—'}</td>
++            <td class="p-3 text-xs">${escapeHtml((t.responsavel_nome || t.user_assigned || '—').trim())}</td>
++            <td class="p-3 text-xs text-slate-500">${escapeHtml(t.observador || '—')}</td>
++            <td class="p-3">${selosGap(t) || '<span class="text-xs text-slate-400">—</span>'}</td>
++          </tr>`).join('')}</tbody>
++      </table>
++    </div>`;
++}
++
++function kanbanTarefas(itens) {
++  const porStatus = new Map();
++  itens.forEach(t => {
++    const k = t.status_tasks || '(sem status)';
++    if (!porStatus.has(k)) porStatus.set(k, []);
++    porStatus.get(k).push(t);
++  });
++  // Ordem do fluxo real; status fora da lista entram no fim em vez de sumir
++  const ordem = GAP_STATUS.filter(x => porStatus.has(x));
++  [...porStatus.keys()].forEach(k => { if (!ordem.includes(k)) ordem.push(k); });
++
++  return `<div class="flex gap-3 overflow-x-auto pb-2">${ordem.map(st => {
++    const col = porStatus.get(st);
++    const h = col.reduce((a, t) => a + Number(t.time_estimate || 0), 0);
++    return `
++      <div class="w-72 shrink-0 bg-slate-100 rounded-lg p-2">
++        <div class="flex items-baseline justify-between px-1 pb-2">
++          <span class="text-sm font-semibold text-totvs-petroleo">${escapeHtml(st)}</span>
++          <span class="text-xs text-slate-500">${col.length} · ${fmtNum(h)}h</span>
++        </div>
++        <div class="space-y-2">${col.map(t => `
++          <div data-gap="${t.uuid_ticket}" class="bg-white rounded-md border border-slate-200 p-3 cursor-pointer hover:border-totvs-blue">
++            <div class="flex items-center justify-between gap-2">
++              <span class="font-mono text-xs text-slate-500">${escapeHtml(t.id || '—')}</span>
++              <span class="text-xs tabular-nums">${t.time_estimate ? fmtNum(t.time_estimate) + 'h' : ''}</span>
++            </div>
++            <p class="text-sm font-medium mt-1 leading-snug">${escapeHtml(t.titulo || '—')}</p>
++            <p class="text-xs text-slate-500 mt-1">${escapeHtml(t.etapa_gap || '—')}${t.produto ? ' · ' + escapeHtml(t.produto) : ''}</p>
++            <div class="mt-2 flex flex-wrap items-center gap-1">${chipsTags(t.tags, 2)}${selosGap(t)}</div>
++          </div>`).join('')}</div>
++      </div>`;
++  }).join('')}</div>`;
++}
++
++$$('.tar-modo').forEach(b => b.addEventListener('click', () => {
++  tar.modo = b.dataset.modo;
++  $$('.tar-modo').forEach(x => {
++    const on = x.dataset.modo === tar.modo;
++    x.className = `tar-modo px-3 py-1.5 ${on ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}`;
++  });
++  renderTarefas();
++}));
++
++$$('.tar-tagmodo').forEach(b => b.addEventListener('click', ev => {
++  ev.preventDefault();                       // o botão vive dentro de um <details>
++  tar.tagModo = b.dataset.tarmodo;
++  $$('.tar-tagmodo').forEach(x => {
++    const on = x.dataset.tarmodo === tar.tagModo;
++    x.className = `tar-tagmodo px-2 py-0.5 ${on ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}`;
++  });
++  $('#tar-tags-dica').textContent = tar.tagModo === 'e' ? 'todas ao mesmo tempo' : 'qualquer uma';
++  renderTarefas();
++}));
++
++['tar-busca', 'tar-etapa', 'tar-decisao', 'tar-resp'].forEach(id =>
++  $(`#${id}`).addEventListener('input', renderTarefas));
++$('#tar-tags-limpar').addEventListener('click', () => {
++  tar.tags.clear();
++  $$('#tar-tags-lista input').forEach(c => { c.checked = false; });
++  renderTarefas();
++});
++$('#tar-reload').addEventListener('click', () => { tar.customer = null; initTarefas(); });
++$('#tab-tarefas').addEventListener('click', e => {
++  const th = e.target.closest('[data-ord]');
++  if (th) {
++    const col = th.dataset.ord;
++    tar.ord = tar.ord.col === col
++      ? { col, dir: -tar.ord.dir }
++      : { col, dir: TAR_COLS[col]?.num ? -1 : 1 };
++    renderTarefas();
++    return;
++  }
++  // O drawer é o MESMO da aba GAPs: /api/gaps/ticket/<uuid> autoriza pelo cliente
++  // dono do ticket e nunca exigiu a tag GAP, então serve para qualquer tarefa.
++  const linha = e.target.closest('[data-gap]');
++  if (linha) abreGap(linha.dataset.gap);
++});
++
+ // ── Detalhe do GAP: dados + decisão + alinhamento comercial ────────────────
+ async function abreGap(uuid) {
+   const painel = document.createElement('div');
+@@ -3839,6 +4155,7 @@ const RELATORIOS = {
+   etapas:    { titulo: 'Apontamentos por Etapa',  alvo: '#d-etapas' },
+   consumo:   { titulo: 'Consumo por Etapa',       alvo: '#tab-consumo' },
+   gaps:      { titulo: 'GAPs',                    alvo: '#tab-gaps' },
++  tarefas:   { titulo: 'Tarefas',                 alvo: '#tab-tarefas' },
+   cadastros: { titulo: 'Status dos Cadastros',    alvo: '#tab-cadastros', curado: relatorioCadastrosHTML },
+   cobertura: { titulo: 'Cobertura de Cenários',   alvo: '#tab-cobertura', curado: relatorioCoberturaHTML },
+   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
+-- 
+2.43.0
+
