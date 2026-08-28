@@ -3993,9 +3993,12 @@ const SNAP_HERDA = ['color', 'font-family', 'font-size', 'font-weight', 'font-st
                     'text-align', 'text-transform', 'letter-spacing', 'line-height',
                     'white-space'];
 
+// `border-top` computado vem como "0px solid rgb(...)" quando NÃO há borda — o
+// teste antigo só pegava "0px none", então cada <td> carregava quatro bordas
+// invisíveis. Numa matriz de 150 linhas isso é dezenas de KB de nada.
 const ehVazio = (v) => !v || v === '0px' || v === 'none' || v === 'normal' ||
                        v === 'auto' || v === 'rgba(0, 0, 0, 0)' || v === 'transparent' ||
-                       /^0px none/.test(v) || v === 'baseline' || v === '0px 0px';
+                       /^0px\s/.test(v) || v === 'baseline' || v === '0px 0px';
 
 function snapEstilo(cs, pai, tag, larguraTabela) {
   const st = [];
@@ -4163,14 +4166,31 @@ const RELATORIOS = {
 
 /** Cabeçalho/rodapé comuns — o que identifica de QUEM e de QUANDO é o número.
  *  Relatório sem cliente e sem data circula por e-mail e vira armadilha. */
-function molduraRelatorio(titulo, corpo, extra = '') {
+/** Largura que o conteúdo REALMENTE ocupa na tela.
+ *  A matriz da Evolução cresce uma coluna por medição; com 8 medições ela passa
+ *  de 1.100px e era cortada pelo cartão fixo de 900px do relatório — o texto
+ *  saía do papel e ninguém via as últimas datas. Tabela com largura declarada em
+ *  % ainda assim estoura o container quando o conteúdo não cabe (o layout
+ *  automático respeita o min-content), então a correção é o cartão acompanhar. */
+function larguraDoConteudo(el) {
+  if (!el) return 0;
+  const larguras = [el.scrollWidth,
+                    ...[...el.querySelectorAll('table')].map(t => t.scrollWidth)];
+  return Math.max(0, ...larguras);
+}
+
+function molduraRelatorio(titulo, corpo, extra = '', largura = 0) {
   const p = state.selected?.projeto || {};
   const cliente = (p.nome_cliente_projeto || '').trim() || '—';
   const C = { petroleo: '#002233', cinza: '#545454' };
+  // 900 é o piso (relatório curto não vira uma faixa fina) e 1800 o teto (além
+  // disso vira rolagem em qualquer leitor). overflow-x fica como rede: se a
+  // janela do leitor for menor, rola em vez de cortar.
+  const larg = Math.min(1800, Math.max(900, Math.round(largura) + 48));
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
 <title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title></head>
 <body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
-<div style="max-width:900px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
+<div style="max-width:${larg}px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;overflow-x:auto">
   <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
   <h1 style="margin:4px 0 2px;font-size:22px">${escapeHtml(titulo)}</h1>
   <p style="margin:0;color:${C.cinza};font-size:13px">
@@ -4199,7 +4219,8 @@ function relatorioDaAba({ email = false } = {}) {
   if (aba === 'cadastros' || aba === 'transicao') {
     const a = AMB[cad.ambiente]; if (a) extra = ` · ${a.label}`;
   }
-  return { titulo: r.titulo, html: molduraRelatorio(r.titulo, corpo, extra), aba };
+  return { titulo: r.titulo, aba,
+           html: molduraRelatorio(r.titulo, corpo, extra, larguraDoConteudo(el)) };
 }
 
 function nomeArquivoRel(aba) {

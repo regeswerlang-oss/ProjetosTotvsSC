@@ -113,3 +113,33 @@ mede, dentro do HTML gerado, a borda direita de cada célula contra a primeira
 linha de cada tabela — falha se divergir mais de 1px. Esperado:
 `TODAS ALINHADAS: True`. Precisa de stub com 4 medições (`monitcad_evolucao()`),
 senão a visão não tem ranking para desalinhar.
+
+## O relatório era cortado na horizontal (28/08/2026)
+
+A matriz "Evolução por tabela" ganha uma coluna por medição. Com 8 medições ela
+passa de 1.100 px e o cartão do relatório, fixo em **900 px**, cortava as últimas
+datas — o número existia no HTML, mas ficava fora do papel.
+
+**Por que a largura em % não bastou.** As células já saíam com largura relativa e
+a tabela com `width:100%`. Só que o layout automático de tabela respeita o
+**min-content**: se "25/08/2026 S35" não cabe na fatia declarada, o navegador
+alarga a coluna e a tabela estoura o container. Declarar 100% não impede o
+transbordo, apenas descreve a intenção.
+
+**Correção.** `larguraDoConteudo(el)` mede o que o painel realmente ocupa na tela
+(`scrollWidth` do container e de cada tabela dentro dele) e a moldura dimensiona
+o cartão por isso, entre **900 px** (piso, para relatório curto não virar uma
+faixa fina) e **1800 px** (teto, além disso vira rolagem em qualquer leitor). O
+cartão ainda leva `overflow-x:auto` como rede: janela menor rola, não corta.
+
+O relatório é um retrato da tela — então a largura do retrato é a da tela.
+
+## Bordas de 0px (mesmo dia)
+
+`border-top` computado devolve `0px solid rgb(...)` quando **não** há borda; o
+teste de vazio só pegava `0px none`, então cada `<td>` carregava quatro bordas
+invisíveis. Numa matriz de 150 linhas isso é dezenas de KB de nada.
+
+Efeito de trocar o teste por `/^0px\s/`: Cronograma **167 → 82 KB**, GAPs
+93 → 50 KB, Por Módulo 62 → 30 KB, Consumo 58 → 27 KB, Resumo 6 → 3,5 KB. Sem
+perda visual — borda que existe não tem 0px.
