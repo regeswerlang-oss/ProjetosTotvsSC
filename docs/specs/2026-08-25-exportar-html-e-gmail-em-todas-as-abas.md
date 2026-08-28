@@ -143,3 +143,28 @@ invisíveis. Numa matriz de 150 linhas isso é dezenas de KB de nada.
 Efeito de trocar o teste por `/^0px\s/`: Cronograma **167 → 82 KB**, GAPs
 93 → 50 KB, Por Módulo 62 → 30 KB, Consumo 58 → 27 KB, Resumo 6 → 3,5 KB. Sem
 perda visual — borda que existe não tem 0px.
+
+## Impressão em paisagem (28/08/2026)
+
+Mesmo com o cartão elástico, **imprimir** continuava cortando: A4 retrato tem
+~794 px úteis e estes relatórios passam de 1.100 px por natureza — a matriz da
+Evolução ganha uma coluna por medição. O HTML estava inteiro na tela; quem
+amputava era o papel.
+
+Três regras, todas dentro de um `<style>` (o Gmail descarta `<style>`, então
+isto vale só no arquivo baixado — que é exatamente onde se imprime; o e-mail
+segue com o inline de sempre):
+
+1. **`@page { size: A4 landscape; margin: 10mm }`** — sobe a área útil de ~794
+   para ~1.047 px.
+2. **`zoom` calculado** quando ainda assim não cabe: `1040 / largura`. Encolhe o
+   conjunto até caber em vez de amputar a direita. Chrome e Edge respeitam
+   `zoom` na impressão — é o caminho mais confiável sem quebrar a tabela em
+   pedaços. Medido: conteúdo de 1.278 px → `zoom: 0.814`, PDF de 4 para 3
+   páginas, matriz inteira visível.
+3. **`tr { page-break-inside: avoid }` e `thead { display: table-header-group }`**
+   — linha não parte no meio e o cabeçalho se repete a cada página. Sem isso,
+   da segunda página em diante ninguém sabe de que data é cada coluna.
+
+**Como conferir:** `/tmp/print_check.py` gera o PDF em A4 paisagem e confirma a
+regra `@page`, o fator de zoom e a contagem de páginas.

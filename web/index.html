@@ -4187,10 +4187,30 @@ function molduraRelatorio(titulo, corpo, extra = '', largura = 0) {
   // disso vira rolagem em qualquer leitor). overflow-x fica como rede: se a
   // janela do leitor for menor, rola em vez de cortar.
   const larg = Math.min(1800, Math.max(900, Math.round(largura) + 48));
+  // IMPRESSÃO EM PAISAGEM. Estes relatórios são largos por natureza — a matriz
+  // da Evolução ganha uma coluna por medição —, e A4 retrato tem ~794px úteis:
+  // qualquer coisa além disso o navegador corta no papel, mesmo o HTML estando
+  // inteiro na tela. Paisagem sobe para ~1.047px com margem de 10mm.
+  // Ainda assim pode faltar: por isso o `zoom` calculado, que encolhe o
+  // conjunto até caber em vez de amputar a direita. Chrome/Edge respeitam zoom
+  // na impressão; é o caminho mais confiável que existe sem quebrar a tabela.
+  const UTIL = 1040;                                    // A4 paisagem, margem 10mm
+  const escala = larg > UTIL ? (UTIL / larg).toFixed(3) : null;
+  // Gmail descarta <style>, então isto só vale no arquivo baixado — que é
+  // justamente onde se imprime. O e-mail continua com o inline de sempre.
+  const estilos = `<style>
+    @page { size: A4 landscape; margin: 10mm; }
+    @media print {
+      body { background: #fff !important; padding: 0 !important;${escala ? ` zoom: ${escala};` : ''} }
+      .rel-cartao { box-shadow: none !important; border-radius: 0 !important; }
+      tr, .rel-bloco { page-break-inside: avoid; }
+      thead { display: table-header-group; }
+    }
+  </style>`;
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
-<title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title></head>
+<title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title>${estilos}</head>
 <body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
-<div style="max-width:${larg}px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;overflow-x:auto">
+<div class="rel-cartao" style="max-width:${larg}px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;overflow-x:auto">
   <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
   <h1 style="margin:4px 0 2px;font-size:22px">${escapeHtml(titulo)}</h1>
   <p style="margin:0;color:${C.cinza};font-size:13px">
