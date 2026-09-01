@@ -372,6 +372,10 @@
             <span class="text-xs text-slate-500">Cliente</span>
             <span id="mov-cliente-nome" class="font-medium"></span>
             <span id="mov-amb-selo" class="px-2 py-0.5 rounded-full text-xs font-semibold"></span>
+            <div class="inline-flex rounded-md border border-slate-300 overflow-hidden">
+              <button data-movvisao="atual"    class="mov-visao-btn px-3 py-1.5">Situação atual</button>
+              <button data-movvisao="evolucao" class="mov-visao-btn px-3 py-1.5">Evolução</button>
+            </div>
             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
               <button id="mov-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
@@ -3062,7 +3066,8 @@ function confirmaAmbiente(nomeArquivo, sugerido, aoConfirmar) {
 //  Esperado vem do CENARIOS_MONITOR.TXT (o mesmo que vai para a \system\).
 //  Spec: docs/specs/2026-08-25-movimentos-cobertura-cenarios.md
 // ============================================================================
-const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {} };
+const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {},
+              visao: 'atual', evo: null, evoChave: null };
 
 // Rótulo legível do E5_TIPODOC. Fica no front de propósito: a dimensão guarda
 // o CÓDIGO, senão trocar um texto aqui transformaria cenário coberto em
@@ -3103,9 +3108,188 @@ function initMovimentos(ambiente = 'producao') {
   $('#mov-cliente-nome').textContent =
     (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
   seloAmbiente($('#mov-amb-selo'), ambiente);
-  if (mov.customer === cli && mov.ambiente === ambiente) return;
+  if (mov.customer === cli && mov.ambiente === ambiente) { aplicaVisaoMov(); return; }
   mov.ambiente = ambiente;
+  mov.dados = null; mov.evo = null; mov.evoChave = null;
   carregaMovimentos(cli);
+}
+
+/** A visão escolhida vale para as duas bases: quem está acompanhando evolução
+ *  quer continuar nela ao pular de Produção para Testes — igual em Cadastros. */
+function aplicaVisaoMov() {
+  $$('.mov-visao-btn').forEach(b => {
+    const on = b.dataset.movvisao === mov.visao;
+    b.className = `mov-visao-btn px-3 py-1.5 ${on ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}`;
+  });
+  if (mov.visao === 'evolucao') carregaEvolucaoMov();
+  else if (mov.dados) desenhaMovimentos(mov.dados);
+  else carregaMovimentos(mov.customer);
+}
+
+$$('.mov-visao-btn').forEach(b => b.addEventListener('click', () => {
+  if (mov.visao === b.dataset.movvisao) return;
+  mov.visao = b.dataset.movvisao;
+  aplicaVisaoMov();
+}));
+
+// ── Evolução dos movimentos ─────────────────────────────────────────────────
+// A pergunta desta visão não é "quanto rodou", é "a COBERTURA andou?". Um
+// cliente pode crescer em volume sem cobrir um cenário novo — foi o caso do
+// Olim entre 25/08 e 01/09: 321 → 391 movimentos com a cobertura parada em
+// 7/11. Por isso a barra da série é a cobertura, não o volume.
+async function carregaEvolucaoMov() {
+  const box = $('#mov-conteudo'), cli = mov.customer;
+  $('#mov-kpis').classList.add('hidden');
+  if (!cli) { box.innerHTML = blocoVazioCad('Abra um projeto para ver a evolução dos movimentos.'); return; }
+  const chave = `${cli}|${mov.ambiente}`;
+  if (mov.evo && mov.evoChave === chave) { pintaEvolucaoMov(); return; }
+  box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando evolução…</div>';
+  try {
+    mov.evo = await api(`/api/monitmov/${encodeURIComponent(cli)}/evolucao?ambiente=${mov.ambiente}`);
+    mov.evoChave = chave;
+  } catch (e) {
+    box.innerHTML = blocoErro('Não foi possível carregar a evolução', e, carregaEvolucaoMov);
+    return;
+  }
+  pintaEvolucaoMov();
+}
+
+const MOV_STATUS = {
+  COBERTO: { rot: 'coberto', cls: 'text-emerald-700' },
+  FALTANTE: { rot: 'faltante', cls: 'text-rose-600 font-medium' },
+  OPCIONAL: { rot: 'opcional', cls: 'text-slate-400' },
+};
+
+function deltaMov(atual, ant) {
+  if (ant === null || ant === undefined) return '<span class="text-slate-400">—</span>';
+  const d = atual - ant;
+  if (!d) return '<span class="text-slate-400">0</span>';
+  return `<span class="${d > 0 ? 'text-emerald-600' : 'text-rose-600'}">${d > 0 ? '+' : '−'}${fmtNum(Math.abs(d))}</span>`;
+}
+
+function pintaEvolucaoMov() {
+  const j = mov.evo, box = $('#mov-conteudo');
+  if (!j) return;
+  if (j.vazio || !(j.serie || []).length) {
+    box.innerHTML = blocoVazioCad(`Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`);
+    return;
+  }
+  const serie = j.serie;
+  const u = serie[serie.length - 1];
+  const a = serie.length > 1 ? serie[serie.length - 2] : null;
+
+  const kpi = (rot, val, sub, cls) => `
+    <div class="rounded-lg p-4 ${cls}">
+      <p class="text-xs opacity-80">${rot}</p>
+      <p class="text-2xl font-totvs mt-1">${val}</p>
+      <p class="text-xs opacity-80 mt-0.5">${sub}</p>
+    </div>`;
+  $('#mov-kpis').classList.remove('hidden');
+  $('#mov-kpis').innerHTML =
+    kpi('Cenários cobertos', `${u.cobertos}/${u.cenarios}`,
+        a ? (u.cobertos === a.cobertos ? 'sem avanço vs anterior'
+                                       : `${u.cobertos > a.cobertos ? '▲' : '▼'} ${Math.abs(u.cobertos - a.cobertos)} vs anterior`)
+          : 'primeira medição',
+        u.faltantes ? 'bg-rose-600 text-white' : 'bg-totvs-petroleo text-white') +
+    kpi('Movimentos', fmtNum(u.movimentos),
+        a ? `${u.movimentos >= a.movimentos ? '▲' : '▼'} ${fmtNum(Math.abs(u.movimentos - a.movimentos))} vs anterior` : 'primeira medição',
+        'bg-totvs-blue text-totvs-petroleo') +
+    kpi('Combinações medidas', fmtNum(u.combinacoes),
+        a ? `${u.combinacoes >= a.combinacoes ? '▲' : '▼'} ${fmtNum(Math.abs(u.combinacoes - a.combinacoes))} vs anterior` : 'primeira medição',
+        'bg-totvs-purple text-white') +
+    kpi('Medições', String(serie.length),
+        `de ${fmtData(String(serie[0].data_medicao))} a ${fmtData(String(u.data_medicao))}`,
+        'bg-white border border-slate-200 text-totvs-petroleo');
+
+  const linhasSerie = serie.map((m, i) => {
+    const ant = i > 0 ? serie[i - 1] : null;
+    const pct = m.cenarios > 0 ? (100 * m.cobertos / m.cenarios) : 0;
+    return `<tr class="border-t border-slate-100">
+      <td class="py-2 pr-3 whitespace-nowrap">${fmtData(String(m.data_medicao))}${m.semana ? ` <span class="text-slate-400 text-xs">S${m.semana}</span>` : ''}</td>
+      <td class="py-2 pr-3">
+        <div style="background:#e6edf0;border-radius:99px;height:8px;overflow:hidden">
+          <div style="background:${m.faltantes ? '#e11d48' : '#00DBFF'};height:8px;width:${pct.toFixed(1)}%"></div>
+        </div>
+      </td>
+      <td class="py-2 pr-3 text-right tabular-nums font-semibold">${m.cobertos}/${m.cenarios}</td>
+      <td class="py-2 pr-3 text-right tabular-nums text-xs">${ant ? deltaMov(m.cobertos, ant.cobertos) : '<span class="text-slate-400">—</span>'}</td>
+      <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(m.movimentos)}</td>
+      <td class="py-2 pr-3 text-right tabular-nums text-xs">${ant ? deltaMov(m.movimentos, ant.movimentos) : '<span class="text-slate-400">—</span>'}</td>
+      <td class="py-2 pr-3 text-right tabular-nums text-slate-500 text-xs">${fmtNum(m.combinacoes)}</td>
+      <td class="py-2 text-right tabular-nums text-xs ${m.faltantes ? 'text-rose-600' : 'text-slate-400'}">${m.faltantes}</td>
+    </tr>`;
+  }).join('');
+
+  // Matriz cenário × medição — o análogo direto da matriz de Cadastros
+  const datas = j.medicoes || [];
+  const ultima = datas[datas.length - 1];
+  const porAnalise = new Map();
+  (j.cenarios || []).forEach(c => {
+    if (!porAnalise.has(c.analise)) porAnalise.set(c.analise, []);
+    porAnalise.get(c.analise).push(c);
+  });
+  const matriz = [...porAnalise.entries()].map(([analise, itens]) => {
+    const faltam = itens.filter(c => ((c.serie || {})[ultima] || {}).status === 'FALTANTE').length;
+    return `
+    <details class="border border-slate-200 rounded-lg mb-2" ${faltam ? 'open' : ''}>
+      <summary class="cursor-pointer select-none px-4 py-2 flex items-center gap-2 text-sm">
+        <span class="font-semibold text-totvs-petroleo">${escapeHtml(analise)}</span>
+        <span class="text-slate-400 text-xs">${itens.length} cenário(s)</span>
+        ${faltam ? `<span class="ml-auto text-xs text-rose-600 font-medium">${faltam} faltante(s)</span>`
+                 : '<span class="ml-auto text-xs text-emerald-700">tudo coberto</span>'}
+      </summary>
+      <div class="overflow-x-auto px-4 pb-3">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 border-b border-slate-200">
+            <tr>
+              <th class="text-left py-2 pr-3 font-medium">Cenário</th>
+              ${datas.map(d => `<th class="text-right py-2 pr-3 font-medium whitespace-nowrap">${fmtData(d)}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>${itens.map(c => `
+            <tr class="border-b border-slate-100 last:border-0">
+              <td class="py-2 pr-3">${escapeHtml(c.descricao || '—')}${c.esperado ? '' : ' <span class="text-xs text-slate-400">(opcional)</span>'}</td>
+              ${datas.map(d => {
+                const x = (c.serie || {})[d];
+                if (!x) return '<td class="py-2 pr-3 text-right text-slate-300">—</td>';
+                const st = MOV_STATUS[x.status] || MOV_STATUS.OPCIONAL;
+                return `<td class="py-2 pr-3 text-right tabular-nums">${x.qtde > 0 ? fmtNum(x.qtde) : `<span class="${st.cls}">${st.rot}</span>`}</td>`;
+              }).join('')}
+            </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </details>`;
+  }).join('');
+
+  box.innerHTML = `
+    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-1">Evolução por medição</h3>
+      <p class="text-xs text-slate-400 mb-3">A barra mede a COBERTURA de cenários, não o volume:
+        movimento que cresce sem cobrir cenário novo não aproxima o go-live.</p>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 border-b border-slate-200">
+            <tr>
+              <th class="text-left  py-2 pr-3 font-medium">Medição</th>
+              <th class="text-left  py-2 pr-3 font-medium">Cobertura</th>
+              <th class="text-right py-2 pr-3 font-medium">Cobertos</th>
+              <th class="text-right py-2 pr-3 font-medium">Δ</th>
+              <th class="text-right py-2 pr-3 font-medium">Movimentos</th>
+              <th class="text-right py-2 pr-3 font-medium">Δ</th>
+              <th class="text-right py-2 pr-3 font-medium">Combin.</th>
+              <th class="text-right py-2 font-medium">Faltantes</th>
+            </tr>
+          </thead>
+          <tbody>${linhasSerie}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 p-5">
+      <h3 class="text-sm font-semibold text-slate-700 mb-1">Cenário por medição</h3>
+      <p class="text-xs text-slate-400 mb-3">Quantidade observada em cada medição. Análise com
+        faltante já vem aberta.</p>
+      ${matriz || '<p class="text-sm text-slate-400">Nenhum cenário combinado ainda.</p>'}
+    </div>`;
 }
 
 async function carregaMovimentos(customer) {
@@ -3123,6 +3307,8 @@ async function carregaMovimentos(customer) {
   }
   mov.dados = j;
   mov.verTudo = {};
+  // Carregou na visão de evolução? Não pinta a situação atual por cima dela.
+  if (mov.visao === 'evolucao') { carregaEvolucaoMov(); return; }
   if (j.vazio) {
     box.innerHTML = blocoVazioCad(
       `Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`,

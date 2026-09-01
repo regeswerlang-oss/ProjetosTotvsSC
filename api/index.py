@@ -1329,6 +1329,86 @@ def _cobertura(dimensoes, cenarios):
     return cobertura, nao_previstos
 
 
+SQL_MOV_EVO_DIM = """
+  select medicao_id, analise, descricao, dim1, dim2, dim3, dim4, qtde, qtd_doc
+    from cockpit.monitmov_dimensoes
+   where medicao_id = any(%s)
+"""
+
+
+@app.get("/api/monitmov/<customer>/evolucao")
+def api_monitmov_evolucao(customer):
+    """Evolução dos MOVIMENTOS: uma linha por medição com movimentos, combinações
+    e cobertura, mais a matriz cenário × medição.
+
+    A cobertura é recalculada com `_cobertura()` — a MESMA função da "Situação
+    atual". Reescrever a regra de casamento aqui (coringa, normalização, o que
+    conta como não previsto) faria as duas visões divergirem no dia em que uma
+    delas mudasse, e o usuário veria 7/11 numa aba e 8/11 na outra sem explicação.
+
+    Uma consulta só traz as dimensões de TODAS as medições; agrupar em Python
+    evita N+1 no Postgres — são poucas medições, mas centenas de combinações
+    cada."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    amb = _ambiente()
+    meds = q("""select id, data_medicao, semana, hora_medicao,
+                       periodo_ini, periodo_fim, origem
+                  from cockpit.monitmov_medicoes
+                 where customer=%s and ambiente=%s order by data_medicao, id""",
+             (customer, amb))
+    cenarios = q("""select id, analise, dim1, dim2, dim3, dim4, descricao,
+                           esperado, etapa, responsavel
+                      from cockpit.monitmov_cenarios where customer=%s
+                     order by analise, descricao""", (customer,))
+    if not meds:
+        return _json({"ok": True, "customer": customer, "ambiente": amb,
+                      "vazio": True, "medicoes": [], "cenarios": [], "serie": []})
+
+    dims = q(SQL_MOV_EVO_DIM, ([m["id"] for m in meds],))
+    por_med = {}
+    for d in dims:
+        por_med.setdefault(d["medicao_id"], []).append(d)
+
+    serie, matriz = [], {}
+    for m in meds:
+        ds = por_med.get(m["id"], [])
+        cob, nao_prev = _cobertura(ds, cenarios)
+        cobertos = sum(1 for c in cob if c["status"] == "COBERTO")
+        faltantes = sum(1 for c in cob if c["status"] == "FALTANTE")
+        data = str(m["data_medicao"])
+        serie.append({
+            "data_medicao": m["data_medicao"], "semana": m["semana"],
+            "hora_medicao": m["hora_medicao"],
+            "periodo_ini": m["periodo_ini"], "periodo_fim": m["periodo_fim"],
+            "movimentos": sum(float(d["qtde"] or 0) for d in ds),
+            "documentos": sum(float(d["qtd_doc"] or 0) for d in ds),
+            "combinacoes": len(ds),
+            "analises": len({_norm_dim(d["analise"]) for d in ds}),
+            "cobertos": cobertos, "faltantes": faltantes,
+            "cenarios": len(cob), "nao_previstos": len(nao_prev),
+        })
+        # A chave da matriz é o id do cenário: descrição repete entre análises.
+        for c in cob:
+            linha = matriz.setdefault(c["id"], {
+                "id": c["id"], "analise": c["analise"], "descricao": c["descricao"],
+                "esperado": c["esperado"], "etapa": c["etapa"],
+                "responsavel": c["responsavel"], "serie": {}})
+            linha["serie"][data] = {"qtde": c["qtde"], "status": c["status"]}
+
+    # Faltante primeiro: é o que precisa de ação. Depois o que tem menos volume.
+    ordem = {"FALTANTE": 0, "COBERTO": 1, "OPCIONAL": 2}
+    ultima = str(meds[-1]["data_medicao"])
+    linhas = sorted(matriz.values(),
+                    key=lambda l: (ordem.get((l["serie"].get(ultima) or {}).get("status"), 9),
+                                   l["analise"], l["descricao"] or ""))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": False,
+                  "medicoes": [str(m["data_medicao"]) for m in meds],
+                  "serie": serie, "cenarios": linhas})
+
+
 @app.get("/api/monitmov/<customer>")
 def api_monitmov(customer):
     """Última medição de MOVIMENTOS do cliente no ambiente pedido: totais por
