@@ -357,6 +357,8 @@
             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
               <button id="cad-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
+              <button id="cad-ambiente" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
+              <button id="cad-coletar" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
               <label id="cad-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
                 ⬆ Subir medição (.csv / .json)
                 <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
@@ -379,6 +381,8 @@
             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
               <button id="mov-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
+              <button id="mov-ambiente" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
+              <button id="mov-coletar" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
               <button id="mov-cenarios" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
               <label id="mov-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
                 ⬆ Importar movimentos (.csv / .json)
@@ -4791,6 +4795,171 @@ function abreModalSQL(tipo = 'cadastros') {
 }
 
 $('#cad-sql').addEventListener('click', () => abreModalSQL('cadastros'));
+
+// ============================================================================
+//  AMBIENTE PROTHEUS — parâmetros da base do cliente e coleta automática
+// ============================================================================
+// O "🗄 Script SQL" continua sendo a fonte da verdade da consulta: o que muda
+// aqui é o TRANSPORTE. Cadastrado o ambiente, o mesmo script sai daqui, roda na
+// base pelo fonte TSCMONITREST e volta como o mesmo CSV que era exportado à
+// mão — e entra pelo mesmo importador.
+//
+// Produção e teste são bases diferentes: cada uma tem o seu cadastro, e é o
+// ambiente da sub-aba aberta que manda. Por isso o título do modal carrega o
+// selo da base — coletar de teste achando que é produção é o erro caro aqui.
+
+async function abreModalAmbiente(ambiente) {
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de configurar o ambiente.'); return; }
+
+  let atual = null, chaveOk = true, ultimas = [];
+  try {
+    const j = await api(`/api/protheus/${encodeURIComponent(cli)}`);
+    atual = (j.ambientes || []).find(a => a.ambiente === ambiente) || null;
+    chaveOk = j.chave_ok !== false;
+    ultimas = (j.coletas || []).filter(c => c.ambiente === ambiente).slice(0, 4);
+  } catch (e) { alert('Não consegui ler os ambientes: ' + e.message); return; }
+
+  const v = (k, d = '') => (atual && atual[k] != null && atual[k] !== '' ? String(atual[k]) : d);
+  const selo = AMB[ambiente];
+  const m = modal(`Ambiente Protheus · ${selo.label}`,
+    `<p class="text-xs text-slate-500">Endereço do fonte <b>TSCMONITREST</b> compilado nesta base:
+       o prefixo do <code>[HTTPURI]</code> do servidor REST mais <code>/tscmonit</code> — ex.:
+       <code>http://servidor:8282/api/tscmonit</code>. Sem <code>/ping</code> nem
+       <code>/query</code> no fim: o painel acrescenta.</p>
+     ${campo('am-url', 'URL REST', v('url_rest'), 'text', 'sem barra no fim')}
+     <div class="grid grid-cols-2 gap-3">
+       ${campo('am-env', 'Environment', v('environment'), 'text', 'confere com o /ping')}
+       <label class="block"><span class="text-xs text-slate-500">Banco de dados</span>
+         <select id="am-banco" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+           <option value="">(informe)</option>
+           <option value="oracle">Oracle</option>
+           <option value="mssql">SQL Server</option>
+           <option value="postgres">PostgreSQL</option>
+         </select>
+         <span class="text-xs text-slate-400">define o dialeto do script</span></label>
+     </div>
+     <div class="grid grid-cols-3 gap-3">
+       ${campo('am-empresa', 'Empresa', v('empresa', '01'))}
+       ${campo('am-filial', 'Filial', v('filial', '01'))}
+       ${campo('am-sufixo', 'Sufixo das tabelas', v('sufixo'), 'text', 'ex.: 010')}
+     </div>
+     <div class="grid grid-cols-2 gap-3">
+       ${campo('am-usuario', 'Usuário do Protheus', v('usuario'))}
+       ${campo('am-senha', 'Senha', '', 'password',
+               atual && atual.tem_senha ? 'gravada — deixe em branco para manter' : 'obrigatória na 1ª vez')}
+     </div>
+     ${campo('am-token', 'Token da REST (MV_TSCTOKN)', '', 'password',
+             atual && atual.tem_token ? 'gravado — deixe em branco para manter' : 'o mesmo valor do parâmetro na base')}
+     <div class="grid grid-cols-3 gap-3">
+       ${campo('am-timeout', 'Timeout (s)', v('timeout_s', '45'), 'number', 'teto 50 — a página cai em 60')}
+       ${campo('am-limite', 'Limite de linhas', v('limite_linhas', '50000'), 'number')}
+       <label class="block"><span class="text-xs text-slate-500">Situação</span>
+         <select id="am-ativo" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+           <option value="1">Ativo</option><option value="0">Inativo</option>
+         </select></label>
+     </div>
+     ${chaveOk ? '' : `<p class="text-xs text-rose-600">A variável PROTHEUS_CRED_KEY não está
+        configurada no servidor — sem ela a senha e o token não podem ser gravados.</p>`}
+     <div class="flex items-center gap-2 pt-1">
+       <button id="am-testar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">
+         Salvar e testar conexão</button>
+       <span id="am-status" class="text-xs ${atual && atual.ultimo_teste_ok ? 'text-emerald-700' : 'text-slate-500'}">
+         ${atual && atual.ultimo_teste_em ? escapeHtml(`${atual.ultimo_teste_ok ? '✓' : '✕'} ${atual.ultimo_teste_msg || ''}`) : 'Nunca testado.'}</span>
+     </div>
+     ${ultimas.length ? `<div class="text-xs text-slate-500 border-t border-slate-200 pt-2">
+        <b>Últimas chamadas</b><br>${ultimas.map(c =>
+          `${c.ok ? '✓' : '✕'} ${escapeHtml(c.tipo)} · ${escapeHtml(String(c.iniciado_em).slice(0, 16))}` +
+          (c.linhas != null ? ` · ${c.linhas} linha(s)` : '') +
+          (c.erro ? ` · ${escapeHtml(String(c.erro).slice(0, 90))}` : '')).join('<br>')}</div>` : ''}`,
+    'Salvar');
+  if (atual && atual.banco) m.campo('am-banco').value = atual.banco;
+  if (atual) m.campo('am-ativo').value = atual.ativo ? '1' : '0';
+
+  const corpo = () => ({
+    url_rest: m.campo('am-url').value.trim(),
+    environment: m.campo('am-env').value.trim(),
+    banco: m.campo('am-banco').value,
+    empresa: m.campo('am-empresa').value.trim() || '01',
+    filial: m.campo('am-filial').value.trim() || '01',
+    sufixo: m.campo('am-sufixo').value.trim(),
+    usuario: m.campo('am-usuario').value.trim(),
+    senha: m.campo('am-senha').value,
+    token: m.campo('am-token').value,
+    timeout_s: Number(m.campo('am-timeout').value || 45),
+    limite_linhas: Number(m.campo('am-limite').value || 50000),
+    ativo: m.campo('am-ativo').value === '1',
+  });
+  const salva = async () => {
+    const d = corpo();
+    if (!/^https?:\/\//i.test(d.url_rest)) throw new Error('Informe a URL REST (http://…).');
+    await api(`/api/protheus/${encodeURIComponent(cli)}/${ambiente}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(d),
+    });
+  };
+
+  // Testar sem salvar mentiria: o teste roda com o que ESTÁ gravado.
+  m.campo('am-testar').addEventListener('click', async () => {
+    const st = m.campo('am-status');
+    st.textContent = 'Testando…'; st.className = 'text-xs text-slate-500';
+    try {
+      await salva();
+      const j = await api(`/api/protheus/${encodeURIComponent(cli)}/${ambiente}/testar`, { method: 'POST' });
+      st.textContent = `${j.ok ? '✓' : '⚠'} ${j.mensagem}`;
+      st.className = `text-xs ${j.ok ? 'text-emerald-700' : 'text-amber-700'}`;
+    } catch (e) {
+      st.textContent = '✕ ' + e.message;
+      st.className = 'text-xs text-rose-600';
+    }
+  });
+
+  m.aoConfirmar(async () => {
+    m.erro(''); m.ocupado(true, 'Salvando…');
+    try { await salva(); m.fecha(); }
+    catch (e) { m.ocupado(false, 'Salvar'); m.erro(e.message); }
+  });
+}
+
+async function coletaAgora(tipo) {
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de coletar.'); return; }
+  const amb = tipo === 'movimentos' ? mov.ambiente : cad.ambiente;
+  const m = modal(`Coletar agora · ${AMB[amb].label}`,
+    `<p>Vou rodar na <b>${AMB[amb].label}</b> o script de <b>${tipo}</b> que está salvo
+       para este cliente e gravar a medição de hoje.</p>
+     <p class="text-xs text-slate-500">É o mesmo caminho do arquivo subido à mão: mesma
+       consulta, mesmo CSV, mesmo importador. Reimportar a mesma data apenas regrava —
+       nada duplica. Se a base demorar mais que o timeout do ambiente, nada é gravado.</p>
+     <p id="col-msg" class="text-xs text-slate-500"></p>`, 'Coletar');
+  m.aoConfirmar(async () => {
+    m.erro(''); m.ocupado(true, 'Coletando…');
+    m.campo('col-msg').textContent = 'Executando na base do cliente — pode levar alguns segundos.';
+    try {
+      const j = await api(
+        `/api/protheus/${encodeURIComponent(cli)}/${amb}/coletar?tipo=${tipo}`, { method: 'POST' });
+      m.fecha();
+      const qtd = tipo === 'movimentos' ? `${j.dimensoes} linha(s) de quebra` : `${j.tabelas} tabela(s)`;
+      alert(`${AMB[amb].label} · ${j.environment || '?'}: ${j.linhas} linha(s) lidas, ` +
+            `${qtd} em ${j.medicoes} medição(ões) — ${fmtData(j.ultima_medicao)}.` +
+            (j.truncado ? '\n\nATENÇÃO: a consulta bateu no limite de linhas do ambiente.' : ''));
+      if (tipo === 'movimentos') { mov.customer = null; initMovimentos(amb); }
+      else {
+        cad.customer = null; cad.dados = null; cad.evol = null; cad.evolChave = null;
+        initCadastros(amb);
+      }
+    } catch (e) {
+      m.ocupado(false, 'Coletar');
+      m.erro(e.message);
+    }
+  });
+}
+
+$('#cad-ambiente').addEventListener('click', () => abreModalAmbiente(cad.ambiente));
+$('#mov-ambiente').addEventListener('click', () => abreModalAmbiente(mov.ambiente));
+$('#cad-coletar').addEventListener('click', () => coletaAgora('cadastros'));
+$('#mov-coletar').addEventListener('click', () => coletaAgora('movimentos'));
+
 
 // ============================================================================
 //  MODAIS — rascunho no Gmail e cadastro da App Password

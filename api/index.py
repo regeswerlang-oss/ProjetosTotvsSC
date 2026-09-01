@@ -24,6 +24,7 @@ import base64, csv, email.message, hashlib, hmac, imaplib, io, json, os, re, tim
 from pathlib import Path
 
 import psycopg2, psycopg2.extras, requests
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from psycopg2.extras import execute_values
 from flask import Flask, Response, request, redirect, make_response
 from werkzeug.exceptions import HTTPException
@@ -1040,6 +1041,78 @@ def api_monitcad_script_remover(customer):
     return _json({"ok": True, "customer": customer, "tipo": _tipo_script(), "removido": True})
 
 
+def _gravar_cadastros(customer, amb, body, origem="upload"):
+    """Núcleo da carga de cadastros — o MESMO caminho para o arquivo subido à
+    mão e para a coleta automática pela REST do cliente. De propósito: as regras
+    que decidem o que entra (TABELAS_IGNORADAS) e em que painel entra
+    (_painel_da_tabela) não podem ganhar uma segunda cópia, que é exatamente
+    como uma tabela de movimento volta a aparecer em Cadastros.
+    `medicoes` já vem validada pelo chamador."""
+    medicoes = body.get("medicoes") or []
+    execute("""insert into cockpit.monitcad_projetos
+                 (customer, slug, projeto, cliente_nome, gp_totvs_nome, gp_cliente_nome, updated_at)
+               values (%s,%s,%s,%s,%s,%s, now())
+               on conflict (customer) do update set
+                 projeto=coalesce(excluded.projeto, cockpit.monitcad_projetos.projeto),
+                 cliente_nome=coalesce(excluded.cliente_nome, cockpit.monitcad_projetos.cliente_nome),
+                 gp_totvs_nome=coalesce(excluded.gp_totvs_nome, cockpit.monitcad_projetos.gp_totvs_nome),
+                 gp_cliente_nome=coalesce(excluded.gp_cliente_nome, cockpit.monitcad_projetos.gp_cliente_nome),
+                 updated_at=now()""",
+            (customer, _slug(body.get("projeto") or "") or None, body.get("projeto"),
+             body.get("cliente"), body.get("gp_totvs"), body.get("gp_cliente")))
+
+    n_med = n_tab = 0
+    ultima = None
+    for m in medicoes:
+        dt = _data_iso(m.get("data_iso") or m.get("data_medicao"))
+        if not dt:
+            continue
+        # regrava a medição inteira DAQUELE ambiente — produção e teste convivem
+        # na mesma data sem uma apagar a outra
+        antigos = q("""select id from cockpit.monitcad_medicoes
+                        where customer=%s and data_medicao=%s and ambiente=%s""",
+                    (customer, dt, amb))
+        for a in antigos:
+            execute("delete from cockpit.monitcad_tabelas where medicao_id=%s", (a["id"],))
+            execute("delete from cockpit.monitcad_medicoes where id=%s", (a["id"],))
+        row = q("""insert into cockpit.monitcad_medicoes
+                     (customer, ambiente, data_medicao, semana, hora_medicao, origem, payload)
+                   values (%s,%s,%s,%s,%s,%s,%s) returning id""",
+                (customer, amb, dt, m.get("semana"), m.get("hora_medicao"), origem,
+                 json.dumps({k: v for k, v in m.items() if k != "tabelas"})), one=True)
+        mid = row["id"]
+        n_med += 1
+        ultima = max(ultima or dt, dt)
+        linhas = []
+        for t in (m.get("tabelas") or []):
+            if (t.get("tabela") or "").strip().upper() in TABELAS_IGNORADAS:
+                continue
+            est = float(t.get("estimativa") or 0)
+            real = float(t.get("realizado") or 0)
+            pct = t.get("percentual")
+            if pct is None:
+                pct = round(100.0 * real / est, 1) if est > 0 else 0
+            linhas.append((mid, customer, amb, dt, t.get("tabela"), t.get("descricao"),
+                           t.get("modulo"), t.get("filtro"), real, est, pct,
+                           _data_iso(t.get("data_prev")), t.get("etapa"),
+                           t.get("responsavel"), t.get("status"),
+                           _painel_da_tabela(t.get("tabela"))))
+        if linhas:
+            with db() as c, c.cursor() as cur:
+                execute_values(cur, """
+                    insert into cockpit.monitcad_tabelas
+                      (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
+                       modulo, filtro, realizado, estimativa, percentual, data_prev,
+                       etapa, responsavel, status, painel)
+                    values %s""", linhas, page_size=200)
+            n_tab += len(linhas)
+
+    if ultima and amb == "producao":     # o marco do projeto é a base de produção
+        execute("update cockpit.monitcad_projetos set ultima_medicao=%s, updated_at=now() "
+                "where customer=%s", (ultima, customer))
+    return {"medicoes": n_med, "tabelas": n_tab, "ultima_medicao": ultima}
+
+
 @app.post("/api/monitcad/<customer>/upload")
 def api_monitcad_upload(customer):
     """Carga manual enquanto o job do Protheus não roda. Aceita DOIS formatos:
@@ -1091,72 +1164,11 @@ def api_monitcad_upload(customer):
     # FK: o customer precisa existir em cockpit.clientes
     if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
         return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
-
-    execute("""insert into cockpit.monitcad_projetos
-                 (customer, slug, projeto, cliente_nome, gp_totvs_nome, gp_cliente_nome, updated_at)
-               values (%s,%s,%s,%s,%s,%s, now())
-               on conflict (customer) do update set
-                 projeto=coalesce(excluded.projeto, cockpit.monitcad_projetos.projeto),
-                 cliente_nome=coalesce(excluded.cliente_nome, cockpit.monitcad_projetos.cliente_nome),
-                 gp_totvs_nome=coalesce(excluded.gp_totvs_nome, cockpit.monitcad_projetos.gp_totvs_nome),
-                 gp_cliente_nome=coalesce(excluded.gp_cliente_nome, cockpit.monitcad_projetos.gp_cliente_nome),
-                 updated_at=now()""",
-            (customer, _slug(body.get("projeto") or "") or None, body.get("projeto"),
-             body.get("cliente"), body.get("gp_totvs"), body.get("gp_cliente")))
-
     amb = _ambiente()
-    n_med = n_tab = 0
-    ultima = None
-    for m in medicoes:
-        dt = _data_iso(m.get("data_iso") or m.get("data_medicao"))
-        if not dt:
-            continue
-        # regrava a medição inteira DAQUELE ambiente — produção e teste convivem
-        # na mesma data sem uma apagar a outra
-        antigos = q("""select id from cockpit.monitcad_medicoes
-                        where customer=%s and data_medicao=%s and ambiente=%s""",
-                    (customer, dt, amb))
-        for a in antigos:
-            execute("delete from cockpit.monitcad_tabelas where medicao_id=%s", (a["id"],))
-            execute("delete from cockpit.monitcad_medicoes where id=%s", (a["id"],))
-        row = q("""insert into cockpit.monitcad_medicoes
-                     (customer, ambiente, data_medicao, semana, hora_medicao, origem, payload)
-                   values (%s,%s,%s,%s,%s,'upload',%s) returning id""",
-                (customer, amb, dt, m.get("semana"), m.get("hora_medicao"),
-                 json.dumps({k: v for k, v in m.items() if k != "tabelas"})), one=True)
-        mid = row["id"]
-        n_med += 1
-        ultima = max(ultima or dt, dt)
-        linhas = []
-        for t in (m.get("tabelas") or []):
-            if (t.get("tabela") or "").strip().upper() in TABELAS_IGNORADAS:
-                continue
-            est = float(t.get("estimativa") or 0)
-            real = float(t.get("realizado") or 0)
-            pct = t.get("percentual")
-            if pct is None:
-                pct = round(100.0 * real / est, 1) if est > 0 else 0
-            linhas.append((mid, customer, amb, dt, t.get("tabela"), t.get("descricao"),
-                           t.get("modulo"), t.get("filtro"), real, est, pct,
-                           _data_iso(t.get("data_prev")), t.get("etapa"),
-                           t.get("responsavel"), t.get("status"),
-                           _painel_da_tabela(t.get("tabela"))))
-        if linhas:
-            with db() as c, c.cursor() as cur:
-                execute_values(cur, """
-                    insert into cockpit.monitcad_tabelas
-                      (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
-                       modulo, filtro, realizado, estimativa, percentual, data_prev,
-                       etapa, responsavel, status, painel)
-                    values %s""", linhas, page_size=200)
-            n_tab += len(linhas)
-
-    if ultima and amb == "producao":     # o marco do projeto é a base de produção
-        execute("update cockpit.monitcad_projetos set ultima_medicao=%s, updated_at=now() "
-                "where customer=%s", (ultima, customer))
+    r = _gravar_cadastros(customer, amb, body)
     return _json({"ok": True, "customer": customer, "ambiente": amb,
-                  "formato": "csv" if ehcsv else "json", "medicoes": n_med,
-                  "tabelas": n_tab, "ultima_medicao": ultima})
+                  "formato": "csv" if ehcsv else "json", **r})
+
 
 
 # ── MOVIMENTOS — cobertura de cenários, não volume por tabela ───────────────
@@ -1472,44 +1484,10 @@ def api_monitmov(customer):
                   "a_classificar": a_classificar})
 
 
-@app.post("/api/monitmov/<customer>/upload")
-def api_monitmov_upload(customer):
-    """Importa o export do D5 (CSV) ou o mesmo conteúdo em JSON. Idempotente:
-    regrava a medição inteira daquela data, naquele ambiente."""
-    if (r := require_auth()):
-        return r
-    if (d := deny_customer(customer)):
-        return d
-    if effective_user() != current_user():
-        return _err(409, "Saia da simulação ('ver como') antes de subir movimentos.")
-
-    if (f := request.files.get("arquivo")):
-        bruto, nome = f.read(), (f.filename or "")
-    else:
-        bruto, nome = request.get_data(), ""
-    if not bruto:
-        return _err(400, "Arquivo vazio.")
-    texto = None
-    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
-        try:
-            texto = bruto.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
-
-    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
-        or not texto.lstrip().startswith(("{", "["))
-    try:
-        body = _csv_movimentos(texto) if ehcsv else json.loads(texto)
-    except Exception as e:
-        return _err(400, f"{'CSV' if ehcsv else 'JSON'} inválido: {e}")
-    if not isinstance(body, dict) or not body.get("medicoes"):
-        return _err(400, "Arquivo sem medições.")
-    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
-        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
-
-    amb = _ambiente()
+def _gravar_movimentos(customer, amb, body, origem="upload"):
+    """Núcleo da carga de movimentos (cobertura de cenários). Mesmo motivo do
+    _gravar_cadastros: upload manual e coleta automática entram pela mesma
+    porta."""
     n_med = n_dim = 0
     ultima = None
     for m in body["medicoes"]:
@@ -1528,9 +1506,9 @@ def api_monitmov_upload(customer):
         row = q("""insert into cockpit.monitmov_medicoes
                      (customer, ambiente, data_medicao, semana, hora_medicao,
                       periodo_ini, periodo_fim, origem, payload)
-                   values (%s,%s,%s,%s,%s,%s,%s,'upload',%s) returning id""",
+                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
                 (customer, amb, dt, m.get("semana"), m.get("hora_medicao"),
-                 p_ini, p_fim,
+                 p_ini, p_fim, origem,
                  json.dumps({k: v for k, v in m.items() if k != "dimensoes"})), one=True)
         mid = row["id"]
         n_med += 1
@@ -1573,9 +1551,382 @@ def api_monitmov_upload(customer):
                       (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
                        modulo, filtro, quantidade, valor, periodo)
                     values %s""", resumo, page_size=100)
+    return {"medicoes": n_med, "dimensoes": n_dim, "ultima_medicao": ultima}
+
+
+@app.post("/api/monitmov/<customer>/upload")
+def api_monitmov_upload(customer):
+    """Importa o export do D5 (CSV) ou o mesmo conteúdo em JSON. Idempotente:
+    regrava a medição inteira daquela data, naquele ambiente."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de subir movimentos.")
+
+    if (f := request.files.get("arquivo")):
+        bruto, nome = f.read(), (f.filename or "")
+    else:
+        bruto, nome = request.get_data(), ""
+    if not bruto:
+        return _err(400, "Arquivo vazio.")
+    texto = None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            texto = bruto.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
+
+    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
+        or not texto.lstrip().startswith(("{", "["))
+    try:
+        body = _csv_movimentos(texto) if ehcsv else json.loads(texto)
+    except Exception as e:
+        return _err(400, f"{'CSV' if ehcsv else 'JSON'} inválido: {e}")
+    if not isinstance(body, dict) or not body.get("medicoes"):
+        return _err(400, "Arquivo sem medições.")
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+    amb = _ambiente()
+    r = _gravar_movimentos(customer, amb, body)
     return _json({"ok": True, "customer": customer, "ambiente": amb,
-                  "formato": "csv" if ehcsv else "json", "medicoes": n_med,
-                  "dimensoes": n_dim, "ultima_medicao": ultima})
+                  "formato": "csv" if ehcsv else "json", **r})
+
+
+# ── Ambientes Protheus — coleta automática pela REST do cliente ─────────────
+# A medição sempre nasceu de um caminho manual: abrir o modal "Script SQL",
+# copiar, colar no console TCloud, exportar CSV e arrastar o arquivo aqui. O
+# fonte TLPP TSCMONITREST (fontes/tlpp/ do cockpit) publica na base do cliente
+# um POST /tscmonit/query que recebe ESSE MESMO script e devolve ESSE MESMO
+# CSV — então a coleta automática entra pelo importador de sempre
+# (_gravar_cadastros / _gravar_movimentos), sem uma segunda cópia das regras.
+#
+# Produção e teste são bases DIFERENTES: uma linha por (customer, ambiente),
+# cada uma com URL, environment, empresa/filial, sufixo e banco próprios.
+# É por isso que o teste de conexão compara environment e banco com o que o
+# /ping devolve: coletar da base errada é o erro caro deste processo — o número
+# chega bonito, plausível, e vem do lugar errado.
+
+BANCOS = ("oracle", "mssql", "postgres")
+TIMEOUT_TETO = 50          # a função da Vercel morre em 60s (vercel.json)
+
+
+def _cred_key():
+    b = base64.b64decode(os.environ.get("PROTHEUS_CRED_KEY", "") or "")
+    if len(b) != 32:
+        raise RuntimeError("PROTHEUS_CRED_KEY ausente ou inválida "
+                           "(32 bytes em base64: openssl rand -base64 32).")
+    return b
+
+
+def _cifra(txt, aad):
+    """base64(iv||tag||ct), AES-256-GCM — o mesmo formato do cockpit
+    (src/lib/tasks-sc/crypto.ts). A AAD amarra o segredo ao par
+    cliente/ambiente: um blob copiado para outra linha não decifra."""
+    if not txt:
+        return None
+    iv = os.urandom(12)
+    sel = AESGCM(_cred_key()).encrypt(iv, txt.encode(), aad.encode())  # ct||tag
+    return base64.b64encode(iv + sel[-16:] + sel[:-16]).decode()
+
+
+def _decifra(blob, aad):
+    if not blob:
+        return ""
+    raw = base64.b64decode(blob)
+    iv, tag, ct = raw[:12], raw[12:28], raw[28:]
+    return AESGCM(_cred_key()).decrypt(iv, ct + tag, aad.encode()).decode()
+
+
+def _aad(customer, ambiente):
+    return f"{customer}|{ambiente}"
+
+
+def _amb_path(ambiente):
+    a = (ambiente or "").strip().lower()
+    return a if a in AMBIENTES else None
+
+
+def _cfg_ambiente(customer, ambiente):
+    return q("select * from cockpit.protheus_ambientes where customer=%s and ambiente=%s",
+             (customer, ambiente), one=True)
+
+
+def _log_coleta(customer, ambiente, tipo, ini, ok, **kw):
+    """Log de cada disparo. Sem isso, 'não atualizou' vira caça ao log da
+    Vercel — e o cliente não tem como provar quando a leitura foi feita."""
+    try:
+        execute("""insert into cockpit.protheus_coletas
+                     (customer, ambiente, tipo, iniciado_em, duracao_ms, ok, http_status,
+                      linhas, medicoes, itens, bytes, data_medicao, erro, disparado_por)
+                   values (%s,%s,%s, to_timestamp(%s), %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (customer, ambiente, tipo, ini, int((time.time() - ini) * 1000), ok,
+                 kw.get("http_status"), kw.get("linhas"), kw.get("medicoes"),
+                 kw.get("itens"), kw.get("bytes"), kw.get("data_medicao"),
+                 (kw.get("erro") or "")[:2000] or None, current_user()))
+    except Exception:
+        pass          # log não pode derrubar a coleta
+
+
+def _guarda_ambiente(customer, ambiente, escrita=False):
+    """Devolve (erro_response, ambiente_normalizado)."""
+    if (r := require_auth()):
+        return r, None
+    if (d := deny_customer(customer)):
+        return d, None
+    amb = _amb_path(ambiente)
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'."), None
+    if escrita and effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de alterar ambientes."), None
+    return None, amb
+
+
+@app.get("/api/protheus/<customer>")
+def api_protheus_listar(customer):
+    """Parâmetros dos dois ambientes + as últimas coletas. Segredo NUNCA sai
+    daqui: só os booleanos tem_senha/tem_token, que é o que a tela precisa."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    rows = q("""select customer, ambiente, url_rest, environment, empresa, filial,
+                       usuario, banco, sufixo, timeout_s, limite_linhas, ativo,
+                       (senha_enc is not null) as tem_senha,
+                       (token_enc is not null) as tem_token,
+                       ultimo_teste_em, ultimo_teste_ok, ultimo_teste_msg,
+                       observacao, updated_by, updated_at
+                  from cockpit.protheus_ambientes
+                 where customer=%s order by ambiente""", (customer,))
+    coletas = q("""select ambiente, tipo, iniciado_em, duracao_ms, ok, linhas,
+                          medicoes, data_medicao, erro, disparado_por
+                     from cockpit.protheus_coletas
+                    where customer=%s order by iniciado_em desc limit 12""", (customer,))
+    return _json({"ok": True, "customer": customer, "ambientes": rows,
+                  "coletas": coletas, "chave_ok": bool(os.environ.get("PROTHEUS_CRED_KEY"))})
+
+
+@app.post("/api/protheus/<customer>/<ambiente>")
+def api_protheus_salvar(customer, ambiente):
+    """Salva a conexão. Senha e token só são regravados quando vêm preenchidos:
+    reabrir a tela e salvar outro campo não pode apagar a credencial."""
+    erro, amb = _guarda_ambiente(customer, ambiente, escrita=True)
+    if erro:
+        return erro
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+
+    b = request.get_json(silent=True) or {}
+    url = (b.get("url_rest") or "").strip().rstrip("/")
+    if not re.match(r"^https?://", url, re.I):
+        return _err(400, "URL REST inválida — informe http://host:porta/tscmonit.")
+    banco = (b.get("banco") or "").strip().lower() or None
+    if banco and banco not in BANCOS:
+        return _err(400, f"Banco inválido — use um de: {', '.join(BANCOS)}.")
+
+    senha_enc = token_enc = None
+    try:
+        if (s := (b.get("senha") or "").strip()):
+            senha_enc = _cifra(s, _aad(customer, amb))
+        if (t := (b.get("token") or "").strip()):
+            token_enc = _cifra(t, _aad(customer, amb))
+    except RuntimeError as e:
+        return _err(500, str(e))
+
+    execute("""insert into cockpit.protheus_ambientes
+                 (customer, ambiente, url_rest, environment, empresa, filial, usuario,
+                  senha_enc, token_enc, banco, sufixo, timeout_s, limite_linhas,
+                  ativo, observacao, updated_by, updated_at)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+               on conflict (customer, ambiente) do update set
+                 url_rest=excluded.url_rest, environment=excluded.environment,
+                 empresa=excluded.empresa, filial=excluded.filial,
+                 usuario=excluded.usuario,
+                 senha_enc=coalesce(excluded.senha_enc, cockpit.protheus_ambientes.senha_enc),
+                 token_enc=coalesce(excluded.token_enc, cockpit.protheus_ambientes.token_enc),
+                 banco=excluded.banco, sufixo=excluded.sufixo,
+                 timeout_s=excluded.timeout_s, limite_linhas=excluded.limite_linhas,
+                 ativo=excluded.ativo, observacao=excluded.observacao,
+                 updated_by=excluded.updated_by, updated_at=now()""",
+            (customer, amb, url, (b.get("environment") or "").strip() or None,
+             (b.get("empresa") or "01").strip(), (b.get("filial") or "01").strip(),
+             (b.get("usuario") or "").strip() or None, senha_enc, token_enc, banco,
+             (b.get("sufixo") or "").strip()[:10] or None,
+             int(b.get("timeout_s") or 45), int(b.get("limite_linhas") or 50000),
+             bool(b.get("ativo", True)), (b.get("observacao") or "").strip() or None,
+             current_user()))
+    return _json({"ok": True, "customer": customer, "ambiente": amb})
+
+
+@app.delete("/api/protheus/<customer>/<ambiente>")
+def api_protheus_remover(customer, ambiente):
+    erro, amb = _guarda_ambiente(customer, ambiente, escrita=True)
+    if erro:
+        return erro
+    execute("delete from cockpit.protheus_ambientes where customer=%s and ambiente=%s",
+            (customer, amb))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "removido": True})
+
+
+def _sessao_protheus(cfg, customer, amb):
+    """Monta (headers, auth, timeout) a partir do cadastro."""
+    tok = _decifra(cfg.get("token_enc"), _aad(customer, amb))
+    sen = _decifra(cfg.get("senha_enc"), _aad(customer, amb))
+    heads = {"Accept": "application/json"}
+    if tok:
+        heads["X-TSC-Token"] = tok
+    auth = (cfg.get("usuario"), sen) if cfg.get("usuario") else None
+    return heads, auth, tok, min(int(cfg.get("timeout_s") or 45), TIMEOUT_TETO)
+
+
+@app.post("/api/protheus/<customer>/<ambiente>/testar")
+def api_protheus_testar(customer, ambiente):
+    """GET /tscmonit/ping. Além de "respondeu", confere se o environment e o
+    banco são os que foram cadastrados — divergência aqui é aviso, não erro:
+    quem decide se a URL está apontando para a base certa é o consultor."""
+    erro, amb = _guarda_ambiente(customer, ambiente)
+    if erro:
+        return erro
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
+
+    ini = time.time()
+    try:
+        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+        r = requests.get(f"{cfg['url_rest']}/ping", headers=heads, auth=auth,
+                         params={"empresa": cfg.get("empresa") or "01",
+                                 "filial": cfg.get("filial") or "01"},
+                         timeout=min(tmo, 30))
+        dados = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+    except ValueError:
+        return _fecha_teste(customer, amb, ini, False, None,
+                            "O endereço respondeu, mas não devolveu JSON — confira se a URL "
+                            "termina em /tscmonit e se o fonte TSCMONITREST está compilado.")
+    except requests.RequestException as e:
+        return _fecha_teste(customer, amb, ini, False, None,
+                            f"Sem resposta: {type(e).__name__}. Confira URL, porta, VPN e o "
+                            f"[HTTPURI] do appserver.ini.")
+
+    if r.status_code >= 400 or not dados.get("ok"):
+        return _fecha_teste(customer, amb, ini, False, r.status_code,
+                            dados.get("erro") or f"HTTP {r.status_code} na rota /ping.")
+
+    avisos = []
+    if cfg.get("environment") and dados.get("environment") and \
+            cfg["environment"].strip().lower() != str(dados["environment"]).strip().lower():
+        avisos.append(f"environment cadastrado ({cfg['environment']}) ≠ do servidor "
+                      f"({dados['environment']})")
+    if cfg.get("banco") and dados.get("banco") and \
+            cfg["banco"] != str(dados["banco"]).strip().lower():
+        avisos.append(f"banco cadastrado ({cfg['banco']}) ≠ do servidor ({dados['banco']})")
+    if not dados.get("token_ok"):
+        avisos.append("token recusado pela base (confira MV_TSCTOKN) — a coleta vai falhar")
+
+    msg = "Conexão OK." if not avisos else "Conectou, mas: " + "; ".join(avisos)
+    return _fecha_teste(customer, amb, ini, not avisos, r.status_code, msg, dados)
+
+
+def _fecha_teste(customer, amb, ini, ok, status, msg, dados=None):
+    execute("""update cockpit.protheus_ambientes
+                  set ultimo_teste_em=now(), ultimo_teste_ok=%s, ultimo_teste_msg=%s
+                where customer=%s and ambiente=%s""", (ok, msg[:500], customer, amb))
+    _log_coleta(customer, amb, "ping", ini, ok, http_status=status,
+                erro=None if ok else msg)
+    return _json({"ok": ok, "customer": customer, "ambiente": amb, "mensagem": msg,
+                  "http_status": status, "servidor": dados or {}}, 200)
+
+
+@app.post("/api/protheus/<customer>/<ambiente>/coletar")
+def api_protheus_coletar(customer, ambiente):
+    """Executa na base do cliente o script salvo em cockpit.monitcad_scripts e
+    grava a medição — o mesmo destino do arquivo subido à mão.
+
+        POST /api/protheus/TFEHXQ00/teste/coletar?tipo=cadastros
+    """
+    erro, amb = _guarda_ambiente(customer, ambiente, escrita=True)
+    if erro:
+        return erro
+    tipo = _tipo_script()
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
+    if not cfg.get("ativo"):
+        return _err(409, f"Ambiente {amb} está inativo — reative antes de coletar.")
+    script = q("""select sql, dialeto, sufixo from cockpit.monitcad_scripts
+                   where customer=%s and tipo=%s""", (customer, tipo), one=True)
+    if not script or not (script.get("sql") or "").strip():
+        return _err(409, f"Nenhum script de {tipo} salvo para {customer}. "
+                         f"Salve no modal 'Script SQL' antes de coletar.")
+
+    ini = time.time()
+    try:
+        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+    except RuntimeError as e:
+        return _err(500, str(e))
+    if not tok:
+        return _err(409, "Sem token cadastrado para este ambiente — a REST da base recusa "
+                         "a chamada sem o X-TSC-Token.")
+
+    corpo = {"token": tok, "tipo": tipo, "sql": script["sql"],
+             "limite": int(cfg.get("limite_linhas") or 50000)}
+    try:
+        r = requests.post(f"{cfg['url_rest']}/query", json=corpo, headers=heads, auth=auth,
+                          params={"empresa": cfg.get("empresa") or "01",
+                                  "filial": cfg.get("filial") or "01"}, timeout=tmo)
+        dados = r.json()
+    except requests.RequestException as e:
+        msg = (f"Falha ao chamar a base: {type(e).__name__}. "
+               f"Timeout do ambiente = {tmo}s (a função da Vercel morre em 60s).")
+        _log_coleta(customer, amb, tipo, ini, False, erro=msg)
+        return _err(502, msg)
+    except ValueError:
+        msg = f"A base respondeu HTTP {r.status_code} sem JSON."
+        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code, erro=msg)
+        return _err(502, msg)
+
+    if r.status_code >= 400 or not dados.get("ok"):
+        msg = dados.get("erro") or f"HTTP {r.status_code} na rota /query."
+        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code, erro=msg)
+        return _err(502, f"A base recusou a consulta: {msg}")
+
+    csv_txt = dados.get("csv") or ""
+    if not csv_txt.strip():
+        msg = "A consulta rodou e voltou vazia — nenhuma linha para gravar."
+        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code,
+                    linhas=0, erro=msg)
+        return _err(409, msg)
+
+    try:
+        body = _csv_movimentos(csv_txt) if tipo == "movimentos" else _csv_para_body(csv_txt)
+    except Exception as e:
+        msg = f"CSV devolvido pela base é inválido: {e}"
+        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code,
+                    linhas=dados.get("linhas"), bytes=len(csv_txt), erro=msg)
+        return _err(422, msg)
+
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+
+    if tipo == "movimentos":
+        res = _gravar_movimentos(customer, amb, body, origem="coleta")
+        itens = res.get("dimensoes")
+    else:
+        res = _gravar_cadastros(customer, amb, body, origem="coleta")
+        itens = res.get("tabelas")
+
+    _log_coleta(customer, amb, tipo, ini, True, http_status=r.status_code,
+                linhas=dados.get("linhas"), medicoes=res.get("medicoes"), itens=itens,
+                bytes=len(csv_txt), data_medicao=res.get("ultima_medicao"))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "tipo": tipo,
+                  "environment": dados.get("environment"), "banco": dados.get("banco"),
+                  "linhas": dados.get("linhas"), "truncado": dados.get("truncado"),
+                  "tempo_base_ms": dados.get("tempo_ms"), **res})
+
+
 
 
 CEN_CAMPOS = ("analise", "dim1", "dim2", "dim3", "dim4", "descricao",
