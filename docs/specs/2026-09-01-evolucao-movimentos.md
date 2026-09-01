@@ -63,3 +63,35 @@ combinações cada — N+1 aqui custaria caro à toa.
 as duas datas, matriz com faltante aberta, volta para Situação atual sem quebrar
 e visão preservada ao trocar de base. O stub reproduz os números reais do Olim
 (321 → 391, 7/11 nas duas medições).
+
+## Dois buracos fechados no mesmo dia
+
+### 1. Análise sem cenário sumia da tela inteira
+
+`SD2_FISCAL` tem **243 movimentos e 60 combinações** no Olim e não aparecia em
+lugar nenhum da Evolução. O motivo é estrutural: a matriz é por cenário, e todos
+os 11 cenários do cliente são `SE5_BANCARIO`. Cobertura não se aplica a quem não
+tem cenário — e sem um bloco próprio o lado fiscal ficava invisível.
+
+**Bloco "Por análise"**: uma linha por análise medida, com volume e combinações
+em cada medição. Quem não tem cenário leva o selo **"sem cenário combinado"** e
+um `—` na coluna de cobertura, em vez de um `0/0` que pareceria cobertura zerada.
+Não ter cenário é informação — é o próximo trabalho —, não erro.
+
+### 2. "Fora do combinado" existia só como contagem
+
+A série trazia `nao_previstos` como número. Número não diz **o que** apareceu.
+
+**Bloco "Fora do combinado"**: a lista, com a combinação rotulada pelos nomes das
+dimensões (`TIPO CAIXA / CHEQUE / LOJA · SENTIDO PAGAMENTO · MOTBX CH`) e a
+quantidade em cada medição — dá para ver o que **cresceu** e o que **apareceu**.
+Combinação que só existe na última medição ganha o selo **"nova"**.
+
+Ordenado pelo que mais pesa na última medição: é fila de trabalho ("isto vira
+regra ou é ruído?"), não relatório de acusação. Mostra as 15 maiores, com
+"mostrar todas".
+
+**Continua valendo** a regra do `_cobertura()`: fora do combinado só aparece para
+análise que **já tem cenário**. Sem isso, a primeira medição de um cliente viraria
+uma lista de tudo o que ele faz. É por isso que o SD2_FISCAL aparece no bloco
+"Por análise" e não no "Fora do combinado" — ninguém combinou nada nele ainda.

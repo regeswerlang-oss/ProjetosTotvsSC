@@ -3237,7 +3237,7 @@ function confirmaAmbiente(nomeArquivo, sugerido, aoConfirmar) {
 //  Spec: docs/specs/2026-08-25-movimentos-cobertura-cenarios.md
 // ============================================================================
 const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {},
-              visao: 'atual', evo: null, evoChave: null };
+              visao: 'atual', evo: null, evoChave: null, verTudoFora: false };
 
 // Rótulo legível do E5_TIPODOC. Fica no front de propósito: a dimensão guarda
 // o CÓDIGO, senão trocar um texto aqui transformaria cenário coberto em
@@ -3431,6 +3431,99 @@ function pintaEvolucaoMov() {
     </details>`;
   }).join('');
 
+  // ── Por análise — inclusive a que NÃO tem cenário combinado ────────────────
+  // O SD2_FISCAL do Olim tem 243 movimentos e 60 combinações e sumia da tela
+  // inteira: cobertura não se aplica a quem não tem cenário, e sem este bloco o
+  // lado fiscal ficava invisível. "Sem cenário combinado" é informação, não erro.
+  const blocoAnalises = (j.analises || []).length ? `
+    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+      <h3 class="text-sm font-semibold text-slate-700 mb-1">Por análise</h3>
+      <p class="text-xs text-slate-400 mb-3">Cada análise medida, com ou sem cenário combinado.
+        Sem cenário não há cobertura a calcular — o que dá para acompanhar é volume e combinações.</p>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 border-b border-slate-200">
+            <tr>
+              <th class="text-left py-2 pr-3 font-medium">Análise</th>
+              ${datas.map(d => `<th class="text-right py-2 pr-3 font-medium whitespace-nowrap">${fmtData(d)}</th>`).join('')}
+              <th class="text-right py-2 font-medium">Cobertura</th>
+            </tr>
+          </thead>
+          <tbody>${j.analises.map(a => {
+            const ult = a.serie[ultima] || {};
+            return `<tr class="border-b border-slate-100 last:border-0">
+              <td class="py-2 pr-3">
+                <span class="font-medium">${escapeHtml(a.analise)}</span>
+                ${a.tem_cenario ? '' : '<span class="ml-2 text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-900">sem cenário combinado</span>'}
+              </td>
+              ${datas.map(d => {
+                const x = a.serie[d];
+                if (!x) return '<td class="py-2 pr-3 text-right text-slate-300">—</td>';
+                return `<td class="py-2 pr-3 text-right tabular-nums">
+                  ${fmtNum(x.movimentos)}
+                  <span class="block text-xs text-slate-400">${fmtNum(x.combinacoes)} comb.</span></td>`;
+              }).join('')}
+              <td class="py-2 text-right tabular-nums text-xs">
+                ${a.tem_cenario
+                  ? `<span class="${ult.faltantes ? 'text-rose-600 font-medium' : 'text-emerald-700'}">${ult.cobertos || 0}/${ult.cenarios || 0}</span>`
+                  : '<span class="text-slate-400">—</span>'}
+              </td>
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>
+    </div>` : '';
+
+  // ── Fora do combinado — a LISTA, não só a contagem ─────────────────────────
+  // Ordenado pelo que mais pesa na última medição: é fila de trabalho ("isto
+  // vira regra ou é ruído?"), não relatório de acusação. Só aparece para análise
+  // que já tem cenário — senão a primeira medição do cliente viraria uma lista
+  // de tudo o que ele fez.
+  const fora = j.fora_combinado || [];
+  const foraTopo = mov.verTudoFora ? fora : fora.slice(0, 15);
+  const rotuloDims = (dims) => (dims || [])
+    .filter(([, v]) => v && v !== '(vazio)')
+    .map(([n, v]) => `<span class="text-slate-400">${escapeHtml(n || '')}</span> ${escapeHtml(v)}`)
+    .join(' <span class="text-slate-300">·</span> ') || '<span class="text-slate-400">—</span>';
+
+  const blocoFora = fora.length ? `
+    <div class="bg-white rounded-lg border border-amber-300 p-5 mb-4">
+      <div class="flex items-baseline gap-2 mb-1">
+        <h3 class="text-sm font-semibold text-amber-900">Fora do combinado</h3>
+        <span class="text-xs text-slate-500">${fora.length} combinação(ões)</span>
+        ${fora.length > 15 ? `<button id="mov-fora-tudo" class="ml-auto text-xs text-totvs-blue hover:underline">${mov.verTudoFora ? 'mostrar só as 15 maiores' : `mostrar todas (${fora.length})`}</button>` : ''}
+      </div>
+      <p class="text-xs text-slate-400 mb-3">Movimento que aconteceu sem cenário que o previsse.
+        Não é erro: é o que precisa virar regra — ou ser explicado — antes do go-live.
+        A coluna por medição mostra o que <b>apareceu</b> e o que <b>cresceu</b>.</p>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-xs text-slate-500 border-b border-slate-200">
+            <tr>
+              <th class="text-left py-2 pr-3 font-medium">Análise</th>
+              <th class="text-left py-2 pr-3 font-medium">Combinação</th>
+              ${datas.map(d => `<th class="text-right py-2 pr-3 font-medium whitespace-nowrap">${fmtData(d)}</th>`).join('')}
+            </tr>
+          </thead>
+          <tbody>${foraTopo.map(f => {
+            const primeira = datas.find(d => (f.serie[d] || 0) > 0);
+            const nova = primeira && primeira === ultima && datas.length > 1;
+            return `<tr class="border-b border-slate-100 last:border-0">
+              <td class="py-2 pr-3 text-xs text-slate-500 whitespace-nowrap">
+                ${escapeHtml(f.analise)}
+                ${nova ? '<span class="ml-1 text-xs px-1 rounded bg-rose-100 text-rose-700">nova</span>' : ''}
+              </td>
+              <td class="py-2 pr-3 text-xs">${rotuloDims(f.dims)}</td>
+              ${datas.map(d => {
+                const v = f.serie[d];
+                return `<td class="py-2 pr-3 text-right tabular-nums">${v ? fmtNum(v) : '<span class="text-slate-300">—</span>'}</td>`;
+              }).join('')}
+            </tr>`;
+          }).join('')}</tbody>
+        </table>
+      </div>
+    </div>` : '';
+
   box.innerHTML = `
     <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
       <h3 class="text-sm font-semibold text-slate-700 mb-1">Evolução por medição</h3>
@@ -3454,12 +3547,20 @@ function pintaEvolucaoMov() {
         </table>
       </div>
     </div>
+    ${blocoAnalises}
+    ${blocoFora}
     <div class="bg-white rounded-lg border border-slate-200 p-5">
       <h3 class="text-sm font-semibold text-slate-700 mb-1">Cenário por medição</h3>
       <p class="text-xs text-slate-400 mb-3">Quantidade observada em cada medição. Análise com
         faltante já vem aberta.</p>
       ${matriz || '<p class="text-sm text-slate-400">Nenhum cenário combinado ainda.</p>'}
     </div>`;
+
+  const btnFora = $('#mov-fora-tudo');
+  if (btnFora) btnFora.addEventListener('click', () => {
+    mov.verTudoFora = !mov.verTudoFora;
+    pintaEvolucaoMov();
+  });
 }
 
 async function carregaMovimentos(customer) {

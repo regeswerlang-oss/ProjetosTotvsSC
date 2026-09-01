@@ -1636,10 +1636,17 @@ def _cobertura(dimensoes, cenarios):
 
 
 SQL_MOV_EVO_DIM = """
-  select medicao_id, analise, descricao, dim1, dim2, dim3, dim4, qtde, qtd_doc
+  select medicao_id, analise, descricao,
+         dim1_nome, dim1, dim2_nome, dim2, dim3_nome, dim3, dim4_nome, dim4,
+         qtde, qtd_doc
     from cockpit.monitmov_dimensoes
    where medicao_id = any(%s)
 """
+
+
+def _chave_dim(d):
+    """Identidade de uma combinação observada, estável entre medições."""
+    return "|".join(_norm_dim(d.get(k)) for k in ("analise", "dim1", "dim2", "dim3", "dim4"))
 
 
 @app.get("/api/monitmov/<customer>/evolucao")
@@ -1678,13 +1685,50 @@ def api_monitmov_evolucao(customer):
     for d in dims:
         por_med.setdefault(d["medicao_id"], []).append(d)
 
-    serie, matriz = [], {}
+    # Análises que TÊM cenário combinado. As que não têm (o SD2_FISCAL do Olim,
+    # com 243 movimentos e 60 combinações) sumiam da evolução inteira: cobertura
+    # não se aplica a elas, e sem um bloco próprio o lado fiscal ficava invisível.
+    com_cenario = {_norm_dim(c["analise"]) for c in cenarios}
+
+    serie, matriz, analises, fora = [], {}, {}, {}
     for m in meds:
         ds = por_med.get(m["id"], [])
         cob, nao_prev = _cobertura(ds, cenarios)
         cobertos = sum(1 for c in cob if c["status"] == "COBERTO")
         faltantes = sum(1 for c in cob if c["status"] == "FALTANTE")
         data = str(m["data_medicao"])
+
+        # ── por análise: vale para TODAS, tenham cenário ou não ──────────────
+        for d in ds:
+            a = d["analise"]
+            linha = analises.setdefault(_norm_dim(a), {
+                "analise": a, "tem_cenario": _norm_dim(a) in com_cenario, "serie": {}})
+            x = linha["serie"].setdefault(data, {"movimentos": 0.0, "documentos": 0.0,
+                                                 "combinacoes": 0})
+            x["movimentos"] += float(d["qtde"] or 0)
+            x["documentos"] += float(d["qtd_doc"] or 0)
+            x["combinacoes"] += 1
+        for c in cob:
+            linha = analises.get(_norm_dim(c["analise"]))
+            if not linha:            # cenário de análise que não veio nesta medição
+                continue
+            x = linha["serie"].setdefault(data, {"movimentos": 0.0, "documentos": 0.0,
+                                                 "combinacoes": 0})
+            x["cenarios"] = x.get("cenarios", 0) + 1
+            if c["status"] == "COBERTO":
+                x["cobertos"] = x.get("cobertos", 0) + 1
+            elif c["status"] == "FALTANTE":
+                x["faltantes"] = x.get("faltantes", 0) + 1
+
+        # ── fora do combinado: a lista, não só a contagem ────────────────────
+        for o in nao_prev:
+            k = _chave_dim(o)
+            item = fora.setdefault(k, {
+                "analise": o["analise"],
+                "dims": [(o.get("dim1_nome"), o.get("dim1")), (o.get("dim2_nome"), o.get("dim2")),
+                         (o.get("dim3_nome"), o.get("dim3")), (o.get("dim4_nome"), o.get("dim4"))],
+                "serie": {}})
+            item["serie"][data] = item["serie"].get(data, 0) + float(o.get("qtde") or 0)
         serie.append({
             "data_medicao": m["data_medicao"], "semana": m["semana"],
             "hora_medicao": m["hora_medicao"],
@@ -1710,9 +1754,15 @@ def api_monitmov_evolucao(customer):
     linhas = sorted(matriz.values(),
                     key=lambda l: (ordem.get((l["serie"].get(ultima) or {}).get("status"), 9),
                                    l["analise"], l["descricao"] or ""))
+    # Fora do combinado ordenado pelo que MAIS pesa na última medição: é a fila
+    # de trabalho ("isto virou regra ou é ruído?"), não um relatório de acusação.
+    lista_fora = sorted(fora.values(),
+                        key=lambda f: -(f["serie"].get(ultima) or 0))
     return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": False,
                   "medicoes": [str(m["data_medicao"]) for m in meds],
-                  "serie": serie, "cenarios": linhas})
+                  "serie": serie, "cenarios": linhas,
+                  "analises": sorted(analises.values(), key=lambda a: a["analise"]),
+                  "fora_combinado": lista_fora})
 
 
 @app.get("/api/monitmov/<customer>")
