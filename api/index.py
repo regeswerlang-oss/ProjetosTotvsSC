@@ -1771,6 +1771,23 @@ def api_protheus_remover(customer, ambiente):
     return _json({"ok": True, "customer": customer, "ambiente": amb, "removido": True})
 
 
+def _json_da_resposta(r):
+    """Le o corpo como JSON SEM exigir o content-type. O AppServer nem sempre
+    carimba o cabecalho que o fonte pede, e recusar por causa disso transformava
+    uma resposta boa em "HTTP 200 nao reconhecido"."""
+    try:
+        return r.json()
+    except ValueError:
+        return {}
+
+
+def _trecho(r):
+    """Primeiros caracteres do corpo — sem isso o erro nao diz NADA sobre o que
+    a base respondeu, e o diagnostico vira adivinhacao."""
+    txt = " ".join((r.text or "").split())
+    return (txt[:160] + "...") if len(txt) > 160 else (txt or "(corpo vazio)")
+
+
 def _sessao_protheus(cfg, customer, amb):
     """Monta (headers, auth, timeout) a partir do cadastro."""
     tok = _decifra(cfg.get("token_enc"), _aad(customer, amb))
@@ -1801,19 +1818,18 @@ def api_protheus_testar(customer, ambiente):
                          params={"empresa": cfg.get("empresa") or "01",
                                  "filial": cfg.get("filial") or "01"},
                          timeout=min(tmo, 30))
-        dados = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-    except ValueError:
-        return _fecha_teste(customer, amb, ini, False, None,
-                            "O endereço respondeu, mas não devolveu JSON — confira se a URL "
-                            "termina em /tscmonit e se o fonte TSCMONITREST está compilado.")
+        dados = _json_da_resposta(r)
     except requests.RequestException as e:
         return _fecha_teste(customer, amb, ini, False, None,
                             f"Sem resposta: {type(e).__name__}. Confira URL, porta, VPN e o "
                             f"[HTTPURI] do appserver.ini.")
 
     if r.status_code >= 400 or not dados.get("ok"):
-        return _fecha_teste(customer, amb, ini, False, r.status_code,
-                            dados.get("erro") or f"HTTP {r.status_code} na rota /ping.")
+        return _fecha_teste(
+            customer, amb, ini, False, r.status_code,
+            dados.get("erro") or
+            f"HTTP {r.status_code} na rota /ping, mas a resposta nao é o JSON do "
+            f"TSCMONITREST. A base devolveu: {_trecho(r)}")
 
     avisos = []
     if cfg.get("environment") and dados.get("environment") and \
@@ -1877,19 +1893,16 @@ def api_protheus_coletar(customer, ambiente):
         r = requests.post(f"{cfg['url_rest']}/query", json=corpo, headers=heads, auth=auth,
                           params={"empresa": cfg.get("empresa") or "01",
                                   "filial": cfg.get("filial") or "01"}, timeout=tmo)
-        dados = r.json()
+        dados = _json_da_resposta(r)
     except requests.RequestException as e:
         msg = (f"Falha ao chamar a base: {type(e).__name__}. "
                f"Timeout do ambiente = {tmo}s (a função da Vercel morre em 60s).")
         _log_coleta(customer, amb, tipo, ini, False, erro=msg)
         return _err(502, msg)
-    except ValueError:
-        msg = f"A base respondeu HTTP {r.status_code} sem JSON."
-        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code, erro=msg)
-        return _err(502, msg)
 
     if r.status_code >= 400 or not dados.get("ok"):
-        msg = dados.get("erro") or f"HTTP {r.status_code} na rota /query."
+        msg = dados.get("erro") or (f"HTTP {r.status_code} na rota /query, mas a resposta "
+                                    f"nao é o JSON do TSCMONITREST. A base devolveu: {_trecho(r)}")
         _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code, erro=msg)
         return _err(502, f"A base recusou a consulta: {msg}")
 
