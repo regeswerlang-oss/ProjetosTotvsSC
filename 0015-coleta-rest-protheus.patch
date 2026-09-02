@@ -1,0 +1,972 @@
+From 62b3732f348b8ba18340c7d550b0e1bf575c4334 Mon Sep 17 00:00:00 2001
+From: Reges Paulo Werlang <reges.werlang@totvs.com.br>
+Date: Tue, 1 Sep 2026 08:35:57 +0000
+Subject: [PATCH] Coleta automatica pela REST do Protheus (cadastros e
+ movimentos)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Ate aqui a medicao dependia de um humano no transporte: copiar o script
+salvo, colar no console, exportar CSV, arrastar no dashboard. Agora o
+dashboard manda o MESMO script para a base pelo fonte TSCMONITREST e
+recebe o MESMO CSV — entrando pelo mesmo importador, sem uma segunda
+copia das regras de TABELAS_IGNORADAS / painel cadastro x movimento.
+
+- _gravar_cadastros() / _gravar_movimentos(): nucleo extraido dos uploads
+  e reaproveitado pela coleta; `origem` distingue upload de coleta.
+- /api/protheus/<customer>[...]: parametros por (customer, ambiente),
+  teste de conexao (compara environment e banco com o /ping) e coleta.
+- Segredos em AES-256-GCM com AAD "customer|ambiente", no mesmo formato
+  do cockpit — os dois apps leem a mesma linha.
+- Tela: botoes "⚙ Ambiente" e "⚡ Coletar agora" nas sub-abas Cadastros e
+  Movimentos, sempre na base da sub-aba aberta.
+- Spec em docs/specs/2026-09-01-coleta-rest-protheus.md.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AiqzBWtxNa6WsyX5vwDord
+---
+ api/index.py                                  | 547 ++++++++++++++----
+ docs/specs/2026-09-01-coleta-rest-protheus.md | 124 ++++
+ web/index.html                                | 169 ++++++
+ 3 files changed, 742 insertions(+), 98 deletions(-)
+ create mode 100644 docs/specs/2026-09-01-coleta-rest-protheus.md
+
+diff --git a/api/index.py b/api/index.py
+index 1c6c05a..e7f7cdc 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -24,6 +24,7 @@ import base64, csv, email.message, hashlib, hmac, imaplib, io, json, os, re, tim
+ from pathlib import Path
+ 
+ import psycopg2, psycopg2.extras, requests
++from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+ from psycopg2.extras import execute_values
+ from flask import Flask, Response, request, redirect, make_response
+ from werkzeug.exceptions import HTTPException
+@@ -1040,58 +1041,14 @@ def api_monitcad_script_remover(customer):
+     return _json({"ok": True, "customer": customer, "tipo": _tipo_script(), "removido": True})
+ 
+ 
+-@app.post("/api/monitcad/<customer>/upload")
+-def api_monitcad_upload(customer):
+-    """Carga manual enquanto o job do Protheus não roda. Aceita DOIS formatos:
+-    o historico-semanal.json e o CSV de status de cadastros (MODULO, TABELA,
+-    DESCRICAO, DT_LEITURA, SEMANA, QTDE). Idempotente: regrava a medição inteira
+-    quando a data já existe."""
+-    if (r := require_auth()):
+-        return r
+-    if (d := deny_customer(customer)):
+-        return d
+-    if effective_user() != current_user():
+-        return _err(409, "Saia da simulação ('ver como') antes de subir medições.")
+-
+-    if (f := request.files.get("arquivo")):
+-        bruto, nome = f.read(), (f.filename or "")
+-    else:
+-        bruto, nome = request.get_data(), ""
+-    if not bruto:
+-        return _err(400, "Arquivo vazio.")
+-    # O Protheus exporta em cp1252 — tenta os encodings na ordem mais provável
+-    texto = None
+-    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+-        try:
+-            texto = bruto.decode(enc)
+-            break
+-        except UnicodeDecodeError:
+-            continue
+-    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
+-
+-    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
+-        or not texto.lstrip().startswith(("{", "["))
+-    if ehcsv:
+-        try:
+-            body = _csv_para_body(texto)
+-        except Exception as e:
+-            return _err(400, f"CSV inválido: {e}")
+-    else:
+-        try:
+-            body = json.loads(texto)
+-        except Exception as e:
+-            return _err(400, f"JSON inválido: {e}")
+-
+-    if not isinstance(body, dict):
+-        return _err(400, "Envie o historico-semanal.json ou o CSV de cadastros.")
++def _gravar_cadastros(customer, amb, body, origem="upload"):
++    """Núcleo da carga de cadastros — o MESMO caminho para o arquivo subido à
++    mão e para a coleta automática pela REST do cliente. De propósito: as regras
++    que decidem o que entra (TABELAS_IGNORADAS) e em que painel entra
++    (_painel_da_tabela) não podem ganhar uma segunda cópia, que é exatamente
++    como uma tabela de movimento volta a aparecer em Cadastros.
++    `medicoes` já vem validada pelo chamador."""
+     medicoes = body.get("medicoes") or []
+-    if not isinstance(medicoes, list) or not medicoes:
+-        return _err(400, "Arquivo sem medições.")
+-
+-    # FK: o customer precisa existir em cockpit.clientes
+-    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+-        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+-
+     execute("""insert into cockpit.monitcad_projetos
+                  (customer, slug, projeto, cliente_nome, gp_totvs_nome, gp_cliente_nome, updated_at)
+                values (%s,%s,%s,%s,%s,%s, now())
+@@ -1104,7 +1061,6 @@ def api_monitcad_upload(customer):
+             (customer, _slug(body.get("projeto") or "") or None, body.get("projeto"),
+              body.get("cliente"), body.get("gp_totvs"), body.get("gp_cliente")))
+ 
+-    amb = _ambiente()
+     n_med = n_tab = 0
+     ultima = None
+     for m in medicoes:
+@@ -1121,8 +1077,8 @@ def api_monitcad_upload(customer):
+             execute("delete from cockpit.monitcad_medicoes where id=%s", (a["id"],))
+         row = q("""insert into cockpit.monitcad_medicoes
+                      (customer, ambiente, data_medicao, semana, hora_medicao, origem, payload)
+-                   values (%s,%s,%s,%s,%s,'upload',%s) returning id""",
+-                (customer, amb, dt, m.get("semana"), m.get("hora_medicao"),
++                   values (%s,%s,%s,%s,%s,%s,%s) returning id""",
++                (customer, amb, dt, m.get("semana"), m.get("hora_medicao"), origem,
+                  json.dumps({k: v for k, v in m.items() if k != "tabelas"})), one=True)
+         mid = row["id"]
+         n_med += 1
+@@ -1154,9 +1110,65 @@ def api_monitcad_upload(customer):
+     if ultima and amb == "producao":     # o marco do projeto é a base de produção
+         execute("update cockpit.monitcad_projetos set ultima_medicao=%s, updated_at=now() "
+                 "where customer=%s", (ultima, customer))
++    return {"medicoes": n_med, "tabelas": n_tab, "ultima_medicao": ultima}
++
++
++@app.post("/api/monitcad/<customer>/upload")
++def api_monitcad_upload(customer):
++    """Carga manual enquanto o job do Protheus não roda. Aceita DOIS formatos:
++    o historico-semanal.json e o CSV de status de cadastros (MODULO, TABELA,
++    DESCRICAO, DT_LEITURA, SEMANA, QTDE). Idempotente: regrava a medição inteira
++    quando a data já existe."""
++    if (r := require_auth()):
++        return r
++    if (d := deny_customer(customer)):
++        return d
++    if effective_user() != current_user():
++        return _err(409, "Saia da simulação ('ver como') antes de subir medições.")
++
++    if (f := request.files.get("arquivo")):
++        bruto, nome = f.read(), (f.filename or "")
++    else:
++        bruto, nome = request.get_data(), ""
++    if not bruto:
++        return _err(400, "Arquivo vazio.")
++    # O Protheus exporta em cp1252 — tenta os encodings na ordem mais provável
++    texto = None
++    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
++        try:
++            texto = bruto.decode(enc)
++            break
++        except UnicodeDecodeError:
++            continue
++    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
++
++    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
++        or not texto.lstrip().startswith(("{", "["))
++    if ehcsv:
++        try:
++            body = _csv_para_body(texto)
++        except Exception as e:
++            return _err(400, f"CSV inválido: {e}")
++    else:
++        try:
++            body = json.loads(texto)
++        except Exception as e:
++            return _err(400, f"JSON inválido: {e}")
++
++    if not isinstance(body, dict):
++        return _err(400, "Envie o historico-semanal.json ou o CSV de cadastros.")
++    medicoes = body.get("medicoes") or []
++    if not isinstance(medicoes, list) or not medicoes:
++        return _err(400, "Arquivo sem medições.")
++
++    # FK: o customer precisa existir em cockpit.clientes
++    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
++        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
++    amb = _ambiente()
++    r = _gravar_cadastros(customer, amb, body)
+     return _json({"ok": True, "customer": customer, "ambiente": amb,
+-                  "formato": "csv" if ehcsv else "json", "medicoes": n_med,
+-                  "tabelas": n_tab, "ultima_medicao": ultima})
++                  "formato": "csv" if ehcsv else "json", **r})
++
+ 
+ 
+ # ── MOVIMENTOS — cobertura de cenários, não volume por tabela ───────────────
+@@ -1472,44 +1484,10 @@ def api_monitmov(customer):
+                   "a_classificar": a_classificar})
+ 
+ 
+-@app.post("/api/monitmov/<customer>/upload")
+-def api_monitmov_upload(customer):
+-    """Importa o export do D5 (CSV) ou o mesmo conteúdo em JSON. Idempotente:
+-    regrava a medição inteira daquela data, naquele ambiente."""
+-    if (r := require_auth()):
+-        return r
+-    if (d := deny_customer(customer)):
+-        return d
+-    if effective_user() != current_user():
+-        return _err(409, "Saia da simulação ('ver como') antes de subir movimentos.")
+-
+-    if (f := request.files.get("arquivo")):
+-        bruto, nome = f.read(), (f.filename or "")
+-    else:
+-        bruto, nome = request.get_data(), ""
+-    if not bruto:
+-        return _err(400, "Arquivo vazio.")
+-    texto = None
+-    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+-        try:
+-            texto = bruto.decode(enc)
+-            break
+-        except UnicodeDecodeError:
+-            continue
+-    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
+-
+-    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
+-        or not texto.lstrip().startswith(("{", "["))
+-    try:
+-        body = _csv_movimentos(texto) if ehcsv else json.loads(texto)
+-    except Exception as e:
+-        return _err(400, f"{'CSV' if ehcsv else 'JSON'} inválido: {e}")
+-    if not isinstance(body, dict) or not body.get("medicoes"):
+-        return _err(400, "Arquivo sem medições.")
+-    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+-        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+-
+-    amb = _ambiente()
++def _gravar_movimentos(customer, amb, body, origem="upload"):
++    """Núcleo da carga de movimentos (cobertura de cenários). Mesmo motivo do
++    _gravar_cadastros: upload manual e coleta automática entram pela mesma
++    porta."""
+     n_med = n_dim = 0
+     ultima = None
+     for m in body["medicoes"]:
+@@ -1528,9 +1506,9 @@ def api_monitmov_upload(customer):
+         row = q("""insert into cockpit.monitmov_medicoes
+                      (customer, ambiente, data_medicao, semana, hora_medicao,
+                       periodo_ini, periodo_fim, origem, payload)
+-                   values (%s,%s,%s,%s,%s,%s,%s,'upload',%s) returning id""",
++                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
+                 (customer, amb, dt, m.get("semana"), m.get("hora_medicao"),
+-                 p_ini, p_fim,
++                 p_ini, p_fim, origem,
+                  json.dumps({k: v for k, v in m.items() if k != "dimensoes"})), one=True)
+         mid = row["id"]
+         n_med += 1
+@@ -1573,9 +1551,382 @@ def api_monitmov_upload(customer):
+                       (medicao_id, customer, ambiente, data_medicao, tabela, descricao,
+                        modulo, filtro, quantidade, valor, periodo)
+                     values %s""", resumo, page_size=100)
++    return {"medicoes": n_med, "dimensoes": n_dim, "ultima_medicao": ultima}
++
++
++@app.post("/api/monitmov/<customer>/upload")
++def api_monitmov_upload(customer):
++    """Importa o export do D5 (CSV) ou o mesmo conteúdo em JSON. Idempotente:
++    regrava a medição inteira daquela data, naquele ambiente."""
++    if (r := require_auth()):
++        return r
++    if (d := deny_customer(customer)):
++        return d
++    if effective_user() != current_user():
++        return _err(409, "Saia da simulação ('ver como') antes de subir movimentos.")
++
++    if (f := request.files.get("arquivo")):
++        bruto, nome = f.read(), (f.filename or "")
++    else:
++        bruto, nome = request.get_data(), ""
++    if not bruto:
++        return _err(400, "Arquivo vazio.")
++    texto = None
++    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
++        try:
++            texto = bruto.decode(enc)
++            break
++        except UnicodeDecodeError:
++            continue
++    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
++
++    ehcsv = nome.lower().endswith(".csv") or "csv" in (request.content_type or "") \
++        or not texto.lstrip().startswith(("{", "["))
++    try:
++        body = _csv_movimentos(texto) if ehcsv else json.loads(texto)
++    except Exception as e:
++        return _err(400, f"{'CSV' if ehcsv else 'JSON'} inválido: {e}")
++    if not isinstance(body, dict) or not body.get("medicoes"):
++        return _err(400, "Arquivo sem medições.")
++    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
++        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
++    amb = _ambiente()
++    r = _gravar_movimentos(customer, amb, body)
+     return _json({"ok": True, "customer": customer, "ambiente": amb,
+-                  "formato": "csv" if ehcsv else "json", "medicoes": n_med,
+-                  "dimensoes": n_dim, "ultima_medicao": ultima})
++                  "formato": "csv" if ehcsv else "json", **r})
++
++
++# ── Ambientes Protheus — coleta automática pela REST do cliente ─────────────
++# A medição sempre nasceu de um caminho manual: abrir o modal "Script SQL",
++# copiar, colar no console TCloud, exportar CSV e arrastar o arquivo aqui. O
++# fonte TLPP TSCMONITREST (fontes/tlpp/ do cockpit) publica na base do cliente
++# um POST /tscmonit/query que recebe ESSE MESMO script e devolve ESSE MESMO
++# CSV — então a coleta automática entra pelo importador de sempre
++# (_gravar_cadastros / _gravar_movimentos), sem uma segunda cópia das regras.
++#
++# Produção e teste são bases DIFERENTES: uma linha por (customer, ambiente),
++# cada uma com URL, environment, empresa/filial, sufixo e banco próprios.
++# É por isso que o teste de conexão compara environment e banco com o que o
++# /ping devolve: coletar da base errada é o erro caro deste processo — o número
++# chega bonito, plausível, e vem do lugar errado.
++
++BANCOS = ("oracle", "mssql", "postgres")
++TIMEOUT_TETO = 50          # a função da Vercel morre em 60s (vercel.json)
++
++
++def _cred_key():
++    b = base64.b64decode(os.environ.get("PROTHEUS_CRED_KEY", "") or "")
++    if len(b) != 32:
++        raise RuntimeError("PROTHEUS_CRED_KEY ausente ou inválida "
++                           "(32 bytes em base64: openssl rand -base64 32).")
++    return b
++
++
++def _cifra(txt, aad):
++    """base64(iv||tag||ct), AES-256-GCM — o mesmo formato do cockpit
++    (src/lib/tasks-sc/crypto.ts). A AAD amarra o segredo ao par
++    cliente/ambiente: um blob copiado para outra linha não decifra."""
++    if not txt:
++        return None
++    iv = os.urandom(12)
++    sel = AESGCM(_cred_key()).encrypt(iv, txt.encode(), aad.encode())  # ct||tag
++    return base64.b64encode(iv + sel[-16:] + sel[:-16]).decode()
++
++
++def _decifra(blob, aad):
++    if not blob:
++        return ""
++    raw = base64.b64decode(blob)
++    iv, tag, ct = raw[:12], raw[12:28], raw[28:]
++    return AESGCM(_cred_key()).decrypt(iv, ct + tag, aad.encode()).decode()
++
++
++def _aad(customer, ambiente):
++    return f"{customer}|{ambiente}"
++
++
++def _amb_path(ambiente):
++    a = (ambiente or "").strip().lower()
++    return a if a in AMBIENTES else None
++
++
++def _cfg_ambiente(customer, ambiente):
++    return q("select * from cockpit.protheus_ambientes where customer=%s and ambiente=%s",
++             (customer, ambiente), one=True)
++
++
++def _log_coleta(customer, ambiente, tipo, ini, ok, **kw):
++    """Log de cada disparo. Sem isso, 'não atualizou' vira caça ao log da
++    Vercel — e o cliente não tem como provar quando a leitura foi feita."""
++    try:
++        execute("""insert into cockpit.protheus_coletas
++                     (customer, ambiente, tipo, iniciado_em, duracao_ms, ok, http_status,
++                      linhas, medicoes, itens, bytes, data_medicao, erro, disparado_por)
++                   values (%s,%s,%s, to_timestamp(%s), %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
++                (customer, ambiente, tipo, ini, int((time.time() - ini) * 1000), ok,
++                 kw.get("http_status"), kw.get("linhas"), kw.get("medicoes"),
++                 kw.get("itens"), kw.get("bytes"), kw.get("data_medicao"),
++                 (kw.get("erro") or "")[:2000] or None, current_user()))
++    except Exception:
++        pass          # log não pode derrubar a coleta
++
++
++def _guarda_ambiente(customer, ambiente, escrita=False):
++    """Devolve (erro_response, ambiente_normalizado)."""
++    if (r := require_auth()):
++        return r, None
++    if (d := deny_customer(customer)):
++        return d, None
++    amb = _amb_path(ambiente)
++    if not amb:
++        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'."), None
++    if escrita and effective_user() != current_user():
++        return _err(409, "Saia da simulação ('ver como') antes de alterar ambientes."), None
++    return None, amb
++
++
++@app.get("/api/protheus/<customer>")
++def api_protheus_listar(customer):
++    """Parâmetros dos dois ambientes + as últimas coletas. Segredo NUNCA sai
++    daqui: só os booleanos tem_senha/tem_token, que é o que a tela precisa."""
++    if (r := require_auth()):
++        return r
++    if (d := deny_customer(customer)):
++        return d
++    rows = q("""select customer, ambiente, url_rest, environment, empresa, filial,
++                       usuario, banco, sufixo, timeout_s, limite_linhas, ativo,
++                       (senha_enc is not null) as tem_senha,
++                       (token_enc is not null) as tem_token,
++                       ultimo_teste_em, ultimo_teste_ok, ultimo_teste_msg,
++                       observacao, updated_by, updated_at
++                  from cockpit.protheus_ambientes
++                 where customer=%s order by ambiente""", (customer,))
++    coletas = q("""select ambiente, tipo, iniciado_em, duracao_ms, ok, linhas,
++                          medicoes, data_medicao, erro, disparado_por
++                     from cockpit.protheus_coletas
++                    where customer=%s order by iniciado_em desc limit 12""", (customer,))
++    return _json({"ok": True, "customer": customer, "ambientes": rows,
++                  "coletas": coletas, "chave_ok": bool(os.environ.get("PROTHEUS_CRED_KEY"))})
++
++
++@app.post("/api/protheus/<customer>/<ambiente>")
++def api_protheus_salvar(customer, ambiente):
++    """Salva a conexão. Senha e token só são regravados quando vêm preenchidos:
++    reabrir a tela e salvar outro campo não pode apagar a credencial."""
++    erro, amb = _guarda_ambiente(customer, ambiente, escrita=True)
++    if erro:
++        return erro
++    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
++        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
++
++    b = request.get_json(silent=True) or {}
++    url = (b.get("url_rest") or "").strip().rstrip("/")
++    if not re.match(r"^https?://", url, re.I):
++        return _err(400, "URL REST inválida — informe http://host:porta/tscmonit.")
++    banco = (b.get("banco") or "").strip().lower() or None
++    if banco and banco not in BANCOS:
++        return _err(400, f"Banco inválido — use um de: {', '.join(BANCOS)}.")
++
++    senha_enc = token_enc = None
++    try:
++        if (s := (b.get("senha") or "").strip()):
++            senha_enc = _cifra(s, _aad(customer, amb))
++        if (t := (b.get("token") or "").strip()):
++            token_enc = _cifra(t, _aad(customer, amb))
++    except RuntimeError as e:
++        return _err(500, str(e))
++
++    execute("""insert into cockpit.protheus_ambientes
++                 (customer, ambiente, url_rest, environment, empresa, filial, usuario,
++                  senha_enc, token_enc, banco, sufixo, timeout_s, limite_linhas,
++                  ativo, observacao, updated_by, updated_at)
++               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
++               on conflict (customer, ambiente) do update set
++                 url_rest=excluded.url_rest, environment=excluded.environment,
++                 empresa=excluded.empresa, filial=excluded.filial,
++                 usuario=excluded.usuario,
++                 senha_enc=coalesce(excluded.senha_enc, cockpit.protheus_ambientes.senha_enc),
++                 token_enc=coalesce(excluded.token_enc, cockpit.protheus_ambientes.token_enc),
++                 banco=excluded.banco, sufixo=excluded.sufixo,
++                 timeout_s=excluded.timeout_s, limite_linhas=excluded.limite_linhas,
++                 ativo=excluded.ativo, observacao=excluded.observacao,
++                 updated_by=excluded.updated_by, updated_at=now()""",
++            (customer, amb, url, (b.get("environment") or "").strip() or None,
++             (b.get("empresa") or "01").strip(), (b.get("filial") or "01").strip(),
++             (b.get("usuario") or "").strip() or None, senha_enc, token_enc, banco,
++             (b.get("sufixo") or "").strip()[:10] or None,
++             int(b.get("timeout_s") or 45), int(b.get("limite_linhas") or 50000),
++             bool(b.get("ativo", True)), (b.get("observacao") or "").strip() or None,
++             current_user()))
++    return _json({"ok": True, "customer": customer, "ambiente": amb})
++
++
++@app.delete("/api/protheus/<customer>/<ambiente>")
++def api_protheus_remover(customer, ambiente):
++    erro, amb = _guarda_ambiente(customer, ambiente, escrita=True)
++    if erro:
++        return erro
++    execute("delete from cockpit.protheus_ambientes where customer=%s and ambiente=%s",
++            (customer, amb))
++    return _json({"ok": True, "customer": customer, "ambiente": amb, "removido": True})
++
++
++def _sessao_protheus(cfg, customer, amb):
++    """Monta (headers, auth, timeout) a partir do cadastro."""
++    tok = _decifra(cfg.get("token_enc"), _aad(customer, amb))
++    sen = _decifra(cfg.get("senha_enc"), _aad(customer, amb))
++    heads = {"Accept": "application/json"}
++    if tok:
++        heads["X-TSC-Token"] = tok
++    auth = (cfg.get("usuario"), sen) if cfg.get("usuario") else None
++    return heads, auth, tok, min(int(cfg.get("timeout_s") or 45), TIMEOUT_TETO)
++
++
++@app.post("/api/protheus/<customer>/<ambiente>/testar")
++def api_protheus_testar(customer, ambiente):
++    """GET /tscmonit/ping. Além de "respondeu", confere se o environment e o
++    banco são os que foram cadastrados — divergência aqui é aviso, não erro:
++    quem decide se a URL está apontando para a base certa é o consultor."""
++    erro, amb = _guarda_ambiente(customer, ambiente)
++    if erro:
++        return erro
++    cfg = _cfg_ambiente(customer, amb)
++    if not cfg:
++        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
++
++    ini = time.time()
++    try:
++        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
++        r = requests.get(f"{cfg['url_rest']}/ping", headers=heads, auth=auth,
++                         params={"empresa": cfg.get("empresa") or "01",
++                                 "filial": cfg.get("filial") or "01"},
++                         timeout=min(tmo, 30))
++        dados = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
++    except ValueError:
++        return _fecha_teste(customer, amb, ini, False, None,
++                            "O endereço respondeu, mas não devolveu JSON — confira se a URL "
++                            "termina em /tscmonit e se o fonte TSCMONITREST está compilado.")
++    except requests.RequestException as e:
++        return _fecha_teste(customer, amb, ini, False, None,
++                            f"Sem resposta: {type(e).__name__}. Confira URL, porta, VPN e o "
++                            f"[HTTPURI] do appserver.ini.")
++
++    if r.status_code >= 400 or not dados.get("ok"):
++        return _fecha_teste(customer, amb, ini, False, r.status_code,
++                            dados.get("erro") or f"HTTP {r.status_code} na rota /ping.")
++
++    avisos = []
++    if cfg.get("environment") and dados.get("environment") and \
++            cfg["environment"].strip().lower() != str(dados["environment"]).strip().lower():
++        avisos.append(f"environment cadastrado ({cfg['environment']}) ≠ do servidor "
++                      f"({dados['environment']})")
++    if cfg.get("banco") and dados.get("banco") and \
++            cfg["banco"] != str(dados["banco"]).strip().lower():
++        avisos.append(f"banco cadastrado ({cfg['banco']}) ≠ do servidor ({dados['banco']})")
++    if not dados.get("token_ok"):
++        avisos.append("token recusado pela base (confira MV_TSCTOKN) — a coleta vai falhar")
++
++    msg = "Conexão OK." if not avisos else "Conectou, mas: " + "; ".join(avisos)
++    return _fecha_teste(customer, amb, ini, not avisos, r.status_code, msg, dados)
++
++
++def _fecha_teste(customer, amb, ini, ok, status, msg, dados=None):
++    execute("""update cockpit.protheus_ambientes
++                  set ultimo_teste_em=now(), ultimo_teste_ok=%s, ultimo_teste_msg=%s
++                where customer=%s and ambiente=%s""", (ok, msg[:500], customer, amb))
++    _log_coleta(customer, amb, "ping", ini, ok, http_status=status,
++                erro=None if ok else msg)
++    return _json({"ok": ok, "customer": customer, "ambiente": amb, "mensagem": msg,
++                  "http_status": status, "servidor": dados or {}}, 200)
++
++
++@app.post("/api/protheus/<customer>/<ambiente>/coletar")
++def api_protheus_coletar(customer, ambiente):
++    """Executa na base do cliente o script salvo em cockpit.monitcad_scripts e
++    grava a medição — o mesmo destino do arquivo subido à mão.
++
++        POST /api/protheus/TFEHXQ00/teste/coletar?tipo=cadastros
++    """
++    erro, amb = _guarda_ambiente(customer, ambiente, escrita=True)
++    if erro:
++        return erro
++    tipo = _tipo_script()
++    cfg = _cfg_ambiente(customer, amb)
++    if not cfg:
++        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
++    if not cfg.get("ativo"):
++        return _err(409, f"Ambiente {amb} está inativo — reative antes de coletar.")
++    script = q("""select sql, dialeto, sufixo from cockpit.monitcad_scripts
++                   where customer=%s and tipo=%s""", (customer, tipo), one=True)
++    if not script or not (script.get("sql") or "").strip():
++        return _err(409, f"Nenhum script de {tipo} salvo para {customer}. "
++                         f"Salve no modal 'Script SQL' antes de coletar.")
++
++    ini = time.time()
++    try:
++        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
++    except RuntimeError as e:
++        return _err(500, str(e))
++    if not tok:
++        return _err(409, "Sem token cadastrado para este ambiente — a REST da base recusa "
++                         "a chamada sem o X-TSC-Token.")
++
++    corpo = {"token": tok, "tipo": tipo, "sql": script["sql"],
++             "limite": int(cfg.get("limite_linhas") or 50000)}
++    try:
++        r = requests.post(f"{cfg['url_rest']}/query", json=corpo, headers=heads, auth=auth,
++                          params={"empresa": cfg.get("empresa") or "01",
++                                  "filial": cfg.get("filial") or "01"}, timeout=tmo)
++        dados = r.json()
++    except requests.RequestException as e:
++        msg = (f"Falha ao chamar a base: {type(e).__name__}. "
++               f"Timeout do ambiente = {tmo}s (a função da Vercel morre em 60s).")
++        _log_coleta(customer, amb, tipo, ini, False, erro=msg)
++        return _err(502, msg)
++    except ValueError:
++        msg = f"A base respondeu HTTP {r.status_code} sem JSON."
++        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code, erro=msg)
++        return _err(502, msg)
++
++    if r.status_code >= 400 or not dados.get("ok"):
++        msg = dados.get("erro") or f"HTTP {r.status_code} na rota /query."
++        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code, erro=msg)
++        return _err(502, f"A base recusou a consulta: {msg}")
++
++    csv_txt = dados.get("csv") or ""
++    if not csv_txt.strip():
++        msg = "A consulta rodou e voltou vazia — nenhuma linha para gravar."
++        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code,
++                    linhas=0, erro=msg)
++        return _err(409, msg)
++
++    try:
++        body = _csv_movimentos(csv_txt) if tipo == "movimentos" else _csv_para_body(csv_txt)
++    except Exception as e:
++        msg = f"CSV devolvido pela base é inválido: {e}"
++        _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code,
++                    linhas=dados.get("linhas"), bytes=len(csv_txt), erro=msg)
++        return _err(422, msg)
++
++    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
++        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
++
++    if tipo == "movimentos":
++        res = _gravar_movimentos(customer, amb, body, origem="coleta")
++        itens = res.get("dimensoes")
++    else:
++        res = _gravar_cadastros(customer, amb, body, origem="coleta")
++        itens = res.get("tabelas")
++
++    _log_coleta(customer, amb, tipo, ini, True, http_status=r.status_code,
++                linhas=dados.get("linhas"), medicoes=res.get("medicoes"), itens=itens,
++                bytes=len(csv_txt), data_medicao=res.get("ultima_medicao"))
++    return _json({"ok": True, "customer": customer, "ambiente": amb, "tipo": tipo,
++                  "environment": dados.get("environment"), "banco": dados.get("banco"),
++                  "linhas": dados.get("linhas"), "truncado": dados.get("truncado"),
++                  "tempo_base_ms": dados.get("tempo_ms"), **res})
++
++
+ 
+ 
+ CEN_CAMPOS = ("analise", "dim1", "dim2", "dim3", "dim4", "descricao",
+diff --git a/docs/specs/2026-09-01-coleta-rest-protheus.md b/docs/specs/2026-09-01-coleta-rest-protheus.md
+new file mode 100644
+index 0000000..eca99bb
+--- /dev/null
++++ b/docs/specs/2026-09-01-coleta-rest-protheus.md
+@@ -0,0 +1,124 @@
++# Coleta automática pela REST do Protheus (cadastros e movimentos)
++
++*01/09/2026 — piloto: OLIM AGRO (`TFEHXQ00`), base de testes.*
++
++## O problema
++
++A medição de cadastros e de movimentos sempre teve o mesmo gargalo: **um humano
++no meio do transporte**. O fluxo era abrir o modal *🗄 Script SQL*, copiar,
++colar no console TCloud, exportar o CSV, voltar ao dashboard e arrastar o
++arquivo. Funciona — e foi assim que o Olim e a Dígitro entraram —, mas custa uma
++janela de atenção por medição, só acontece quando alguém lembra, e a série
++histórica fica com a cara da agenda do consultor, não da evolução do projeto.
++
++O que faltava não era o dado nem a regra de leitura: era **um transporte que
++dispensasse o consultor**.
++
++## A decisão
++
++Publicar na base do cliente uma REST mínima que executa **o script que já está
++salvo** e devolve **o CSV que já era exportado**. Assim a automação entra pelo
++mesmo importador — `_gravar_cadastros()` / `_gravar_movimentos()` —, e as regras
++que decidem o que entra (`TABELAS_IGNORADAS`) e em que painel entra
++(`_painel_da_tabela`) continuam existindo **uma vez só**. Uma segunda cópia
++dessas regras é exatamente como uma tabela de movimento reaparece em Cadastros.
++
++```
++Dashboard (Vercel)                          Base do cliente (Protheus)
++────────────────────                        ──────────────────────────
++cockpit.monitcad_scripts  ──┐
++cockpit.protheus_ambientes ─┤ POST /tscmonit/query  ──►  TSCMONITREST.tlpp
++                            │  {token, tipo, sql}         · valida: só SELECT/WITH
++                            │                             · TCGenQry + FieldGet
++   _csv_para_body()  ◄──────┘  {ok, linhas, csv}      ◄──  · CSV ';' em UTF-8
++   _gravar_cadastros()  ──►  cockpit.monitcad_medicoes / _tabelas
++```
++
++## Contrato da REST (fonte `TSCMONITREST.tlpp`)
++
++| Rota | Uso |
++|---|---|
++| `GET /tscmonit/ping` | identidade do ambiente: `environment`, `banco`, empresa/filial, `token_ok` |
++| `POST /tscmonit/query` | `{token, tipo, sql, limite}` → `{ok, colunas, linhas, truncado, tempo_ms, csv}` |
++
++O fonte **só executa leitura**: a consulta precisa começar em `SELECT`/`WITH`,
++não pode ter um segundo comando e não pode conter `INSERT/UPDATE/DELETE/MERGE/
++DROP/CREATE/ALTER/TRUNCATE/GRANT/REVOKE/EXEC/CALL/INTO/DBMS_/UTL_/XP_/SP_`. A
++checagem roda sobre uma cópia **sem comentários e sem literais** — de propósito:
++os scripts reais são cheios de comentário em português, e um `-- delete` numa
++explicação não pode derrubar uma consulta boa, assim como um `DROP` escondido
++num comentário não pode passar. A comparação é por palavra inteira, senão
++`D_E_L_E_T_` — que aparece em toda consulta do Protheus — bloquearia tudo.
++
++Autenticação em duas camadas: **token** (`X-TSC-Token`, comparado com o
++parâmetro `MV_TSCTOKN` da base) e, opcionalmente, o **Basic** do usuário
++Protheus, se o `[HTTPURI]` estiver com segurança ligada. Sem `MV_TSCTOKN`
++preenchido a rota fica **fechada** — uma REST que executa SQL não pode nascer
++aberta porque alguém esqueceu de configurar.
++
++## Parâmetros por cliente e ambiente
++
++`cockpit.protheus_ambientes` — **uma linha por (customer, ambiente)**, porque
++produção e teste são bases diferentes, com URL, environment, sufixo e às vezes
++banco distintos. Campos: `url_rest`, `environment`, `empresa`, `filial`,
++`usuario`, `senha_enc`, `token_enc`, `banco`, `sufixo`, `timeout_s`,
++`limite_linhas`, `ativo` e o resultado do último teste.
++
++Segredos em **AES-256-GCM**, formato `base64(iv||tag||ct)` com
++`AAD = "<customer>|<ambiente>"` — o mesmo formato do cockpit
++(`src/lib/tasks-sc/crypto.ts`), então os dois apps leem a mesma linha. A AAD
++amarra o segredo à linha: um blob copiado para outro cliente **não decifra**.
++Chave mestra em `PROTHEUS_CRED_KEY` (32 bytes em base64), só no servidor.
++
++`cockpit.protheus_coletas` registra cada disparo (ping ou coleta) com duração,
++status HTTP, linhas, medições e erro. Sem esse log, "não atualizou" vira caça ao
++log da Vercel — e o cliente não tem como saber quando a leitura foi feita.
++
++## Rotas do dashboard
++
++| Rota | O que faz |
++|---|---|
++| `GET /api/protheus/<customer>` | parâmetros dos dois ambientes (**sem** segredo: só `tem_senha`/`tem_token`) e as últimas coletas |
++| `POST /api/protheus/<customer>/<ambiente>` | salva; senha e token só são regravados quando vêm preenchidos |
++| `DELETE /api/protheus/<customer>/<ambiente>` | remove o cadastro |
++| `POST /api/protheus/<customer>/<ambiente>/testar` | `/ping` + confere environment e banco contra o cadastrado |
++| `POST /api/protheus/<customer>/<ambiente>/coletar?tipo=` | roda o script salvo e grava a medição |
++
++Mesma régua de acesso do resto da aba: `require_auth` + `deny_customer`, e
++escrita bloqueada durante o "ver como".
++
++## A tela
++
++Dois botões novos nas sub-abas Cadastros e Movimentos, ao lado do *Script SQL*:
++
++- **⚙ Ambiente** — abre o cadastro da base **da sub-aba aberta** (o título
++  carrega o selo *Base Produção* / *Base de Testes*). Tem "Salvar e testar
++  conexão", que grava e chama o `/ping`: testar sem salvar mentiria, porque o
++  teste roda com o que está gravado.
++- **⚡ Coletar agora** — confirma a base, executa e recarrega a sub-aba.
++
++**Divergência de environment ou banco é aviso, não erro.** Quem decide se a URL
++aponta para a base certa é o consultor — mas coletar de teste achando que é
++produção é o erro caro deste processo: o número chega bonito, plausível, e vem
++do lugar errado.
++
++## Limites que valem lembrar
++
++- A função da Vercel morre em **60s** (`vercel.json`). O `timeout_s` do ambiente
++  é limitado a 50s no código. Base lenta → o certo é reduzir a janela do script,
++  não aumentar o timeout.
++- `limite_linhas` (padrão 50.000, teto 200.000 no fonte) protege a resposta. Se
++  vier `truncado: true`, a tela avisa — medição truncada é medição errada.
++- Idempotência inalterada: regravar a mesma data no mesmo ambiente **substitui**
++  a medição, não duplica.
++- `origem` passou a distinguir `upload` (arquivo) de `coleta` (REST).
++
++## Como foi testado
++
++Stub HTTP respondendo como o `TSCMONITREST` (`ping` + CSV de 4 tabelas do Olim),
++com o banco fingido, cobrindo: cifra/decifra no formato do cockpit (inclusive a
++recusa de um blob com AAD de outro cliente), teste de conexão, aviso de
++environment divergente, coleta completa (SX5 filtrada, SD2 gravada como
++`painel=movimento`) e token errado devolvendo mensagem clara. A tela foi aberta
++no Chromium com as rotas `/api/*` interceptadas, conferindo o preenchimento dos
++campos e os dois modais.
+diff --git a/web/index.html b/web/index.html
+index bcc7a8f..c8ee990 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -357,6 +357,8 @@
+             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+             <div class="ml-auto flex items-center gap-2">
+               <button id="cad-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
++              <button id="cad-ambiente" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
++              <button id="cad-coletar" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
+               <label id="cad-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+                 ⬆ Subir medição (.csv / .json)
+                 <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
+@@ -379,6 +381,8 @@
+             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+             <div class="ml-auto flex items-center gap-2">
+               <button id="mov-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
++              <button id="mov-ambiente" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
++              <button id="mov-coletar" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
+               <button id="mov-cenarios" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
+               <label id="mov-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+                 ⬆ Importar movimentos (.csv / .json)
+@@ -4792,6 +4796,171 @@ function abreModalSQL(tipo = 'cadastros') {
+ 
+ $('#cad-sql').addEventListener('click', () => abreModalSQL('cadastros'));
+ 
++// ============================================================================
++//  AMBIENTE PROTHEUS — parâmetros da base do cliente e coleta automática
++// ============================================================================
++// O "🗄 Script SQL" continua sendo a fonte da verdade da consulta: o que muda
++// aqui é o TRANSPORTE. Cadastrado o ambiente, o mesmo script sai daqui, roda na
++// base pelo fonte TSCMONITREST e volta como o mesmo CSV que era exportado à
++// mão — e entra pelo mesmo importador.
++//
++// Produção e teste são bases diferentes: cada uma tem o seu cadastro, e é o
++// ambiente da sub-aba aberta que manda. Por isso o título do modal carrega o
++// selo da base — coletar de teste achando que é produção é o erro caro aqui.
++
++async function abreModalAmbiente(ambiente) {
++  const cli = state.selected?.cli;
++  if (!cli) { alert('Abra um projeto antes de configurar o ambiente.'); return; }
++
++  let atual = null, chaveOk = true, ultimas = [];
++  try {
++    const j = await api(`/api/protheus/${encodeURIComponent(cli)}`);
++    atual = (j.ambientes || []).find(a => a.ambiente === ambiente) || null;
++    chaveOk = j.chave_ok !== false;
++    ultimas = (j.coletas || []).filter(c => c.ambiente === ambiente).slice(0, 4);
++  } catch (e) { alert('Não consegui ler os ambientes: ' + e.message); return; }
++
++  const v = (k, d = '') => (atual && atual[k] != null && atual[k] !== '' ? String(atual[k]) : d);
++  const selo = AMB[ambiente];
++  const m = modal(`Ambiente Protheus · ${selo.label}`,
++    `<p class="text-xs text-slate-500">Endereço do fonte <b>TSCMONITREST</b> compilado nesta base:
++       o prefixo do <code>[HTTPURI]</code> do servidor REST mais <code>/tscmonit</code> — ex.:
++       <code>http://servidor:8282/api/tscmonit</code>. Sem <code>/ping</code> nem
++       <code>/query</code> no fim: o painel acrescenta.</p>
++     ${campo('am-url', 'URL REST', v('url_rest'), 'text', 'sem barra no fim')}
++     <div class="grid grid-cols-2 gap-3">
++       ${campo('am-env', 'Environment', v('environment'), 'text', 'confere com o /ping')}
++       <label class="block"><span class="text-xs text-slate-500">Banco de dados</span>
++         <select id="am-banco" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
++           <option value="">(informe)</option>
++           <option value="oracle">Oracle</option>
++           <option value="mssql">SQL Server</option>
++           <option value="postgres">PostgreSQL</option>
++         </select>
++         <span class="text-xs text-slate-400">define o dialeto do script</span></label>
++     </div>
++     <div class="grid grid-cols-3 gap-3">
++       ${campo('am-empresa', 'Empresa', v('empresa', '01'))}
++       ${campo('am-filial', 'Filial', v('filial', '01'))}
++       ${campo('am-sufixo', 'Sufixo das tabelas', v('sufixo'), 'text', 'ex.: 010')}
++     </div>
++     <div class="grid grid-cols-2 gap-3">
++       ${campo('am-usuario', 'Usuário do Protheus', v('usuario'))}
++       ${campo('am-senha', 'Senha', '', 'password',
++               atual && atual.tem_senha ? 'gravada — deixe em branco para manter' : 'obrigatória na 1ª vez')}
++     </div>
++     ${campo('am-token', 'Token da REST (MV_TSCTOKN)', '', 'password',
++             atual && atual.tem_token ? 'gravado — deixe em branco para manter' : 'o mesmo valor do parâmetro na base')}
++     <div class="grid grid-cols-3 gap-3">
++       ${campo('am-timeout', 'Timeout (s)', v('timeout_s', '45'), 'number', 'teto 50 — a página cai em 60')}
++       ${campo('am-limite', 'Limite de linhas', v('limite_linhas', '50000'), 'number')}
++       <label class="block"><span class="text-xs text-slate-500">Situação</span>
++         <select id="am-ativo" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
++           <option value="1">Ativo</option><option value="0">Inativo</option>
++         </select></label>
++     </div>
++     ${chaveOk ? '' : `<p class="text-xs text-rose-600">A variável PROTHEUS_CRED_KEY não está
++        configurada no servidor — sem ela a senha e o token não podem ser gravados.</p>`}
++     <div class="flex items-center gap-2 pt-1">
++       <button id="am-testar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">
++         Salvar e testar conexão</button>
++       <span id="am-status" class="text-xs ${atual && atual.ultimo_teste_ok ? 'text-emerald-700' : 'text-slate-500'}">
++         ${atual && atual.ultimo_teste_em ? escapeHtml(`${atual.ultimo_teste_ok ? '✓' : '✕'} ${atual.ultimo_teste_msg || ''}`) : 'Nunca testado.'}</span>
++     </div>
++     ${ultimas.length ? `<div class="text-xs text-slate-500 border-t border-slate-200 pt-2">
++        <b>Últimas chamadas</b><br>${ultimas.map(c =>
++          `${c.ok ? '✓' : '✕'} ${escapeHtml(c.tipo)} · ${escapeHtml(String(c.iniciado_em).slice(0, 16))}` +
++          (c.linhas != null ? ` · ${c.linhas} linha(s)` : '') +
++          (c.erro ? ` · ${escapeHtml(String(c.erro).slice(0, 90))}` : '')).join('<br>')}</div>` : ''}`,
++    'Salvar');
++  if (atual && atual.banco) m.campo('am-banco').value = atual.banco;
++  if (atual) m.campo('am-ativo').value = atual.ativo ? '1' : '0';
++
++  const corpo = () => ({
++    url_rest: m.campo('am-url').value.trim(),
++    environment: m.campo('am-env').value.trim(),
++    banco: m.campo('am-banco').value,
++    empresa: m.campo('am-empresa').value.trim() || '01',
++    filial: m.campo('am-filial').value.trim() || '01',
++    sufixo: m.campo('am-sufixo').value.trim(),
++    usuario: m.campo('am-usuario').value.trim(),
++    senha: m.campo('am-senha').value,
++    token: m.campo('am-token').value,
++    timeout_s: Number(m.campo('am-timeout').value || 45),
++    limite_linhas: Number(m.campo('am-limite').value || 50000),
++    ativo: m.campo('am-ativo').value === '1',
++  });
++  const salva = async () => {
++    const d = corpo();
++    if (!/^https?:\/\//i.test(d.url_rest)) throw new Error('Informe a URL REST (http://…).');
++    await api(`/api/protheus/${encodeURIComponent(cli)}/${ambiente}`, {
++      method: 'POST', headers: { 'Content-Type': 'application/json' },
++      body: JSON.stringify(d),
++    });
++  };
++
++  // Testar sem salvar mentiria: o teste roda com o que ESTÁ gravado.
++  m.campo('am-testar').addEventListener('click', async () => {
++    const st = m.campo('am-status');
++    st.textContent = 'Testando…'; st.className = 'text-xs text-slate-500';
++    try {
++      await salva();
++      const j = await api(`/api/protheus/${encodeURIComponent(cli)}/${ambiente}/testar`, { method: 'POST' });
++      st.textContent = `${j.ok ? '✓' : '⚠'} ${j.mensagem}`;
++      st.className = `text-xs ${j.ok ? 'text-emerald-700' : 'text-amber-700'}`;
++    } catch (e) {
++      st.textContent = '✕ ' + e.message;
++      st.className = 'text-xs text-rose-600';
++    }
++  });
++
++  m.aoConfirmar(async () => {
++    m.erro(''); m.ocupado(true, 'Salvando…');
++    try { await salva(); m.fecha(); }
++    catch (e) { m.ocupado(false, 'Salvar'); m.erro(e.message); }
++  });
++}
++
++async function coletaAgora(tipo) {
++  const cli = state.selected?.cli;
++  if (!cli) { alert('Abra um projeto antes de coletar.'); return; }
++  const amb = tipo === 'movimentos' ? mov.ambiente : cad.ambiente;
++  const m = modal(`Coletar agora · ${AMB[amb].label}`,
++    `<p>Vou rodar na <b>${AMB[amb].label}</b> o script de <b>${tipo}</b> que está salvo
++       para este cliente e gravar a medição de hoje.</p>
++     <p class="text-xs text-slate-500">É o mesmo caminho do arquivo subido à mão: mesma
++       consulta, mesmo CSV, mesmo importador. Reimportar a mesma data apenas regrava —
++       nada duplica. Se a base demorar mais que o timeout do ambiente, nada é gravado.</p>
++     <p id="col-msg" class="text-xs text-slate-500"></p>`, 'Coletar');
++  m.aoConfirmar(async () => {
++    m.erro(''); m.ocupado(true, 'Coletando…');
++    m.campo('col-msg').textContent = 'Executando na base do cliente — pode levar alguns segundos.';
++    try {
++      const j = await api(
++        `/api/protheus/${encodeURIComponent(cli)}/${amb}/coletar?tipo=${tipo}`, { method: 'POST' });
++      m.fecha();
++      const qtd = tipo === 'movimentos' ? `${j.dimensoes} linha(s) de quebra` : `${j.tabelas} tabela(s)`;
++      alert(`${AMB[amb].label} · ${j.environment || '?'}: ${j.linhas} linha(s) lidas, ` +
++            `${qtd} em ${j.medicoes} medição(ões) — ${fmtData(j.ultima_medicao)}.` +
++            (j.truncado ? '\n\nATENÇÃO: a consulta bateu no limite de linhas do ambiente.' : ''));
++      if (tipo === 'movimentos') { mov.customer = null; initMovimentos(amb); }
++      else {
++        cad.customer = null; cad.dados = null; cad.evol = null; cad.evolChave = null;
++        initCadastros(amb);
++      }
++    } catch (e) {
++      m.ocupado(false, 'Coletar');
++      m.erro(e.message);
++    }
++  });
++}
++
++$('#cad-ambiente').addEventListener('click', () => abreModalAmbiente(cad.ambiente));
++$('#mov-ambiente').addEventListener('click', () => abreModalAmbiente(mov.ambiente));
++$('#cad-coletar').addEventListener('click', () => coletaAgora('cadastros'));
++$('#mov-coletar').addEventListener('click', () => coletaAgora('movimentos'));
++
++
+ // ============================================================================
+ //  MODAIS — rascunho no Gmail e cadastro da App Password
+ // ============================================================================
+-- 
+2.43.0
+

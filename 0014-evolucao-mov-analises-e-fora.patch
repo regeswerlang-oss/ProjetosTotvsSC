@@ -1,0 +1,283 @@
+From 3ac649d7a1d66f4cc4e6c3197a9d92e2fd5550be Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 1 Sep 2026 08:11:36 +0000
+Subject: [PATCH] Evolucao dos movimentos: por analise (inclusive sem cenario)
+ e fora do combinado
+
+---
+ api/index.py                                 |  56 +++++++++-
+ docs/specs/2026-09-01-evolucao-movimentos.md |  32 ++++++
+ web/index.html                               | 103 ++++++++++++++++++-
+ 3 files changed, 187 insertions(+), 4 deletions(-)
+
+diff --git a/api/index.py b/api/index.py
+index 1c6c05a..67c5729 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -1330,12 +1330,19 @@ def _cobertura(dimensoes, cenarios):
+ 
+ 
+ SQL_MOV_EVO_DIM = """
+-  select medicao_id, analise, descricao, dim1, dim2, dim3, dim4, qtde, qtd_doc
++  select medicao_id, analise, descricao,
++         dim1_nome, dim1, dim2_nome, dim2, dim3_nome, dim3, dim4_nome, dim4,
++         qtde, qtd_doc
+     from cockpit.monitmov_dimensoes
+    where medicao_id = any(%s)
+ """
+ 
+ 
++def _chave_dim(d):
++    """Identidade de uma combinação observada, estável entre medições."""
++    return "|".join(_norm_dim(d.get(k)) for k in ("analise", "dim1", "dim2", "dim3", "dim4"))
++
++
+ @app.get("/api/monitmov/<customer>/evolucao")
+ def api_monitmov_evolucao(customer):
+     """Evolução dos MOVIMENTOS: uma linha por medição com movimentos, combinações
+@@ -1372,13 +1379,50 @@ def api_monitmov_evolucao(customer):
+     for d in dims:
+         por_med.setdefault(d["medicao_id"], []).append(d)
+ 
+-    serie, matriz = [], {}
++    # Análises que TÊM cenário combinado. As que não têm (o SD2_FISCAL do Olim,
++    # com 243 movimentos e 60 combinações) sumiam da evolução inteira: cobertura
++    # não se aplica a elas, e sem um bloco próprio o lado fiscal ficava invisível.
++    com_cenario = {_norm_dim(c["analise"]) for c in cenarios}
++
++    serie, matriz, analises, fora = [], {}, {}, {}
+     for m in meds:
+         ds = por_med.get(m["id"], [])
+         cob, nao_prev = _cobertura(ds, cenarios)
+         cobertos = sum(1 for c in cob if c["status"] == "COBERTO")
+         faltantes = sum(1 for c in cob if c["status"] == "FALTANTE")
+         data = str(m["data_medicao"])
++
++        # ── por análise: vale para TODAS, tenham cenário ou não ──────────────
++        for d in ds:
++            a = d["analise"]
++            linha = analises.setdefault(_norm_dim(a), {
++                "analise": a, "tem_cenario": _norm_dim(a) in com_cenario, "serie": {}})
++            x = linha["serie"].setdefault(data, {"movimentos": 0.0, "documentos": 0.0,
++                                                 "combinacoes": 0})
++            x["movimentos"] += float(d["qtde"] or 0)
++            x["documentos"] += float(d["qtd_doc"] or 0)
++            x["combinacoes"] += 1
++        for c in cob:
++            linha = analises.get(_norm_dim(c["analise"]))
++            if not linha:            # cenário de análise que não veio nesta medição
++                continue
++            x = linha["serie"].setdefault(data, {"movimentos": 0.0, "documentos": 0.0,
++                                                 "combinacoes": 0})
++            x["cenarios"] = x.get("cenarios", 0) + 1
++            if c["status"] == "COBERTO":
++                x["cobertos"] = x.get("cobertos", 0) + 1
++            elif c["status"] == "FALTANTE":
++                x["faltantes"] = x.get("faltantes", 0) + 1
++
++        # ── fora do combinado: a lista, não só a contagem ────────────────────
++        for o in nao_prev:
++            k = _chave_dim(o)
++            item = fora.setdefault(k, {
++                "analise": o["analise"],
++                "dims": [(o.get("dim1_nome"), o.get("dim1")), (o.get("dim2_nome"), o.get("dim2")),
++                         (o.get("dim3_nome"), o.get("dim3")), (o.get("dim4_nome"), o.get("dim4"))],
++                "serie": {}})
++            item["serie"][data] = item["serie"].get(data, 0) + float(o.get("qtde") or 0)
+         serie.append({
+             "data_medicao": m["data_medicao"], "semana": m["semana"],
+             "hora_medicao": m["hora_medicao"],
+@@ -1404,9 +1448,15 @@ def api_monitmov_evolucao(customer):
+     linhas = sorted(matriz.values(),
+                     key=lambda l: (ordem.get((l["serie"].get(ultima) or {}).get("status"), 9),
+                                    l["analise"], l["descricao"] or ""))
++    # Fora do combinado ordenado pelo que MAIS pesa na última medição: é a fila
++    # de trabalho ("isto virou regra ou é ruído?"), não um relatório de acusação.
++    lista_fora = sorted(fora.values(),
++                        key=lambda f: -(f["serie"].get(ultima) or 0))
+     return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": False,
+                   "medicoes": [str(m["data_medicao"]) for m in meds],
+-                  "serie": serie, "cenarios": linhas})
++                  "serie": serie, "cenarios": linhas,
++                  "analises": sorted(analises.values(), key=lambda a: a["analise"]),
++                  "fora_combinado": lista_fora})
+ 
+ 
+ @app.get("/api/monitmov/<customer>")
+diff --git a/docs/specs/2026-09-01-evolucao-movimentos.md b/docs/specs/2026-09-01-evolucao-movimentos.md
+index 50a1944..b3c1310 100644
+--- a/docs/specs/2026-09-01-evolucao-movimentos.md
++++ b/docs/specs/2026-09-01-evolucao-movimentos.md
+@@ -63,3 +63,35 @@ combinações cada — N+1 aqui custaria caro à toa.
+ as duas datas, matriz com faltante aberta, volta para Situação atual sem quebrar
+ e visão preservada ao trocar de base. O stub reproduz os números reais do Olim
+ (321 → 391, 7/11 nas duas medições).
++
++## Dois buracos fechados no mesmo dia
++
++### 1. Análise sem cenário sumia da tela inteira
++
++`SD2_FISCAL` tem **243 movimentos e 60 combinações** no Olim e não aparecia em
++lugar nenhum da Evolução. O motivo é estrutural: a matriz é por cenário, e todos
++os 11 cenários do cliente são `SE5_BANCARIO`. Cobertura não se aplica a quem não
++tem cenário — e sem um bloco próprio o lado fiscal ficava invisível.
++
++**Bloco "Por análise"**: uma linha por análise medida, com volume e combinações
++em cada medição. Quem não tem cenário leva o selo **"sem cenário combinado"** e
++um `—` na coluna de cobertura, em vez de um `0/0` que pareceria cobertura zerada.
++Não ter cenário é informação — é o próximo trabalho —, não erro.
++
++### 2. "Fora do combinado" existia só como contagem
++
++A série trazia `nao_previstos` como número. Número não diz **o que** apareceu.
++
++**Bloco "Fora do combinado"**: a lista, com a combinação rotulada pelos nomes das
++dimensões (`TIPO CAIXA / CHEQUE / LOJA · SENTIDO PAGAMENTO · MOTBX CH`) e a
++quantidade em cada medição — dá para ver o que **cresceu** e o que **apareceu**.
++Combinação que só existe na última medição ganha o selo **"nova"**.
++
++Ordenado pelo que mais pesa na última medição: é fila de trabalho ("isto vira
++regra ou é ruído?"), não relatório de acusação. Mostra as 15 maiores, com
++"mostrar todas".
++
++**Continua valendo** a regra do `_cobertura()`: fora do combinado só aparece para
++análise que **já tem cenário**. Sem isso, a primeira medição de um cliente viraria
++uma lista de tudo o que ele faz. É por isso que o SD2_FISCAL aparece no bloco
++"Por análise" e não no "Fora do combinado" — ninguém combinou nada nele ainda.
+diff --git a/web/index.html b/web/index.html
+index bcc7a8f..fccd9ab 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -3067,7 +3067,7 @@ function confirmaAmbiente(nomeArquivo, sugerido, aoConfirmar) {
+ //  Spec: docs/specs/2026-08-25-movimentos-cobertura-cenarios.md
+ // ============================================================================
+ const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {},
+-              visao: 'atual', evo: null, evoChave: null };
++              visao: 'atual', evo: null, evoChave: null, verTudoFora: false };
+ 
+ // Rótulo legível do E5_TIPODOC. Fica no front de propósito: a dimensão guarda
+ // o CÓDIGO, senão trocar um texto aqui transformaria cenário coberto em
+@@ -3261,6 +3261,99 @@ function pintaEvolucaoMov() {
+     </details>`;
+   }).join('');
+ 
++  // ── Por análise — inclusive a que NÃO tem cenário combinado ────────────────
++  // O SD2_FISCAL do Olim tem 243 movimentos e 60 combinações e sumia da tela
++  // inteira: cobertura não se aplica a quem não tem cenário, e sem este bloco o
++  // lado fiscal ficava invisível. "Sem cenário combinado" é informação, não erro.
++  const blocoAnalises = (j.analises || []).length ? `
++    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
++      <h3 class="text-sm font-semibold text-slate-700 mb-1">Por análise</h3>
++      <p class="text-xs text-slate-400 mb-3">Cada análise medida, com ou sem cenário combinado.
++        Sem cenário não há cobertura a calcular — o que dá para acompanhar é volume e combinações.</p>
++      <div class="overflow-x-auto">
++        <table class="w-full text-sm">
++          <thead class="text-xs text-slate-500 border-b border-slate-200">
++            <tr>
++              <th class="text-left py-2 pr-3 font-medium">Análise</th>
++              ${datas.map(d => `<th class="text-right py-2 pr-3 font-medium whitespace-nowrap">${fmtData(d)}</th>`).join('')}
++              <th class="text-right py-2 font-medium">Cobertura</th>
++            </tr>
++          </thead>
++          <tbody>${j.analises.map(a => {
++            const ult = a.serie[ultima] || {};
++            return `<tr class="border-b border-slate-100 last:border-0">
++              <td class="py-2 pr-3">
++                <span class="font-medium">${escapeHtml(a.analise)}</span>
++                ${a.tem_cenario ? '' : '<span class="ml-2 text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-900">sem cenário combinado</span>'}
++              </td>
++              ${datas.map(d => {
++                const x = a.serie[d];
++                if (!x) return '<td class="py-2 pr-3 text-right text-slate-300">—</td>';
++                return `<td class="py-2 pr-3 text-right tabular-nums">
++                  ${fmtNum(x.movimentos)}
++                  <span class="block text-xs text-slate-400">${fmtNum(x.combinacoes)} comb.</span></td>`;
++              }).join('')}
++              <td class="py-2 text-right tabular-nums text-xs">
++                ${a.tem_cenario
++                  ? `<span class="${ult.faltantes ? 'text-rose-600 font-medium' : 'text-emerald-700'}">${ult.cobertos || 0}/${ult.cenarios || 0}</span>`
++                  : '<span class="text-slate-400">—</span>'}
++              </td>
++            </tr>`;
++          }).join('')}</tbody>
++        </table>
++      </div>
++    </div>` : '';
++
++  // ── Fora do combinado — a LISTA, não só a contagem ─────────────────────────
++  // Ordenado pelo que mais pesa na última medição: é fila de trabalho ("isto
++  // vira regra ou é ruído?"), não relatório de acusação. Só aparece para análise
++  // que já tem cenário — senão a primeira medição do cliente viraria uma lista
++  // de tudo o que ele fez.
++  const fora = j.fora_combinado || [];
++  const foraTopo = mov.verTudoFora ? fora : fora.slice(0, 15);
++  const rotuloDims = (dims) => (dims || [])
++    .filter(([, v]) => v && v !== '(vazio)')
++    .map(([n, v]) => `<span class="text-slate-400">${escapeHtml(n || '')}</span> ${escapeHtml(v)}`)
++    .join(' <span class="text-slate-300">·</span> ') || '<span class="text-slate-400">—</span>';
++
++  const blocoFora = fora.length ? `
++    <div class="bg-white rounded-lg border border-amber-300 p-5 mb-4">
++      <div class="flex items-baseline gap-2 mb-1">
++        <h3 class="text-sm font-semibold text-amber-900">Fora do combinado</h3>
++        <span class="text-xs text-slate-500">${fora.length} combinação(ões)</span>
++        ${fora.length > 15 ? `<button id="mov-fora-tudo" class="ml-auto text-xs text-totvs-blue hover:underline">${mov.verTudoFora ? 'mostrar só as 15 maiores' : `mostrar todas (${fora.length})`}</button>` : ''}
++      </div>
++      <p class="text-xs text-slate-400 mb-3">Movimento que aconteceu sem cenário que o previsse.
++        Não é erro: é o que precisa virar regra — ou ser explicado — antes do go-live.
++        A coluna por medição mostra o que <b>apareceu</b> e o que <b>cresceu</b>.</p>
++      <div class="overflow-x-auto">
++        <table class="w-full text-sm">
++          <thead class="text-xs text-slate-500 border-b border-slate-200">
++            <tr>
++              <th class="text-left py-2 pr-3 font-medium">Análise</th>
++              <th class="text-left py-2 pr-3 font-medium">Combinação</th>
++              ${datas.map(d => `<th class="text-right py-2 pr-3 font-medium whitespace-nowrap">${fmtData(d)}</th>`).join('')}
++            </tr>
++          </thead>
++          <tbody>${foraTopo.map(f => {
++            const primeira = datas.find(d => (f.serie[d] || 0) > 0);
++            const nova = primeira && primeira === ultima && datas.length > 1;
++            return `<tr class="border-b border-slate-100 last:border-0">
++              <td class="py-2 pr-3 text-xs text-slate-500 whitespace-nowrap">
++                ${escapeHtml(f.analise)}
++                ${nova ? '<span class="ml-1 text-xs px-1 rounded bg-rose-100 text-rose-700">nova</span>' : ''}
++              </td>
++              <td class="py-2 pr-3 text-xs">${rotuloDims(f.dims)}</td>
++              ${datas.map(d => {
++                const v = f.serie[d];
++                return `<td class="py-2 pr-3 text-right tabular-nums">${v ? fmtNum(v) : '<span class="text-slate-300">—</span>'}</td>`;
++              }).join('')}
++            </tr>`;
++          }).join('')}</tbody>
++        </table>
++      </div>
++    </div>` : '';
++
+   box.innerHTML = `
+     <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
+       <h3 class="text-sm font-semibold text-slate-700 mb-1">Evolução por medição</h3>
+@@ -3284,12 +3377,20 @@ function pintaEvolucaoMov() {
+         </table>
+       </div>
+     </div>
++    ${blocoAnalises}
++    ${blocoFora}
+     <div class="bg-white rounded-lg border border-slate-200 p-5">
+       <h3 class="text-sm font-semibold text-slate-700 mb-1">Cenário por medição</h3>
+       <p class="text-xs text-slate-400 mb-3">Quantidade observada em cada medição. Análise com
+         faltante já vem aberta.</p>
+       ${matriz || '<p class="text-sm text-slate-400">Nenhum cenário combinado ainda.</p>'}
+     </div>`;
++
++  const btnFora = $('#mov-fora-tudo');
++  if (btnFora) btnFora.addEventListener('click', () => {
++    mov.verTudoFora = !mov.verTudoFora;
++    pintaEvolucaoMov();
++  });
+ }
+ 
+ async function carregaMovimentos(customer) {
+-- 
+2.43.0
+

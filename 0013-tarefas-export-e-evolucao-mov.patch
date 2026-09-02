@@ -1,0 +1,1105 @@
+From 57a4b30bdf44d86998e79b1eb6727e2c41c7c958 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 26 Aug 2026 13:01:55 +0000
+Subject: [PATCH 1/4] Aba Tarefas: tickets do cliente com filtro multi-tag E/OU
+
+---
+ api/index.py                         |  49 ++++
+ docs/specs/2026-08-26-aba-tarefas.md |  59 +++++
+ web/index.html                       | 319 ++++++++++++++++++++++++++-
+ 3 files changed, 426 insertions(+), 1 deletion(-)
+ create mode 100644 docs/specs/2026-08-26-aba-tarefas.md
+
+diff --git a/api/index.py b/api/index.py
+index 1719104..e044c79 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -1636,6 +1636,55 @@ def _customer_do_ticket(uuid):
+     return r["customer"] if r else None
+ 
+ 
++# ── TAREFAS — a mesma leitura dos GAPs, sem a tag GAP obrigatória ───────────
++# A aba GAPs existe para decidir escopo, então parte de uma tag só. Esta aqui é
++# de garimpo: o recorte é o que o usuário marcar. Duas diferenças que importam:
++#   1. sem o `join ... raw_tag = 'GAP'`, entra TODO ticket do cliente;
++#   2. o array de tags NÃO exclui 'GAP' — aqui ela é uma tag como outra qualquer
++#      e precisa aparecer para poder ser marcada no filtro.
++# `eh_gap` vem junto para a lista poder marcar quais já são GAP sem uma segunda
++# consulta.
++SQL_TAREFAS = """
++  select t.uuid_ticket, t.raw->>'id' as id, t.titulo, t.status_tasks,
++         t.status_temporario, t.etapa_gap, t.classificacao_gap, t.produto,
++         t.competencia, t.projeto, t.prioridade, t.time_estimate, t.aging_dias,
++         t.due_date, t.atrasado, t.bloqueado, t.user_assigned,
++         u.nome as responsavel_nome, t.assigned_customer, t.observador,
++         t.ult_ocorr_texto, t.ult_ocorr_data, t.ult_ocorr_autor, t.updated_at,
++         d.decisao, d.estimativa as decisao_estimativa, d.observacao as decisao_obs,
++         d.decided_by, d.decided_at,
++         (a.uuid_ticket is not null) as tem_alinhamento,
++         exists (select 1 from cockpit.ticket_tags g3
++                  where g3.uuid_ticket = t.uuid_ticket and g3.raw_tag = 'GAP') as eh_gap,
++         coalesce((select array_agg(g2.raw_tag order by g2.raw_tag)
++                     from cockpit.ticket_tags g2
++                    where g2.uuid_ticket = t.uuid_ticket), '{}') as tags
++    from cockpit.tickets t
++    left join cockpit.usuarios u on u.codigo = t.user_assigned
++    left join cockpit.decisoes d on d.uuid_ticket = t.uuid_ticket
++    left join cockpit.gap_alinhamentos a on a.uuid_ticket = t.uuid_ticket
++   where t.customer = %s
++   order by t.time_estimate desc nulls last, t.titulo
++"""
++
++
++@app.get("/api/tarefas/<customer>")
++def api_tarefas(customer):
++    """Todos os tickets do cliente. O detalhe continua em /api/gaps/ticket/<uuid>:
++    aquela rota autoriza pelo cliente DONO do ticket e nunca exigiu a tag GAP,
++    então serve para qualquer tarefa sem rota nova."""
++    if (r := require_auth()):
++        return r
++    if (d := deny_customer(customer)):
++        return d
++    itens = q(SQL_TAREFAS, (customer,))
++    horas = sum(float(t["time_estimate"] or 0) for t in itens)
++    return _json({"ok": True, "customer": customer, "total": len(itens),
++                  "horas_estimadas": horas,
++                  "gaps": sum(1 for t in itens if t["eh_gap"]),
++                  "tarefas": itens})
++
++
+ def _guarda_ticket(uuid):
+     """Autoriza pelo cliente DONO do ticket — nunca pelo que o front mandou."""
+     cust = _customer_do_ticket(uuid)
+diff --git a/docs/specs/2026-08-26-aba-tarefas.md b/docs/specs/2026-08-26-aba-tarefas.md
+new file mode 100644
+index 0000000..14f89ae
+--- /dev/null
++++ b/docs/specs/2026-08-26-aba-tarefas.md
+@@ -0,0 +1,59 @@
++# Aba Tarefas — 26/08/2026
++
++Décima aba do detalhe do projeto, ao lado de GAPs. Mesma leitura, **sem a tag
++GAP obrigatória**: entra todo ticket do cliente e o recorte é o que o usuário
++marcar no filtro de tags.
++
++## Por que é uma cópia, e não um componente compartilhado
++
++Decisão do usuário, com o custo na mesa. A aba GAPs é onde se decide escopo com
++o cliente e não pode regredir por causa de um ajuste feito aqui. Em troca,
++**melhoria numa não chega sozinha na outra** — ordenação, coluna nova ou correção
++precisam ser aplicadas duas vezes. Quem mexer numa das duas: olhe a outra.
++
++O que **é** compartilhado, de propósito: `DECISAO`, `GAP_STATUS`, `chipsTags`,
++`selosGap`, `semAcento` e o **drawer** (`abreGap`). A rota de detalhe
++`/api/gaps/ticket/<uuid>` autoriza pelo cliente **dono** do ticket e nunca
++exigiu a tag GAP — então serve para qualquer tarefa, sem rota nova.
++
++## Três diferenças de comportamento
++
++1. **Sem o `join ... raw_tag = 'GAP'`** (`SQL_TAREFAS`): entra todo ticket.
++2. **A tag `GAP` aparece** na coluna e no filtro. Na aba GAPs ela é removida do
++   array — lá toda linha tem a tag por definição, então só ocuparia espaço. Aqui
++   ela é o que separa "o que já virou GAP" do resto, e precisa ser marcável.
++   `eh_gap` vem no payload para o KPI, evitando uma segunda consulta.
++3. **Filtro de tags é OU por padrão**, com botão para E. Numa tela de garimpo o
++   normal é juntar assuntos ("INTEGRACAO ou PRIORIDADE"); cruzar é a exceção. Na
++   aba GAPs continua sendo só E, e isso não mudou.
++
++O contador no botão mostra o modo junto com a quantidade — `(2 E)` / `(2 OU)`.
++Sem essa dica, duas telas com o mesmo par de tags marcado e resultados diferentes
++pareceriam bug.
++
++## KPIs
++
++Tarefas no filtro · horas estimadas · em aberto (o que não está Resolvido nem
++Cancelado) · marcadas como GAP.
++
++## Volume
++
++Dígitro 268 tickets (78 GAP, 190 não-GAP, 29 sem tag nenhuma), 71 tags distintas;
++2.100 tickets na base inteira. Carrega tudo de uma vez, sem paginação — é o mesmo
++que a aba GAPs já faz e o maior cliente tem poucas centenas.
++
++## Cuidado ao mexer
++
++- **`data-gap` é o atributo da linha nas DUAS abas.** É o que faz o drawer
++  funcionar sem alteração. Renomear aqui quebra o clique.
++- O botão E/OU vive dentro de um `<details>`: sem `preventDefault()` o clique
++  fecha o dropdown antes de aplicar o filtro.
++- Tag que some do cliente é retirada do filtro no reload (`tar.tags.delete`) —
++  senão a tela ficaria filtrando por algo que não existe mais e mostrando zero.
++
++## Como conferir
++
++`/tmp/tarefas_check.py`: aba presente, 20 itens sem filtro (12 GAP + 8 comuns),
++`GAP` entre as tags do filtro, união **cresce** e interseção **encolhe** ao marcar
++a segunda tag, ordenação inverte, kanban monta as colunas, drawer abre e o export
++da aba sai com conteúdo.
+diff --git a/web/index.html b/web/index.html
+index c9dedd5..5bc4f72 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -169,6 +169,7 @@
+             <button data-tab="consumo"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
+             <span class="w-px bg-slate-200 mx-2 my-2"></span>
+             <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
++            <button data-tab="tarefas"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Tarefas</button>
+             <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
+             <button data-tab="cobertura" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cobertura</button>
+             <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
+@@ -279,6 +280,58 @@
+           <div id="gap-conteudo"></div>
+         </div>
+ 
++        <!-- Aba Tarefas — a mesma leitura da GAPs, sem a tag GAP obrigatória.
++             Cópia deliberada (não um componente compartilhado): a GAPs é a tela
++             de decisão de escopo e não pode regredir por causa de um ajuste
++             feito aqui. O preço é conhecido: melhoria numa não chega na outra. -->
++        <div id="tab-tarefas" class="p-5 hidden">
++          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
++            <span class="text-xs text-slate-500">Cliente</span>
++            <span id="tar-cliente-nome" class="font-medium"></span>
++            <div class="inline-flex rounded-md border border-slate-300 overflow-hidden">
++              <button data-modo="lista"  class="tar-modo px-3 py-1.5 bg-totvs-blue text-totvs-petroleo font-semibold">Lista</button>
++              <button data-modo="kanban" class="tar-modo px-3 py-1.5 bg-white text-slate-600 hover:bg-slate-50">Kanban</button>
++            </div>
++            <input id="tar-busca" type="search" placeholder="Buscar por título, id, produto…"
++                   class="flex-1 min-w-[220px] px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++            <select id="tar-etapa" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++              <option value="">Todas as etapas</option>
++            </select>
++            <select id="tar-resp" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++              <option value="">Todo responsável</option>
++            </select>
++            <details id="tar-tags-drop" class="relative">
++              <summary class="px-3 py-1.5 border border-slate-300 rounded-md bg-white cursor-pointer select-none whitespace-nowrap">
++                Tags <span id="tar-tags-n" class="text-xs text-slate-500"></span>
++              </summary>
++              <div class="absolute z-20 mt-1 w-80 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg p-2">
++                <div class="flex items-center justify-between px-1 pb-2 text-xs gap-2">
++                  <div class="inline-flex rounded border border-slate-300 overflow-hidden">
++                    <button data-tarmodo="ou" class="tar-tagmodo px-2 py-0.5 bg-totvs-blue text-totvs-petroleo font-semibold" title="Qualquer uma das marcadas">OU</button>
++                    <button data-tarmodo="e"  class="tar-tagmodo px-2 py-0.5 bg-white text-slate-600 hover:bg-slate-50" title="Todas as marcadas ao mesmo tempo">E</button>
++                  </div>
++                  <span id="tar-tags-dica" class="flex-1 text-slate-500">qualquer uma</span>
++                  <button id="tar-tags-limpar" class="text-totvs-blue hover:underline">limpar</button>
++                </div>
++                <div id="tar-tags-lista" class="space-y-0.5"></div>
++              </div>
++            </details>
++            <select id="tar-decisao" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
++              <option value="">Toda decisão</option>
++              <option value="_sem">Sem decisão</option>
++              <option value="aprovar">Aprovado</option>
++              <option value="segunda_fase">2ª fase</option>
++              <option value="contorno">Contorno</option>
++              <option value="entendimento_projeto">Entendimento do projeto</option>
++              <option value="recusar">Recusado</option>
++              <option value="pendente">Pendente</option>
++            </select>
++            <button id="tar-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
++          </div>
++          <div id="tar-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4"></div>
++          <div id="tar-conteudo"></div>
++        </div>
++
+         <!-- Aba Cadastros — guarda-chuva. Dentro dela, quatro sub-abas:
+              Cadastros/Movimentos × Base Produção/Base de Testes. -->
+         <div id="tab-cadastros" class="p-5 hidden">
+@@ -1450,7 +1503,7 @@ document.addEventListener('click', e => {
+ // ============================================================================
+ //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
+ // ============================================================================
+-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'cadastros', 'cobertura', 'transicao'];
++const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'transicao'];
+ 
+ // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
+ // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
+@@ -1481,6 +1534,7 @@ function setTab(nome) {
+   // Carga preguiçosa: todas seguem o cliente do projeto aberto
+   if (nome === 'consumo') renderConsumo();
+   if (nome === 'gaps') initGaps();
++  if (nome === 'tarefas') initTarefas();
+   if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
+   if (nome === 'cobertura') initCobertura();
+   if (nome === 'transicao') initTransicao();
+@@ -1935,6 +1989,268 @@ $('#tab-gaps').addEventListener('click', e => {
+   if (linha) abreGap(linha.dataset.gap);
+ });
+ 
++// ============================================================================
++//  ABA TAREFAS — todos os tickets do cliente, recortados por tag
++// ============================================================================
++// Cópia da aba GAPs, por decisão explícita (25/08/2026): a GAPs é a tela onde se
++// decide escopo com o cliente e não pode regredir por um ajuste feito aqui. O
++// preço está assumido — melhoria numa não chega sozinha na outra.
++//
++// Três diferenças de comportamento em relação à GAPs:
++//   1. entra TODO ticket do cliente, não só o marcado com a tag GAP;
++//   2. a tag `GAP` APARECE na lista e no filtro — aqui ela é uma tag como
++//      qualquer outra, e é o que permite separar "o que já virou GAP" do resto;
++//   3. o filtro de tags é OU por padrão, com botão para E. Numa tela de garimpo
++//      o normal é juntar assuntos ("INTEGRACAO ou PRIORIDADE"); cruzar é a
++//      exceção. Na GAPs continua sendo só E.
++const tar = {
++  customer: null, itens: [], modo: 'lista',
++  tags: new Set(), tagModo: 'ou',            // ou | e
++  ord: { col: 'time_estimate', dir: -1 },
++};
++
++const TAR_COLS = {
++  id: { rot: 'Task', val: t => t.id || '' },
++  titulo: { rot: 'Título', val: t => t.titulo || '' },
++  etapa_gap: { rot: 'Etapa', val: t => t.etapa_gap || '' },
++  status_tasks: { rot: 'Status', val: t => t.status_tasks || '' },
++  produto: { rot: 'Produto', val: t => t.produto || '' },
++  tags: { rot: 'Tags', val: t => (t.tags || []).join(', ') },
++  time_estimate: { rot: 'Horas', val: t => Number(t.time_estimate || 0), num: true },
++  responsavel_nome: { rot: 'Responsável', val: t => (t.responsavel_nome || t.user_assigned || '').trim() },
++  observador: { rot: 'Observadores', val: t => t.observador || '' },
++  decisao: { rot: 'Decisão', val: t => DECISAO[t.decisao]?.label || '' },
++};
++
++async function initTarefas() {
++  const cli = state.selected?.cli;
++  $('#tar-cliente-nome').textContent =
++    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
++  if (tar.customer === cli) return;
++  tar.customer = cli;
++  if (!cli) { $('#tar-conteudo').innerHTML = blocoVazioCad('Abra um projeto para ver as tarefas do cliente.'); return; }
++  $('#tar-conteudo').innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando tarefas…</div>';
++  try {
++    const j = await api(`/api/tarefas/${encodeURIComponent(cli)}`);
++    tar.itens = j.tarefas || [];
++  } catch (e) {
++    tar.customer = null;
++    $('#tar-conteudo').innerHTML = blocoErro('Não foi possível carregar as tarefas', e, initTarefas);
++    return;
++  }
++  const etapas = [...new Set(tar.itens.map(t => t.etapa_gap).filter(Boolean))].sort();
++  $('#tar-etapa').innerHTML = '<option value="">Todas as etapas</option>' +
++    etapas.map(e => `<option value="${escapeHtml(e)}">${escapeHtml(e)}</option>`).join('');
++
++  const resps = [...new Set(tar.itens
++    .map(t => (t.responsavel_nome || t.user_assigned || '').trim()).filter(Boolean))]
++    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
++  $('#tar-resp').innerHTML = '<option value="">Todo responsável</option>' +
++    resps.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('');
++
++  pintaTagsTarefas();
++  renderTarefas();
++}
++
++/** Tags por frequência: as que realmente cortam a lista vêm primeiro. */
++function pintaTagsTarefas() {
++  const cont = new Map();
++  tar.itens.forEach(t => (t.tags || []).forEach(x => cont.set(x, (cont.get(x) || 0) + 1)));
++  tar.tags.forEach(x => { if (!cont.has(x)) tar.tags.delete(x); });   // sumiu do cliente
++  $('#tar-tags-lista').innerHTML = [...cont.entries()]
++    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'pt-BR'))
++    .map(([x, n]) => `
++      <label class="flex items-center gap-2 px-1 py-0.5 hover:bg-slate-50 rounded cursor-pointer text-sm">
++        <input type="checkbox" value="${escapeHtml(x)}" ${tar.tags.has(x) ? 'checked' : ''} class="accent-totvs-blue">
++        <span class="flex-1 truncate font-mono text-xs">${escapeHtml(x)}</span>
++        <span class="text-xs text-slate-400">${n}</span>
++      </label>`).join('') || '<p class="text-xs text-slate-400 px-1">Nenhuma tag neste cliente.</p>';
++  $('#tar-tags-lista').querySelectorAll('input').forEach(c =>
++    c.addEventListener('change', () => {
++      if (c.checked) tar.tags.add(c.value); else tar.tags.delete(c.value);
++      renderTarefas();
++    }));
++}
++
++function tarefasFiltradas() {
++  const q = semAcento($('#tar-busca').value.trim());
++  const etapa = $('#tar-etapa').value;
++  const dec = $('#tar-decisao').value;
++  const resp = $('#tar-resp').value;
++  return tar.itens.filter(t => {
++    if (etapa && t.etapa_gap !== etapa) return false;
++    if (dec === '_sem' && t.decisao) return false;
++    if (dec && dec !== '_sem' && t.decisao !== dec) return false;
++    if (resp && (t.responsavel_nome || t.user_assigned || '').trim() !== resp) return false;
++    if (tar.tags.size) {
++      const suas = new Set(t.tags || []);
++      if (tar.tagModo === 'e') {
++        for (const x of tar.tags) if (!suas.has(x)) return false;     // interseção
++      } else {
++        let algum = false;
++        for (const x of tar.tags) if (suas.has(x)) { algum = true; break; }
++        if (!algum) return false;                                     // união
++      }
++    }
++    if (q) {
++      const alvo = semAcento(`${t.id || ''} ${t.titulo || ''} ${t.produto || ''} ${t.competencia || ''} ${t.responsavel_nome || ''}`);
++      if (!alvo.includes(q)) return false;
++    }
++    return true;
++  });
++}
++
++function ordenaTarefas(itens) {
++  const c = TAR_COLS[tar.ord.col] || TAR_COLS.time_estimate;
++  const d = tar.ord.dir;
++  return itens.slice().sort((a, b) => {
++    const va = c.val(a), vb = c.val(b);
++    if (c.num) return (va - vb) * d;
++    if (!va && vb) return 1;                  // vazio sempre no fim
++    if (va && !vb) return -1;
++    return String(va).localeCompare(String(vb), 'pt-BR') * d;
++  });
++}
++
++function renderTarefas() {
++  const itens = ordenaTarefas(tarefasFiltradas());
++  const horas = itens.reduce((a, t) => a + Number(t.time_estimate || 0), 0);
++  const gaps = itens.filter(t => t.eh_gap).length;
++  const abertas = itens.filter(t => !['Resolvido', 'Cancelado'].includes(t.status_tasks || '')).length;
++
++  const kpi = (rot, val, sub, cls) => `
++    <div class="rounded-lg p-4 ${cls}">
++      <p class="text-xs opacity-80">${rot}</p>
++      <p class="text-2xl font-totvs mt-1">${val}</p>
++      <p class="text-xs opacity-80 mt-0.5">${sub}</p>
++    </div>`;
++  $('#tar-kpis').innerHTML =
++    kpi('Tarefas', String(itens.length),
++        itens.length === tar.itens.length ? 'do cliente' : `de ${tar.itens.length} no total`,
++        'bg-totvs-petroleo text-white') +
++    kpi('Horas estimadas', fmtNum(horas), 'soma das estimativas', 'bg-totvs-blue text-totvs-petroleo') +
++    kpi('Em aberto', String(abertas), `${itens.length - abertas} resolvida(s)/cancelada(s)`, 'bg-totvs-purple text-white') +
++    kpi('Marcadas como GAP', String(gaps), `${itens.length - gaps} sem a tag`, 'bg-white border border-slate-200 text-totvs-petroleo');
++
++  $('#tar-tags-n').textContent = tar.tags.size ? `(${tar.tags.size} ${tar.tagModo.toUpperCase()})` : '';
++  $('#tar-conteudo').innerHTML = itens.length === 0
++    ? blocoVazioCad('Nenhuma tarefa para este filtro.')
++    : (tar.modo === 'kanban' ? kanbanTarefas(itens) : listaTarefas(itens));
++}
++
++function thTar(col, extra = '') {
++  const c = TAR_COLS[col];
++  const on = tar.ord.col === col;
++  const seta = on ? (tar.ord.dir === 1 ? '▲' : '▼') : '<span class="opacity-0 group-hover:opacity-40">▲</span>';
++  return `<th class="p-3 ${extra} cursor-pointer select-none group hover:text-totvs-petroleo"
++              data-ord="${col}" title="Ordenar por ${c.rot}">
++    ${c.rot} <span class="text-[10px] ${on ? 'text-totvs-blue' : ''}">${seta}</span></th>`;
++}
++
++function listaTarefas(itens) {
++  return `
++    <div class="bg-white rounded-lg border border-slate-200 overflow-x-auto">
++      <table class="w-full text-sm">
++        <thead><tr class="text-xs text-slate-500 text-left border-b border-slate-200">
++          ${thTar('id')}${thTar('titulo')}${thTar('etapa_gap')}${thTar('status_tasks')}
++          ${thTar('produto')}${thTar('tags')}${thTar('time_estimate', 'text-right')}
++          ${thTar('responsavel_nome')}${thTar('observador')}${thTar('decisao')}
++        </tr></thead>
++        <tbody>${itens.map(t => `
++          <tr data-gap="${t.uuid_ticket}" class="border-b border-slate-100 last:border-0 hover:bg-slate-50 cursor-pointer">
++            <td class="p-3 font-mono text-xs">${escapeHtml(t.id || '—')}</td>
++            <td class="p-3 font-medium">${escapeHtml(t.titulo || '—')}</td>
++            <td class="p-3 text-xs">${escapeHtml(t.etapa_gap || '—')}</td>
++            <td class="p-3 text-xs">${escapeHtml(t.status_tasks || '—')}</td>
++            <td class="p-3 text-xs text-slate-500">${escapeHtml(t.produto || '—')}</td>
++            <td class="p-3">${chipsTags(t.tags)}</td>
++            <td class="p-3 text-right tabular-nums">${t.time_estimate ? fmtNum(t.time_estimate) : '—'}</td>
++            <td class="p-3 text-xs">${escapeHtml((t.responsavel_nome || t.user_assigned || '—').trim())}</td>
++            <td class="p-3 text-xs text-slate-500">${escapeHtml(t.observador || '—')}</td>
++            <td class="p-3">${selosGap(t) || '<span class="text-xs text-slate-400">—</span>'}</td>
++          </tr>`).join('')}</tbody>
++      </table>
++    </div>`;
++}
++
++function kanbanTarefas(itens) {
++  const porStatus = new Map();
++  itens.forEach(t => {
++    const k = t.status_tasks || '(sem status)';
++    if (!porStatus.has(k)) porStatus.set(k, []);
++    porStatus.get(k).push(t);
++  });
++  // Ordem do fluxo real; status fora da lista entram no fim em vez de sumir
++  const ordem = GAP_STATUS.filter(x => porStatus.has(x));
++  [...porStatus.keys()].forEach(k => { if (!ordem.includes(k)) ordem.push(k); });
++
++  return `<div class="flex gap-3 overflow-x-auto pb-2">${ordem.map(st => {
++    const col = porStatus.get(st);
++    const h = col.reduce((a, t) => a + Number(t.time_estimate || 0), 0);
++    return `
++      <div class="w-72 shrink-0 bg-slate-100 rounded-lg p-2">
++        <div class="flex items-baseline justify-between px-1 pb-2">
++          <span class="text-sm font-semibold text-totvs-petroleo">${escapeHtml(st)}</span>
++          <span class="text-xs text-slate-500">${col.length} · ${fmtNum(h)}h</span>
++        </div>
++        <div class="space-y-2">${col.map(t => `
++          <div data-gap="${t.uuid_ticket}" class="bg-white rounded-md border border-slate-200 p-3 cursor-pointer hover:border-totvs-blue">
++            <div class="flex items-center justify-between gap-2">
++              <span class="font-mono text-xs text-slate-500">${escapeHtml(t.id || '—')}</span>
++              <span class="text-xs tabular-nums">${t.time_estimate ? fmtNum(t.time_estimate) + 'h' : ''}</span>
++            </div>
++            <p class="text-sm font-medium mt-1 leading-snug">${escapeHtml(t.titulo || '—')}</p>
++            <p class="text-xs text-slate-500 mt-1">${escapeHtml(t.etapa_gap || '—')}${t.produto ? ' · ' + escapeHtml(t.produto) : ''}</p>
++            <div class="mt-2 flex flex-wrap items-center gap-1">${chipsTags(t.tags, 2)}${selosGap(t)}</div>
++          </div>`).join('')}</div>
++      </div>`;
++  }).join('')}</div>`;
++}
++
++$$('.tar-modo').forEach(b => b.addEventListener('click', () => {
++  tar.modo = b.dataset.modo;
++  $$('.tar-modo').forEach(x => {
++    const on = x.dataset.modo === tar.modo;
++    x.className = `tar-modo px-3 py-1.5 ${on ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}`;
++  });
++  renderTarefas();
++}));
++
++$$('.tar-tagmodo').forEach(b => b.addEventListener('click', ev => {
++  ev.preventDefault();                       // o botão vive dentro de um <details>
++  tar.tagModo = b.dataset.tarmodo;
++  $$('.tar-tagmodo').forEach(x => {
++    const on = x.dataset.tarmodo === tar.tagModo;
++    x.className = `tar-tagmodo px-2 py-0.5 ${on ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}`;
++  });
++  $('#tar-tags-dica').textContent = tar.tagModo === 'e' ? 'todas ao mesmo tempo' : 'qualquer uma';
++  renderTarefas();
++}));
++
++['tar-busca', 'tar-etapa', 'tar-decisao', 'tar-resp'].forEach(id =>
++  $(`#${id}`).addEventListener('input', renderTarefas));
++$('#tar-tags-limpar').addEventListener('click', () => {
++  tar.tags.clear();
++  $$('#tar-tags-lista input').forEach(c => { c.checked = false; });
++  renderTarefas();
++});
++$('#tar-reload').addEventListener('click', () => { tar.customer = null; initTarefas(); });
++$('#tab-tarefas').addEventListener('click', e => {
++  const th = e.target.closest('[data-ord]');
++  if (th) {
++    const col = th.dataset.ord;
++    tar.ord = tar.ord.col === col
++      ? { col, dir: -tar.ord.dir }
++      : { col, dir: TAR_COLS[col]?.num ? -1 : 1 };
++    renderTarefas();
++    return;
++  }
++  // O drawer é o MESMO da aba GAPs: /api/gaps/ticket/<uuid> autoriza pelo cliente
++  // dono do ticket e nunca exigiu a tag GAP, então serve para qualquer tarefa.
++  const linha = e.target.closest('[data-gap]');
++  if (linha) abreGap(linha.dataset.gap);
++});
++
+ // ── Detalhe do GAP: dados + decisão + alinhamento comercial ────────────────
+ async function abreGap(uuid) {
+   const painel = document.createElement('div');
+@@ -3839,6 +4155,7 @@ const RELATORIOS = {
+   etapas:    { titulo: 'Apontamentos por Etapa',  alvo: '#d-etapas' },
+   consumo:   { titulo: 'Consumo por Etapa',       alvo: '#tab-consumo' },
+   gaps:      { titulo: 'GAPs',                    alvo: '#tab-gaps' },
++  tarefas:   { titulo: 'Tarefas',                 alvo: '#tab-tarefas' },
+   cadastros: { titulo: 'Status dos Cadastros',    alvo: '#tab-cadastros', curado: relatorioCadastrosHTML },
+   cobertura: { titulo: 'Cobertura de Cenários',   alvo: '#tab-cobertura', curado: relatorioCoberturaHTML },
+   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
+-- 
+2.43.0
+
+From d74134d0601a2cb673c5c69a91182269a58a7468 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 28 Aug 2026 15:12:41 +0000
+Subject: [PATCH 2/4] Export: cartao acompanha a largura do conteudo e para de
+ cortar
+
+---
+ ...-exportar-html-e-gmail-em-todas-as-abas.md | 30 +++++++++++++++++++
+ web/index.html                                | 29 +++++++++++++++---
+ 2 files changed, 55 insertions(+), 4 deletions(-)
+
+diff --git a/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md b/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
+index b5089fd..9f7efa9 100644
+--- a/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
++++ b/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
+@@ -113,3 +113,33 @@ mede, dentro do HTML gerado, a borda direita de cada célula contra a primeira
+ linha de cada tabela — falha se divergir mais de 1px. Esperado:
+ `TODAS ALINHADAS: True`. Precisa de stub com 4 medições (`monitcad_evolucao()`),
+ senão a visão não tem ranking para desalinhar.
++
++## O relatório era cortado na horizontal (28/08/2026)
++
++A matriz "Evolução por tabela" ganha uma coluna por medição. Com 8 medições ela
++passa de 1.100 px e o cartão do relatório, fixo em **900 px**, cortava as últimas
++datas — o número existia no HTML, mas ficava fora do papel.
++
++**Por que a largura em % não bastou.** As células já saíam com largura relativa e
++a tabela com `width:100%`. Só que o layout automático de tabela respeita o
++**min-content**: se "25/08/2026 S35" não cabe na fatia declarada, o navegador
++alarga a coluna e a tabela estoura o container. Declarar 100% não impede o
++transbordo, apenas descreve a intenção.
++
++**Correção.** `larguraDoConteudo(el)` mede o que o painel realmente ocupa na tela
++(`scrollWidth` do container e de cada tabela dentro dele) e a moldura dimensiona
++o cartão por isso, entre **900 px** (piso, para relatório curto não virar uma
++faixa fina) e **1800 px** (teto, além disso vira rolagem em qualquer leitor). O
++cartão ainda leva `overflow-x:auto` como rede: janela menor rola, não corta.
++
++O relatório é um retrato da tela — então a largura do retrato é a da tela.
++
++## Bordas de 0px (mesmo dia)
++
++`border-top` computado devolve `0px solid rgb(...)` quando **não** há borda; o
++teste de vazio só pegava `0px none`, então cada `<td>` carregava quatro bordas
++invisíveis. Numa matriz de 150 linhas isso é dezenas de KB de nada.
++
++Efeito de trocar o teste por `/^0px\s/`: Cronograma **167 → 82 KB**, GAPs
++93 → 50 KB, Por Módulo 62 → 30 KB, Consumo 58 → 27 KB, Resumo 6 → 3,5 KB. Sem
++perda visual — borda que existe não tem 0px.
+diff --git a/web/index.html b/web/index.html
+index 5bc4f72..0a76956 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -3993,9 +3993,12 @@ const SNAP_HERDA = ['color', 'font-family', 'font-size', 'font-weight', 'font-st
+                     'text-align', 'text-transform', 'letter-spacing', 'line-height',
+                     'white-space'];
+ 
++// `border-top` computado vem como "0px solid rgb(...)" quando NÃO há borda — o
++// teste antigo só pegava "0px none", então cada <td> carregava quatro bordas
++// invisíveis. Numa matriz de 150 linhas isso é dezenas de KB de nada.
+ const ehVazio = (v) => !v || v === '0px' || v === 'none' || v === 'normal' ||
+                        v === 'auto' || v === 'rgba(0, 0, 0, 0)' || v === 'transparent' ||
+-                       /^0px none/.test(v) || v === 'baseline' || v === '0px 0px';
++                       /^0px\s/.test(v) || v === 'baseline' || v === '0px 0px';
+ 
+ function snapEstilo(cs, pai, tag, larguraTabela) {
+   const st = [];
+@@ -4163,14 +4166,31 @@ const RELATORIOS = {
+ 
+ /** Cabeçalho/rodapé comuns — o que identifica de QUEM e de QUANDO é o número.
+  *  Relatório sem cliente e sem data circula por e-mail e vira armadilha. */
+-function molduraRelatorio(titulo, corpo, extra = '') {
++/** Largura que o conteúdo REALMENTE ocupa na tela.
++ *  A matriz da Evolução cresce uma coluna por medição; com 8 medições ela passa
++ *  de 1.100px e era cortada pelo cartão fixo de 900px do relatório — o texto
++ *  saía do papel e ninguém via as últimas datas. Tabela com largura declarada em
++ *  % ainda assim estoura o container quando o conteúdo não cabe (o layout
++ *  automático respeita o min-content), então a correção é o cartão acompanhar. */
++function larguraDoConteudo(el) {
++  if (!el) return 0;
++  const larguras = [el.scrollWidth,
++                    ...[...el.querySelectorAll('table')].map(t => t.scrollWidth)];
++  return Math.max(0, ...larguras);
++}
++
++function molduraRelatorio(titulo, corpo, extra = '', largura = 0) {
+   const p = state.selected?.projeto || {};
+   const cliente = (p.nome_cliente_projeto || '').trim() || '—';
+   const C = { petroleo: '#002233', cinza: '#545454' };
++  // 900 é o piso (relatório curto não vira uma faixa fina) e 1800 o teto (além
++  // disso vira rolagem em qualquer leitor). overflow-x fica como rede: se a
++  // janela do leitor for menor, rola em vez de cortar.
++  const larg = Math.min(1800, Math.max(900, Math.round(largura) + 48));
+   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+ <title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title></head>
+ <body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
+-<div style="max-width:900px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
++<div style="max-width:${larg}px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;overflow-x:auto">
+   <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
+   <h1 style="margin:4px 0 2px;font-size:22px">${escapeHtml(titulo)}</h1>
+   <p style="margin:0;color:${C.cinza};font-size:13px">
+@@ -4199,7 +4219,8 @@ function relatorioDaAba({ email = false } = {}) {
+   if (aba === 'cadastros' || aba === 'transicao') {
+     const a = AMB[cad.ambiente]; if (a) extra = ` · ${a.label}`;
+   }
+-  return { titulo: r.titulo, html: molduraRelatorio(r.titulo, corpo, extra), aba };
++  return { titulo: r.titulo, aba,
++           html: molduraRelatorio(r.titulo, corpo, extra, larguraDoConteudo(el)) };
+ }
+ 
+ function nomeArquivoRel(aba) {
+-- 
+2.43.0
+
+From 2e10a48ea115dd7779f0f4357ed85de88824cdb7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Fri, 28 Aug 2026 15:52:34 +0000
+Subject: [PATCH 3/4] Export: impressao em paisagem com ajuste de escala
+
+---
+ ...-exportar-html-e-gmail-em-todas-as-abas.md | 25 +++++++++++++++++++
+ web/index.html                                | 24 ++++++++++++++++--
+ 2 files changed, 47 insertions(+), 2 deletions(-)
+
+diff --git a/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md b/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
+index 9f7efa9..ff180e4 100644
+--- a/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
++++ b/docs/specs/2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md
+@@ -143,3 +143,28 @@ invisíveis. Numa matriz de 150 linhas isso é dezenas de KB de nada.
+ Efeito de trocar o teste por `/^0px\s/`: Cronograma **167 → 82 KB**, GAPs
+ 93 → 50 KB, Por Módulo 62 → 30 KB, Consumo 58 → 27 KB, Resumo 6 → 3,5 KB. Sem
+ perda visual — borda que existe não tem 0px.
++
++## Impressão em paisagem (28/08/2026)
++
++Mesmo com o cartão elástico, **imprimir** continuava cortando: A4 retrato tem
++~794 px úteis e estes relatórios passam de 1.100 px por natureza — a matriz da
++Evolução ganha uma coluna por medição. O HTML estava inteiro na tela; quem
++amputava era o papel.
++
++Três regras, todas dentro de um `<style>` (o Gmail descarta `<style>`, então
++isto vale só no arquivo baixado — que é exatamente onde se imprime; o e-mail
++segue com o inline de sempre):
++
++1. **`@page { size: A4 landscape; margin: 10mm }`** — sobe a área útil de ~794
++   para ~1.047 px.
++2. **`zoom` calculado** quando ainda assim não cabe: `1040 / largura`. Encolhe o
++   conjunto até caber em vez de amputar a direita. Chrome e Edge respeitam
++   `zoom` na impressão — é o caminho mais confiável sem quebrar a tabela em
++   pedaços. Medido: conteúdo de 1.278 px → `zoom: 0.814`, PDF de 4 para 3
++   páginas, matriz inteira visível.
++3. **`tr { page-break-inside: avoid }` e `thead { display: table-header-group }`**
++   — linha não parte no meio e o cabeçalho se repete a cada página. Sem isso,
++   da segunda página em diante ninguém sabe de que data é cada coluna.
++
++**Como conferir:** `/tmp/print_check.py` gera o PDF em A4 paisagem e confirma a
++regra `@page`, o fator de zoom e a contagem de páginas.
+diff --git a/web/index.html b/web/index.html
+index 0a76956..5a0585f 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -4187,10 +4187,30 @@ function molduraRelatorio(titulo, corpo, extra = '', largura = 0) {
+   // disso vira rolagem em qualquer leitor). overflow-x fica como rede: se a
+   // janela do leitor for menor, rola em vez de cortar.
+   const larg = Math.min(1800, Math.max(900, Math.round(largura) + 48));
++  // IMPRESSÃO EM PAISAGEM. Estes relatórios são largos por natureza — a matriz
++  // da Evolução ganha uma coluna por medição —, e A4 retrato tem ~794px úteis:
++  // qualquer coisa além disso o navegador corta no papel, mesmo o HTML estando
++  // inteiro na tela. Paisagem sobe para ~1.047px com margem de 10mm.
++  // Ainda assim pode faltar: por isso o `zoom` calculado, que encolhe o
++  // conjunto até caber em vez de amputar a direita. Chrome/Edge respeitam zoom
++  // na impressão; é o caminho mais confiável que existe sem quebrar a tabela.
++  const UTIL = 1040;                                    // A4 paisagem, margem 10mm
++  const escala = larg > UTIL ? (UTIL / larg).toFixed(3) : null;
++  // Gmail descarta <style>, então isto só vale no arquivo baixado — que é
++  // justamente onde se imprime. O e-mail continua com o inline de sempre.
++  const estilos = `<style>
++    @page { size: A4 landscape; margin: 10mm; }
++    @media print {
++      body { background: #fff !important; padding: 0 !important;${escala ? ` zoom: ${escala};` : ''} }
++      .rel-cartao { box-shadow: none !important; border-radius: 0 !important; }
++      tr, .rel-bloco { page-break-inside: avoid; }
++      thead { display: table-header-group; }
++    }
++  </style>`;
+   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
+-<title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title></head>
++<title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title>${estilos}</head>
+ <body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
+-<div style="max-width:${larg}px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;overflow-x:auto">
++<div class="rel-cartao" style="max-width:${larg}px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;overflow-x:auto">
+   <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
+   <h1 style="margin:4px 0 2px;font-size:22px">${escapeHtml(titulo)}</h1>
+   <p style="margin:0;color:${C.cinza};font-size:13px">
+-- 
+2.43.0
+
+From 1811a0337518fef0da32c4b68eeaf3bf983f939d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 1 Sep 2026 07:49:16 +0000
+Subject: [PATCH 4/4] Movimentos: visao de Evolucao com cobertura por medicao
+
+---
+ api/index.py                                 |  80 ++++++++
+ docs/specs/2026-09-01-evolucao-movimentos.md |  65 +++++++
+ web/index.html                               | 190 ++++++++++++++++++-
+ 3 files changed, 333 insertions(+), 2 deletions(-)
+ create mode 100644 docs/specs/2026-09-01-evolucao-movimentos.md
+
+diff --git a/api/index.py b/api/index.py
+index e044c79..1c6c05a 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -1329,6 +1329,86 @@ def _cobertura(dimensoes, cenarios):
+     return cobertura, nao_previstos
+ 
+ 
++SQL_MOV_EVO_DIM = """
++  select medicao_id, analise, descricao, dim1, dim2, dim3, dim4, qtde, qtd_doc
++    from cockpit.monitmov_dimensoes
++   where medicao_id = any(%s)
++"""
++
++
++@app.get("/api/monitmov/<customer>/evolucao")
++def api_monitmov_evolucao(customer):
++    """Evolução dos MOVIMENTOS: uma linha por medição com movimentos, combinações
++    e cobertura, mais a matriz cenário × medição.
++
++    A cobertura é recalculada com `_cobertura()` — a MESMA função da "Situação
++    atual". Reescrever a regra de casamento aqui (coringa, normalização, o que
++    conta como não previsto) faria as duas visões divergirem no dia em que uma
++    delas mudasse, e o usuário veria 7/11 numa aba e 8/11 na outra sem explicação.
++
++    Uma consulta só traz as dimensões de TODAS as medições; agrupar em Python
++    evita N+1 no Postgres — são poucas medições, mas centenas de combinações
++    cada."""
++    if (r := require_auth()):
++        return r
++    if (d := deny_customer(customer)):
++        return d
++    amb = _ambiente()
++    meds = q("""select id, data_medicao, semana, hora_medicao,
++                       periodo_ini, periodo_fim, origem
++                  from cockpit.monitmov_medicoes
++                 where customer=%s and ambiente=%s order by data_medicao, id""",
++             (customer, amb))
++    cenarios = q("""select id, analise, dim1, dim2, dim3, dim4, descricao,
++                           esperado, etapa, responsavel
++                      from cockpit.monitmov_cenarios where customer=%s
++                     order by analise, descricao""", (customer,))
++    if not meds:
++        return _json({"ok": True, "customer": customer, "ambiente": amb,
++                      "vazio": True, "medicoes": [], "cenarios": [], "serie": []})
++
++    dims = q(SQL_MOV_EVO_DIM, ([m["id"] for m in meds],))
++    por_med = {}
++    for d in dims:
++        por_med.setdefault(d["medicao_id"], []).append(d)
++
++    serie, matriz = [], {}
++    for m in meds:
++        ds = por_med.get(m["id"], [])
++        cob, nao_prev = _cobertura(ds, cenarios)
++        cobertos = sum(1 for c in cob if c["status"] == "COBERTO")
++        faltantes = sum(1 for c in cob if c["status"] == "FALTANTE")
++        data = str(m["data_medicao"])
++        serie.append({
++            "data_medicao": m["data_medicao"], "semana": m["semana"],
++            "hora_medicao": m["hora_medicao"],
++            "periodo_ini": m["periodo_ini"], "periodo_fim": m["periodo_fim"],
++            "movimentos": sum(float(d["qtde"] or 0) for d in ds),
++            "documentos": sum(float(d["qtd_doc"] or 0) for d in ds),
++            "combinacoes": len(ds),
++            "analises": len({_norm_dim(d["analise"]) for d in ds}),
++            "cobertos": cobertos, "faltantes": faltantes,
++            "cenarios": len(cob), "nao_previstos": len(nao_prev),
++        })
++        # A chave da matriz é o id do cenário: descrição repete entre análises.
++        for c in cob:
++            linha = matriz.setdefault(c["id"], {
++                "id": c["id"], "analise": c["analise"], "descricao": c["descricao"],
++                "esperado": c["esperado"], "etapa": c["etapa"],
++                "responsavel": c["responsavel"], "serie": {}})
++            linha["serie"][data] = {"qtde": c["qtde"], "status": c["status"]}
++
++    # Faltante primeiro: é o que precisa de ação. Depois o que tem menos volume.
++    ordem = {"FALTANTE": 0, "COBERTO": 1, "OPCIONAL": 2}
++    ultima = str(meds[-1]["data_medicao"])
++    linhas = sorted(matriz.values(),
++                    key=lambda l: (ordem.get((l["serie"].get(ultima) or {}).get("status"), 9),
++                                   l["analise"], l["descricao"] or ""))
++    return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": False,
++                  "medicoes": [str(m["data_medicao"]) for m in meds],
++                  "serie": serie, "cenarios": linhas})
++
++
+ @app.get("/api/monitmov/<customer>")
+ def api_monitmov(customer):
+     """Última medição de MOVIMENTOS do cliente no ambiente pedido: totais por
+diff --git a/docs/specs/2026-09-01-evolucao-movimentos.md b/docs/specs/2026-09-01-evolucao-movimentos.md
+new file mode 100644
+index 0000000..50a1944
+--- /dev/null
++++ b/docs/specs/2026-09-01-evolucao-movimentos.md
+@@ -0,0 +1,65 @@
++# Evolução dos Movimentos — 01/09/2026
++
++Par **Situação atual | Evolução** dentro das sub-abas de Movimentos, no mesmo
++lugar e com o mesmo comportamento do que Cadastros já tinha — inclusive manter a
++visão escolhida ao pular de Base Produção para Base de Testes.
++
++## A pergunta é outra
++
++Em Cadastros a evolução responde "quantos registros entraram". Aqui a pergunta
++que decide go-live é **"a cobertura andou?"**, porque volume não é progresso:
++entre 25/08 e 01/09 o Olim foi de **321 para 391 movimentos** com a cobertura
++**parada em 7/11** e os mesmos 2 cenários faltantes. Nada nos números de volume
++denuncia isso — só a coluna de cobertura.
++
++Por isso a barra da série mede **cobertura**, não volume, e fica vermelha
++enquanto houver faltante. O KPI diz "sem avanço vs anterior" em vez de repetir o
++número, que é a informação que o coordenador precisa levar para a reunião.
++
++## Rota
++
++`GET /api/monitmov/<customer>/evolucao?ambiente=` devolve:
++
++- `serie[]` — uma linha por medição: movimentos, documentos, combinações,
++  análises, cobertos, faltantes, cenários e não previstos;
++- `cenarios[]` — matriz cenário × medição, com `{qtde, status}` por data;
++- `medicoes[]` — o eixo de datas.
++
++**A cobertura é recalculada com `_cobertura()`, a MESMA função da "Situação
++atual".** Reescrever a regra de casamento aqui (coringa `*`, normalização,
++o que conta como não previsto) faria as duas visões divergirem no dia em que uma
++delas mudasse — e o usuário veria 7/11 numa e 8/11 na outra sem explicação. Foi
++conferido contra o banco: 391 movimentos, 118 combinações, 7/11 cobertos, batendo
++com a tela da Situação atual.
++
++Uma consulta só (`medicao_id = any(...)`) traz as dimensões de todas as
++medições; o agrupamento é em Python. São poucas medições, mas centenas de
++combinações cada — N+1 aqui custaria caro à toa.
++
++## Tela
++
++1. **KPIs** — cobertos (vermelho enquanto houver faltante), movimentos,
++   combinações e quantidade de medições, todos com o delta contra a anterior.
++2. **Evolução por medição** — série com barra de cobertura e Δ de cobertos e de
++   movimentos lado a lado. É a comparação que revela volume subindo sem
++   cobertura andar.
++3. **Cenário por medição** — matriz agrupada por análise. **Análise com faltante
++   já vem aberta**; a que está inteira coberta vem fechada, com o selo verde.
++   Cenário sem movimento mostra `faltante`/`opcional` em vez de `0`, porque zero
++   e "não era esperado" são coisas diferentes.
++
++## Cuidado ao mexer
++
++- `carregaMovimentos()` termina em `if (mov.visao === 'evolucao')` — sem isso a
++  Situação atual repinta por cima da Evolução ao trocar de ambiente.
++- A chave da matriz é o **id** do cenário, não a descrição: descrição repete
++  entre análises.
++- `mov.evoChave` é `cliente|ambiente`. Trocar de base tem que rebuscar; sem a
++  chave, a Base de Testes mostraria os números da Produção.
++
++## Como conferir
++
++`/tmp/mov_evo_check.py`: botões presentes, KPI de cobertos sem avanço, série com
++as duas datas, matriz com faltante aberta, volta para Situação atual sem quebrar
++e visão preservada ao trocar de base. O stub reproduz os números reais do Olim
++(321 → 391, 7/11 nas duas medições).
+diff --git a/web/index.html b/web/index.html
+index 5a0585f..bcc7a8f 100644
+--- a/web/index.html
++++ b/web/index.html
+@@ -372,6 +372,10 @@
+             <span class="text-xs text-slate-500">Cliente</span>
+             <span id="mov-cliente-nome" class="font-medium"></span>
+             <span id="mov-amb-selo" class="px-2 py-0.5 rounded-full text-xs font-semibold"></span>
++            <div class="inline-flex rounded-md border border-slate-300 overflow-hidden">
++              <button data-movvisao="atual"    class="mov-visao-btn px-3 py-1.5">Situação atual</button>
++              <button data-movvisao="evolucao" class="mov-visao-btn px-3 py-1.5">Evolução</button>
++            </div>
+             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+             <div class="ml-auto flex items-center gap-2">
+               <button id="mov-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
+@@ -3062,7 +3066,8 @@ function confirmaAmbiente(nomeArquivo, sugerido, aoConfirmar) {
+ //  Esperado vem do CENARIOS_MONITOR.TXT (o mesmo que vai para a \system\).
+ //  Spec: docs/specs/2026-08-25-movimentos-cobertura-cenarios.md
+ // ============================================================================
+-const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {} };
++const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {},
++              visao: 'atual', evo: null, evoChave: null };
+ 
+ // Rótulo legível do E5_TIPODOC. Fica no front de propósito: a dimensão guarda
+ // o CÓDIGO, senão trocar um texto aqui transformaria cenário coberto em
+@@ -3103,11 +3108,190 @@ function initMovimentos(ambiente = 'producao') {
+   $('#mov-cliente-nome').textContent =
+     (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+   seloAmbiente($('#mov-amb-selo'), ambiente);
+-  if (mov.customer === cli && mov.ambiente === ambiente) return;
++  if (mov.customer === cli && mov.ambiente === ambiente) { aplicaVisaoMov(); return; }
+   mov.ambiente = ambiente;
++  mov.dados = null; mov.evo = null; mov.evoChave = null;
+   carregaMovimentos(cli);
+ }
+ 
++/** A visão escolhida vale para as duas bases: quem está acompanhando evolução
++ *  quer continuar nela ao pular de Produção para Testes — igual em Cadastros. */
++function aplicaVisaoMov() {
++  $$('.mov-visao-btn').forEach(b => {
++    const on = b.dataset.movvisao === mov.visao;
++    b.className = `mov-visao-btn px-3 py-1.5 ${on ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}`;
++  });
++  if (mov.visao === 'evolucao') carregaEvolucaoMov();
++  else if (mov.dados) desenhaMovimentos(mov.dados);
++  else carregaMovimentos(mov.customer);
++}
++
++$$('.mov-visao-btn').forEach(b => b.addEventListener('click', () => {
++  if (mov.visao === b.dataset.movvisao) return;
++  mov.visao = b.dataset.movvisao;
++  aplicaVisaoMov();
++}));
++
++// ── Evolução dos movimentos ─────────────────────────────────────────────────
++// A pergunta desta visão não é "quanto rodou", é "a COBERTURA andou?". Um
++// cliente pode crescer em volume sem cobrir um cenário novo — foi o caso do
++// Olim entre 25/08 e 01/09: 321 → 391 movimentos com a cobertura parada em
++// 7/11. Por isso a barra da série é a cobertura, não o volume.
++async function carregaEvolucaoMov() {
++  const box = $('#mov-conteudo'), cli = mov.customer;
++  $('#mov-kpis').classList.add('hidden');
++  if (!cli) { box.innerHTML = blocoVazioCad('Abra um projeto para ver a evolução dos movimentos.'); return; }
++  const chave = `${cli}|${mov.ambiente}`;
++  if (mov.evo && mov.evoChave === chave) { pintaEvolucaoMov(); return; }
++  box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando evolução…</div>';
++  try {
++    mov.evo = await api(`/api/monitmov/${encodeURIComponent(cli)}/evolucao?ambiente=${mov.ambiente}`);
++    mov.evoChave = chave;
++  } catch (e) {
++    box.innerHTML = blocoErro('Não foi possível carregar a evolução', e, carregaEvolucaoMov);
++    return;
++  }
++  pintaEvolucaoMov();
++}
++
++const MOV_STATUS = {
++  COBERTO: { rot: 'coberto', cls: 'text-emerald-700' },
++  FALTANTE: { rot: 'faltante', cls: 'text-rose-600 font-medium' },
++  OPCIONAL: { rot: 'opcional', cls: 'text-slate-400' },
++};
++
++function deltaMov(atual, ant) {
++  if (ant === null || ant === undefined) return '<span class="text-slate-400">—</span>';
++  const d = atual - ant;
++  if (!d) return '<span class="text-slate-400">0</span>';
++  return `<span class="${d > 0 ? 'text-emerald-600' : 'text-rose-600'}">${d > 0 ? '+' : '−'}${fmtNum(Math.abs(d))}</span>`;
++}
++
++function pintaEvolucaoMov() {
++  const j = mov.evo, box = $('#mov-conteudo');
++  if (!j) return;
++  if (j.vazio || !(j.serie || []).length) {
++    box.innerHTML = blocoVazioCad(`Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`);
++    return;
++  }
++  const serie = j.serie;
++  const u = serie[serie.length - 1];
++  const a = serie.length > 1 ? serie[serie.length - 2] : null;
++
++  const kpi = (rot, val, sub, cls) => `
++    <div class="rounded-lg p-4 ${cls}">
++      <p class="text-xs opacity-80">${rot}</p>
++      <p class="text-2xl font-totvs mt-1">${val}</p>
++      <p class="text-xs opacity-80 mt-0.5">${sub}</p>
++    </div>`;
++  $('#mov-kpis').classList.remove('hidden');
++  $('#mov-kpis').innerHTML =
++    kpi('Cenários cobertos', `${u.cobertos}/${u.cenarios}`,
++        a ? (u.cobertos === a.cobertos ? 'sem avanço vs anterior'
++                                       : `${u.cobertos > a.cobertos ? '▲' : '▼'} ${Math.abs(u.cobertos - a.cobertos)} vs anterior`)
++          : 'primeira medição',
++        u.faltantes ? 'bg-rose-600 text-white' : 'bg-totvs-petroleo text-white') +
++    kpi('Movimentos', fmtNum(u.movimentos),
++        a ? `${u.movimentos >= a.movimentos ? '▲' : '▼'} ${fmtNum(Math.abs(u.movimentos - a.movimentos))} vs anterior` : 'primeira medição',
++        'bg-totvs-blue text-totvs-petroleo') +
++    kpi('Combinações medidas', fmtNum(u.combinacoes),
++        a ? `${u.combinacoes >= a.combinacoes ? '▲' : '▼'} ${fmtNum(Math.abs(u.combinacoes - a.combinacoes))} vs anterior` : 'primeira medição',
++        'bg-totvs-purple text-white') +
++    kpi('Medições', String(serie.length),
++        `de ${fmtData(String(serie[0].data_medicao))} a ${fmtData(String(u.data_medicao))}`,
++        'bg-white border border-slate-200 text-totvs-petroleo');
++
++  const linhasSerie = serie.map((m, i) => {
++    const ant = i > 0 ? serie[i - 1] : null;
++    const pct = m.cenarios > 0 ? (100 * m.cobertos / m.cenarios) : 0;
++    return `<tr class="border-t border-slate-100">
++      <td class="py-2 pr-3 whitespace-nowrap">${fmtData(String(m.data_medicao))}${m.semana ? ` <span class="text-slate-400 text-xs">S${m.semana}</span>` : ''}</td>
++      <td class="py-2 pr-3">
++        <div style="background:#e6edf0;border-radius:99px;height:8px;overflow:hidden">
++          <div style="background:${m.faltantes ? '#e11d48' : '#00DBFF'};height:8px;width:${pct.toFixed(1)}%"></div>
++        </div>
++      </td>
++      <td class="py-2 pr-3 text-right tabular-nums font-semibold">${m.cobertos}/${m.cenarios}</td>
++      <td class="py-2 pr-3 text-right tabular-nums text-xs">${ant ? deltaMov(m.cobertos, ant.cobertos) : '<span class="text-slate-400">—</span>'}</td>
++      <td class="py-2 pr-3 text-right tabular-nums">${fmtNum(m.movimentos)}</td>
++      <td class="py-2 pr-3 text-right tabular-nums text-xs">${ant ? deltaMov(m.movimentos, ant.movimentos) : '<span class="text-slate-400">—</span>'}</td>
++      <td class="py-2 pr-3 text-right tabular-nums text-slate-500 text-xs">${fmtNum(m.combinacoes)}</td>
++      <td class="py-2 text-right tabular-nums text-xs ${m.faltantes ? 'text-rose-600' : 'text-slate-400'}">${m.faltantes}</td>
++    </tr>`;
++  }).join('');
++
++  // Matriz cenário × medição — o análogo direto da matriz de Cadastros
++  const datas = j.medicoes || [];
++  const ultima = datas[datas.length - 1];
++  const porAnalise = new Map();
++  (j.cenarios || []).forEach(c => {
++    if (!porAnalise.has(c.analise)) porAnalise.set(c.analise, []);
++    porAnalise.get(c.analise).push(c);
++  });
++  const matriz = [...porAnalise.entries()].map(([analise, itens]) => {
++    const faltam = itens.filter(c => ((c.serie || {})[ultima] || {}).status === 'FALTANTE').length;
++    return `
++    <details class="border border-slate-200 rounded-lg mb-2" ${faltam ? 'open' : ''}>
++      <summary class="cursor-pointer select-none px-4 py-2 flex items-center gap-2 text-sm">
++        <span class="font-semibold text-totvs-petroleo">${escapeHtml(analise)}</span>
++        <span class="text-slate-400 text-xs">${itens.length} cenário(s)</span>
++        ${faltam ? `<span class="ml-auto text-xs text-rose-600 font-medium">${faltam} faltante(s)</span>`
++                 : '<span class="ml-auto text-xs text-emerald-700">tudo coberto</span>'}
++      </summary>
++      <div class="overflow-x-auto px-4 pb-3">
++        <table class="w-full text-sm">
++          <thead class="text-xs text-slate-500 border-b border-slate-200">
++            <tr>
++              <th class="text-left py-2 pr-3 font-medium">Cenário</th>
++              ${datas.map(d => `<th class="text-right py-2 pr-3 font-medium whitespace-nowrap">${fmtData(d)}</th>`).join('')}
++            </tr>
++          </thead>
++          <tbody>${itens.map(c => `
++            <tr class="border-b border-slate-100 last:border-0">
++              <td class="py-2 pr-3">${escapeHtml(c.descricao || '—')}${c.esperado ? '' : ' <span class="text-xs text-slate-400">(opcional)</span>'}</td>
++              ${datas.map(d => {
++                const x = (c.serie || {})[d];
++                if (!x) return '<td class="py-2 pr-3 text-right text-slate-300">—</td>';
++                const st = MOV_STATUS[x.status] || MOV_STATUS.OPCIONAL;
++                return `<td class="py-2 pr-3 text-right tabular-nums">${x.qtde > 0 ? fmtNum(x.qtde) : `<span class="${st.cls}">${st.rot}</span>`}</td>`;
++              }).join('')}
++            </tr>`).join('')}</tbody>
++        </table>
++      </div>
++    </details>`;
++  }).join('');
++
++  box.innerHTML = `
++    <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
++      <h3 class="text-sm font-semibold text-slate-700 mb-1">Evolução por medição</h3>
++      <p class="text-xs text-slate-400 mb-3">A barra mede a COBERTURA de cenários, não o volume:
++        movimento que cresce sem cobrir cenário novo não aproxima o go-live.</p>
++      <div class="overflow-x-auto">
++        <table class="w-full text-sm">
++          <thead class="text-xs text-slate-500 border-b border-slate-200">
++            <tr>
++              <th class="text-left  py-2 pr-3 font-medium">Medição</th>
++              <th class="text-left  py-2 pr-3 font-medium">Cobertura</th>
++              <th class="text-right py-2 pr-3 font-medium">Cobertos</th>
++              <th class="text-right py-2 pr-3 font-medium">Δ</th>
++              <th class="text-right py-2 pr-3 font-medium">Movimentos</th>
++              <th class="text-right py-2 pr-3 font-medium">Δ</th>
++              <th class="text-right py-2 pr-3 font-medium">Combin.</th>
++              <th class="text-right py-2 font-medium">Faltantes</th>
++            </tr>
++          </thead>
++          <tbody>${linhasSerie}</tbody>
++        </table>
++      </div>
++    </div>
++    <div class="bg-white rounded-lg border border-slate-200 p-5">
++      <h3 class="text-sm font-semibold text-slate-700 mb-1">Cenário por medição</h3>
++      <p class="text-xs text-slate-400 mb-3">Quantidade observada em cada medição. Análise com
++        faltante já vem aberta.</p>
++      ${matriz || '<p class="text-sm text-slate-400">Nenhum cenário combinado ainda.</p>'}
++    </div>`;
++}
++
+ async function carregaMovimentos(customer) {
+   mov.customer = customer || null;
+   const box = $('#mov-conteudo');
+@@ -3123,6 +3307,8 @@ async function carregaMovimentos(customer) {
+   }
+   mov.dados = j;
+   mov.verTudo = {};
++  // Carregou na visão de evolução? Não pinta a situação atual por cima dela.
++  if (mov.visao === 'evolucao') { carregaEvolucaoMov(); return; }
+   if (j.vazio) {
+     box.innerHTML = blocoVazioCad(
+       `Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`,
+-- 
+2.43.0
+
