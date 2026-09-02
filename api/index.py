@@ -1789,10 +1789,19 @@ def _trecho(r):
 
 
 def _sessao_protheus(cfg, customer, amb):
-    """Monta (headers, auth, timeout) a partir do cadastro."""
+    """Monta (headers, auth, timeout) a partir do cadastro.
+
+    `tenantId` e obrigatorio quando a URI REST do cliente esta com
+    `PrepareIn=All` (caso do Olim): sem ele o AppServer nao sabe em que
+    empresa/filial preparar o ambiente. Mandamos TAMBEM empresa/filial como
+    query params porque instalacoes mais antigas so entendem daquele jeito —
+    quem nao usa um dos dois simplesmente ignora.
+    Basic auth vai sempre que houver usuario cadastrado: com `SECURITY=1` no
+    [HTTPREST] a chamada sem credencial leva 401 mesmo com o token correto."""
     tok = _decifra(cfg.get("token_enc"), _aad(customer, amb))
     sen = _decifra(cfg.get("senha_enc"), _aad(customer, amb))
-    heads = {"Accept": "application/json"}
+    heads = {"Accept": "application/json",
+             "tenantId": f"{cfg.get('empresa') or '01'},{cfg.get('filial') or '01'}"}
     if tok:
         heads["X-TSC-Token"] = tok
     auth = (cfg.get("usuario"), sen) if cfg.get("usuario") else None
