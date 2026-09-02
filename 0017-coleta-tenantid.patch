@@ -1,0 +1,50 @@
+From 19e060c7ba89a591502fec509d3f5e5865c6e99c Mon Sep 17 00:00:00 2001
+From: Reges Paulo Werlang <reges.werlang@totvs.com.br>
+Date: Wed, 2 Sep 2026 07:15:09 +0000
+Subject: [PATCH] Coleta: enviar tenantId (PrepareIn=All) alem de
+ empresa/filial
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A URI /rest do Olim esta com PrepareIn=All e SECURITY=1: sem o header
+tenantId o AppServer nao sabe em que empresa/filial preparar o ambiente, e
+sem Basic a chamada leva 401 mesmo com o X-TSC-Token correto. Mantemos os
+query params empresa/filial para instalacoes que so entendem aquele
+formato — quem nao usa um dos dois ignora.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01AiqzBWtxNa6WsyX5vwDord
+---
+ api/index.py | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/api/index.py b/api/index.py
+index 047fae2..4a42cdf 100644
+--- a/api/index.py
++++ b/api/index.py
+@@ -1789,10 +1789,19 @@ def _trecho(r):
+ 
+ 
+ def _sessao_protheus(cfg, customer, amb):
+-    """Monta (headers, auth, timeout) a partir do cadastro."""
++    """Monta (headers, auth, timeout) a partir do cadastro.
++
++    `tenantId` e obrigatorio quando a URI REST do cliente esta com
++    `PrepareIn=All` (caso do Olim): sem ele o AppServer nao sabe em que
++    empresa/filial preparar o ambiente. Mandamos TAMBEM empresa/filial como
++    query params porque instalacoes mais antigas so entendem daquele jeito —
++    quem nao usa um dos dois simplesmente ignora.
++    Basic auth vai sempre que houver usuario cadastrado: com `SECURITY=1` no
++    [HTTPREST] a chamada sem credencial leva 401 mesmo com o token correto."""
+     tok = _decifra(cfg.get("token_enc"), _aad(customer, amb))
+     sen = _decifra(cfg.get("senha_enc"), _aad(customer, amb))
+-    heads = {"Accept": "application/json"}
++    heads = {"Accept": "application/json",
++             "tenantId": f"{cfg.get('empresa') or '01'},{cfg.get('filial') or '01'}"}
+     if tok:
+         heads["X-TSC-Token"] = tok
+     auth = (cfg.get("usuario"), sen) if cfg.get("usuario") else None
+-- 
+2.43.0
+
