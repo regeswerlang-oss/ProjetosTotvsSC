@@ -19,8 +19,8 @@ Porte do Projetos/server.py + pci_client.py para função serverless.
 """
 from __future__ import annotations
 
-import base64, csv, email.message, hashlib, hmac, imaplib, io, json, os, re, time, \
-    unicodedata, urllib.parse
+import base64, csv, email.message, hashlib, hmac, imaplib, io, json, os, re, secrets, \
+    time, unicodedata, urllib.parse
 from pathlib import Path
 
 import psycopg2, psycopg2.extras, requests
@@ -265,6 +265,139 @@ def deny_customer(cust):
     return None if (a is None or cust in a) else _err(403, "Sem acesso a este cliente.")
 
 
+# ── Perfil, abas liberadas e a ÁREA DE CLIENTES ─────────────────────────────
+# TRÊS EIXOS, e confundi-los abre acesso:
+#   allowed_customers() → QUAIS CLIENTES ele vê
+#   abas_liberadas()    → QUE ABAS ele vê NAQUELE cliente
+#   perfil              → ele é da TOTVS (interno) ou é o cliente
+#
+# Esconder o botão na tela NÃO é proteger: quem não é interno é barrado aqui,
+# no servidor (require_interno), mesmo chamando a rota na mão.
+PERFIS = ("admin", "comum", "cliente", "leitor")
+PERFIS_INTERNOS = ("admin", "comum", "leitor")     # gente da TOTVS
+
+# Catálogo das abas do detalhe do projeto. 'cliente' diz se a aba PODE ser
+# liberada para um usuário do cliente — 'consumo' fica de fora de propósito
+# (é margem/valoração interna, não se mostra para o cliente).
+ABAS = [
+    {"id": "resumo",    "label": "Resumo",               "cliente": True},
+    {"id": "crono",     "label": "Cronograma",           "cliente": True},
+    {"id": "modulos",   "label": "Por Módulo",           "cliente": True},
+    {"id": "etapas",    "label": "Por Etapa",            "cliente": True},
+    {"id": "consumo",   "label": "Consumo",              "cliente": False},
+    {"id": "gaps",      "label": "GAPs",                 "cliente": True},
+    {"id": "tarefas",   "label": "Tarefas",              "cliente": True},
+    {"id": "cadastros", "label": "Cadastros e Movimentos", "cliente": True},
+    {"id": "cobertura", "label": "Cobertura",            "cliente": True},
+    {"id": "transicao", "label": "Transição",            "cliente": True},
+]
+ABAS_IDS = [a["id"] for a in ABAS]
+ABAS_CLIENTE_OK = {a["id"] for a in ABAS if a["cliente"]}
+# O que a área de clientes libera quando a liberação existe mas ninguém marcou
+# aba nenhuma (coluna abas NULL). Protótipo de 03/09/2026: só Cadastros e
+# Movimentos. Lista vazia ('{}') é diferente: aí é "nenhuma aba", de propósito.
+ABAS_PADRAO_CLIENTE = ["cadastros"]
+
+
+def perfil_do(email):
+    """admin | comum | cliente | leitor. MESMA regra do cockpit-unico-tsc
+    (src/lib/auth/perfis.ts): perfil VAZIO cai no is_admin legado; perfil
+    PREENCHIDO mas desconhecido degrada para 'leitor', nunca para 'comum' —
+    a tabela é compartilhada e um perfil novo pode chegar antes do deploy."""
+    if not email:
+        return "leitor"
+    r = q("select perfil, coalesce(is_admin,false) adm from cockpit.usuarios_login "
+          "where lower(email)=%s and ativo", (email.lower(),), one=True)
+    if not r:
+        return "leitor"
+    p = (r["perfil"] or "").strip()
+    if p in PERFIS:
+        return p
+    if not p:
+        return "admin" if r["adm"] else "comum"
+    return "leitor"
+
+
+def eh_interno(email=None):
+    """Interno = TOTVS. Usa o usuário EFETIVO: 'ver como' um cliente tem que
+    mostrar a tela do cliente, senão a simulação não serve para conferir."""
+    return perfil_do(email or effective_user()) in PERFIS_INTERNOS
+
+
+def abas_liberadas(customer=None):
+    """Abas do usuário efetivo. None = todas (interno).
+    Sem customer devolve o mapa {customer: set(abas)} — é o que o front usa
+    para montar a barra de abas do projeto aberto."""
+    email = effective_user()
+    if not email:
+        return set() if customer else {}
+    if perfil_do(email) in PERFIS_INTERNOS:
+        return None
+    rows = q("select customer, abas from cockpit.usuario_clientes where lower(email)=%s",
+             (email.lower(),))
+    mapa = {}
+    for r in rows:
+        lista = ABAS_PADRAO_CLIENTE if r["abas"] is None else list(r["abas"])
+        mapa[r["customer"]] = {a for a in lista if a in ABAS_CLIENTE_OK}
+    return mapa if customer is None else mapa.get(customer, set())
+
+
+def deny_aba(customer, *abas):
+    """Barra o acesso a uma aba NESTE cliente. Passe mais de uma quando a rota
+    serve duas telas — /api/monitmov alimenta Cadastros E Cobertura."""
+    if (d := deny_customer(customer)):
+        return d
+    lib = abas_liberadas(customer)
+    if lib is None or (set(abas) & lib):
+        return None
+    return _err(403, "Esta aba não está liberada para você neste cliente.")
+
+
+def require_interno():
+    """Portão das ações de OPERAÇÃO: importar medição, script SQL, ambiente,
+    coletar, cenários, publicar painel, sincronizar, decidir GAP. O usuário do
+    cliente consulta e exporta — não opera."""
+    if (r := require_auth()):
+        return r
+    if not eh_interno():
+        return _err(403, "Ação restrita à equipe TOTVS.")
+    return None
+
+
+def hash_scrypt(senha):
+    """Gera no ÚNICO formato que o ecossistema entende: scrypt$<saltHex>$<hashHex>,
+    com o salt usado como STRING (o hex em UTF-8), N=16384 r=8 p=1 dklen=64 —
+    igual ao scryptSync do Node no cockpit-unico-tsc. Gravar bcrypt aqui
+    derruba o login de TODOS os dashboards: eles leem a mesma tabela."""
+    salt_hex = secrets.token_hex(16)   # 32 hex -> hash de 168 chars, igual ao do cockpit
+    dk = hashlib.scrypt(senha.encode(), salt=salt_hex.encode(), n=16384, r=8, p=1,
+                        dklen=64, maxmem=132 * 1024 * 1024)
+    return f"scrypt${salt_hex}${dk.hex()}"
+
+
+def senha_provisoria():
+    """Legível ao telefone: sem 0/O/1/l/I."""
+    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+    return "".join(secrets.choice(alfabeto) for _ in range(12))
+
+
+_RE_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+[.][A-Za-z]{2,}")
+
+
+def emails_do_texto(v):
+    """Aceita lista OU um blocão colado (vírgula, ponto-e-vírgula, quebra de
+    linha, 'Nome <email>'). É isso que faz 'adicionar e-mails' ser prático:
+    o admin cola o que veio do cliente e a tela entende."""
+    txt = v if isinstance(v, str) else " ".join(str(x) for x in (v or []))
+    vistos, out = set(), []
+    for m in _RE_EMAIL.findall(txt):
+        e = m.strip().lower()
+        if e not in vistos:
+            vistos.add(e)
+            out.append(e)
+    return out
+
+
 # ── OAuth Tasks SC (a API PCI usa o mesmo) ──────────────────────────────────
 _tok = {"t": None, "exp": 0}
 
@@ -376,8 +509,18 @@ def api_me():
     real = s["e"]
     adm = is_admin(real)
     alvo = s.get("v") if (s.get("v") and adm) else None
+    efetivo = alvo or real
+    perfil = perfil_do(efetivo)
+    lib = abas_liberadas()                 # None = interno (todas as abas)
     return _json({"ok": True, "email": real, "nome": s.get("n"), "is_admin": adm,
-                  "view_as": alvo, "efetivo": alvo or real})
+                  "view_as": alvo, "efetivo": efetivo,
+                  "perfil": perfil,
+                  "interno": perfil in PERFIS_INTERNOS,
+                  # modo 'cliente' = ÁREA DE CLIENTES: mesma tela, sem as ações
+                  # de operação e só com as abas liberadas.
+                  "modo": "interno" if perfil in PERFIS_INTERNOS else "cliente",
+                  "abas_catalogo": ABAS,
+                  "abas": None if lib is None else {c: sorted(a) for c, a in lib.items()}})
 
 
 @app.get("/api/usuarios")
@@ -411,6 +554,152 @@ def api_view_as():
                     max_age=SESSION_TTL, httponly=True, secure=True,
                     samesite="Lax", path="/")
     return resp
+
+
+# ── ACESSOS — e-mails x cliente x abas (tela "Acessos", só admin) ───────────
+# A liberação vive em cockpit.usuario_clientes: (email, customer) já existia e
+# agora carrega a coluna abas text[]. NULL = herda (interno vê tudo; cliente
+# recebe ABAS_PADRAO_CLIENTE). '{}' = liberado no cliente e sem nenhuma aba.
+@app.get("/api/acessos")
+def api_acessos():
+    if (r := require_admin()):
+        return r
+    usuarios = q("""select u.email, u.nome, u.perfil, coalesce(u.is_admin,false) as is_admin,
+                           u.ativo, u.last_login
+                      from cockpit.usuarios_login u
+                     order by coalesce(u.nome, u.email)""")
+    liberacoes = q("""select uc.email, uc.customer, uc.abas, c.nome as cliente_nome
+                        from cockpit.usuario_clientes uc
+                        left join cockpit.clientes c on c.customer = uc.customer
+                       order by uc.customer, uc.email""")
+    clientes = q("select customer, nome from cockpit.clientes order by nome")
+    return _json({"ok": True, "usuarios": usuarios, "liberacoes": liberacoes,
+                  "clientes": clientes, "abas": ABAS, "perfis": list(PERFIS),
+                  "abas_padrao_cliente": ABAS_PADRAO_CLIENTE})
+
+
+@app.post("/api/acessos")
+def api_acessos_salvar():
+    """Libera N e-mails em N clientes com as MESMAS abas, numa tacada.
+
+    Cria o login de quem ainda não existe com uma senha provisória, devolvida
+    UMA ÚNICA VEZ nesta resposta — não fica gravada em lugar nenhum, nem em log.
+
+    Body: {emails: "colado ou lista", customers: [...], abas: [...],
+           perfil: "cliente", criar_login: true}
+    """
+    if (r := require_admin()):
+        return r
+    b = request.get_json(silent=True) or {}
+    emails = emails_do_texto(b.get("emails"))
+    customers = [str(c).strip() for c in (b.get("customers") or []) if str(c).strip()]
+    abas = [a for a in (b.get("abas") or []) if a in ABAS_IDS]
+    perfil = (b.get("perfil") or "cliente").strip().lower()
+    criar = b.get("criar_login") is not False
+
+    if not emails:
+        return _err(400, "Nenhum e-mail válido no que foi colado.")
+    if not customers:
+        return _err(400, "Escolha pelo menos um cliente.")
+    if perfil not in PERFIS:
+        return _err(400, f"Perfil desconhecido: {perfil}")
+    if perfil == "admin":
+        return _err(400, "Perfil admin não se concede por aqui — admin vê todos os clientes.")
+    # Aba fora do catálogo do cliente vira acesso indevido silencioso.
+    if perfil == "cliente" and (fora := [a for a in abas if a not in ABAS_CLIENTE_OK]):
+        return _err(400, "Abas não liberáveis para o perfil cliente: " + ", ".join(fora))
+    # Cliente inexistente em cockpit.clientes = liberação que não aparece na tela.
+    conhecidos = {r["customer"] for r in q("select customer from cockpit.clientes")}
+    if (nc := [c for c in customers if c not in conhecidos]):
+        return _err(409, "Cliente não cadastrado em cockpit.clientes: " + ", ".join(nc))
+
+    criados, existentes = [], []
+    for e in emails:
+        row = q("select email, perfil, ativo from cockpit.usuarios_login "
+                "where lower(email)=%s", (e,), one=True)
+        if row:
+            existentes.append({"email": row["email"], "perfil": row["perfil"],
+                               "ativo": row["ativo"]})
+            continue
+        if not criar:
+            return _err(409, f"{e} não tem login e 'criar login' está desligado.")
+        pw = senha_provisoria()
+        execute("""insert into cockpit.usuarios_login (email, senha_hash, nome, ativo, perfil, created_by)
+                   values (%s,%s,%s,true,%s,%s)""",
+                (e, hash_scrypt(pw), e.split("@")[0].replace(".", " ").title(),
+                 perfil, current_user()))
+        criados.append({"email": e, "senha_provisoria": pw})
+
+    # Perfil dos que já existiam: só REBAIXA para 'cliente' se quem chamou pediu
+    # explicitamente. Promover alguém por engano numa tela de liberação seria
+    # exatamente o tipo de acidente que esta tela existe para evitar.
+    if b.get("aplicar_perfil"):
+        for e in [x["email"] for x in existentes]:
+            execute("update cockpit.usuarios_login set perfil=%s, updated_at=now() "
+                    "where lower(email)=%s and coalesce(is_admin,false)=false",
+                    (perfil, e.lower()))
+
+    # A FK de usuario_clientes aponta para usuarios_login(email) — casing EXATO.
+    # Inserir o e-mail em minúsculo quando o login foi criado "Fulano@x.com"
+    # estoura a FK. Sempre resolver o e-mail canônico do banco.
+    canon = {r["email"].lower(): r["email"] for r in
+             q("select email from cockpit.usuarios_login where lower(email) = any(%s)",
+               (emails,))}
+    if (sem := [e for e in emails if e not in canon]):
+        return _err(500, "Login não encontrado após a criação: " + ", ".join(sem))
+    pares = [(canon[e], c, abas) for e in emails for c in customers]
+    with db() as conn, conn.cursor() as cur:
+        execute_values(cur,
+            """insert into cockpit.usuario_clientes (email, customer, abas, created_by)
+               values %s
+               on conflict (email, customer) do update set abas = excluded.abas""",
+            [(e, c, a, current_user()) for e, c, a in pares])
+    return _json({"ok": True, "emails": emails, "customers": customers, "abas": abas,
+                  "criados": criados, "existentes": existentes,
+                  "liberacoes": len(pares)})
+
+
+@app.delete("/api/acessos")
+def api_acessos_remover():
+    """Tira a liberação de um par (email, customer). Não apaga o login."""
+    if (r := require_admin()):
+        return r
+    email = (request.args.get("email") or "").strip().lower()
+    customer = (request.args.get("customer") or "").strip()
+    if not email or not customer:
+        return _err(400, "Informe email e customer.")
+    execute("delete from cockpit.usuario_clientes where lower(email)=%s and customer=%s",
+            (email, customer))
+    return _json({"ok": True})
+
+
+@app.post("/api/acessos/senha")
+def api_acessos_senha():
+    """Nova senha provisória. Devolvida uma única vez — não fica gravada."""
+    if (r := require_admin()):
+        return r
+    b = request.get_json(silent=True) or {}
+    email = (b.get("email") or "").strip().lower()
+    if not q("select 1 from cockpit.usuarios_login where lower(email)=%s", (email,), one=True):
+        return _err(404, "Usuário não encontrado.")
+    pw = senha_provisoria()
+    execute("update cockpit.usuarios_login set senha_hash=%s, updated_at=now() "
+            "where lower(email)=%s", (hash_scrypt(pw), email))
+    return _json({"ok": True, "email": email, "senha_provisoria": pw})
+
+
+@app.post("/api/acessos/ativo")
+def api_acessos_ativo():
+    if (r := require_admin()):
+        return r
+    b = request.get_json(silent=True) or {}
+    email = (b.get("email") or "").strip().lower()
+    ativo = bool(b.get("ativo"))
+    if email == (current_user() or "").lower() and not ativo:
+        return _err(409, "Você não pode se desativar.")
+    execute("update cockpit.usuarios_login set ativo=%s, updated_at=now() "
+            "where lower(email)=%s", (ativo, email))
+    return _json({"ok": True, "email": email, "ativo": ativo})
 
 
 @app.get("/api/health")
@@ -479,7 +768,7 @@ def api_projetos():
 def api_sync():
     """Sincroniza UMA página da API PCI para cockpit.projetos.
     O front chama page=1,2,3… enquanto hasNext for true (evita timeout)."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if effective_user() != current_user():
         return _err(409, "Saia da simulação ('ver como') antes de sincronizar.")
@@ -811,7 +1100,7 @@ def api_monitcad(customer):
     pedido. Sem medição naquele ambiente, devolve vazio:true."""
     if (r := require_auth()):
         return r
-    if (d := deny_customer(customer)):
+    if (d := deny_aba(customer, "cadastros")):
         return d
     amb = _ambiente()
     proj = q("select * from cockpit.monitcad_projetos where customer=%s",
@@ -913,7 +1202,7 @@ def api_monitcad_evolucao(customer):
     medida com zero."""
     if (r := require_auth()):
         return r
-    if (d := deny_customer(customer)):
+    if (d := deny_aba(customer, "cadastros")):
         return d
     amb = _ambiente()
     medicoes = q(SQL_EVO_MEDICOES, (customer, amb))
@@ -982,7 +1271,7 @@ def api_monitcad_script(customer):
     Um por tipo (cadastros/movimentos) e válido para as DUAS bases: o escopo de
     tabelas é o mesmo em produção e em teste, o que muda é onde rodar — e disso
     cuida o cabeçalho, que o front reescreve na hora de exibir."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -997,7 +1286,7 @@ def api_monitcad_script(customer):
 def api_monitcad_script_salvar(customer):
     """Salva o script colado. Quem enxerga o cliente pode salvar — mesma régua
     da importação de medição —, e fica registrado quem foi."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -1030,7 +1319,7 @@ def api_monitcad_script_salvar(customer):
 @app.delete("/api/monitcad/<customer>/script")
 def api_monitcad_script_remover(customer):
     """Apaga o script salvo — o modal volta a abrir com o gerado."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -1119,7 +1408,7 @@ def api_monitcad_upload(customer):
     o historico-semanal.json e o CSV de status de cadastros (MODULO, TABELA,
     DESCRICAO, DT_LEITURA, SEMANA, QTDE). Idempotente: regrava a medição inteira
     quando a data já existe."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -1363,7 +1652,7 @@ def api_monitmov_evolucao(customer):
     cada."""
     if (r := require_auth()):
         return r
-    if (d := deny_customer(customer)):
+    if (d := deny_aba(customer, "cadastros")):
         return d
     amb = _ambiente()
     meds = q("""select id, data_medicao, semana, hora_medicao,
@@ -1427,7 +1716,7 @@ def api_monitmov(customer):
     análise, quebra dimensional e cobertura de cenários."""
     if (r := require_auth()):
         return r
-    if (d := deny_customer(customer)):
+    if (d := deny_aba(customer, "cadastros", "cobertura")):
         return d
     amb = _ambiente()
     meds = q("""select id, data_medicao, semana, periodo_ini, periodo_fim, origem
@@ -1558,7 +1847,7 @@ def _gravar_movimentos(customer, amb, body, origem="upload"):
 def api_monitmov_upload(customer):
     """Importa o export do D5 (CSV) ou o mesmo conteúdo em JSON. Idempotente:
     regrava a medição inteira daquela data, naquele ambiente."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -1672,8 +1961,10 @@ def _log_coleta(customer, ambiente, tipo, ini, ok, **kw):
 
 
 def _guarda_ambiente(customer, ambiente, escrita=False):
-    """Devolve (erro_response, ambiente_normalizado)."""
-    if (r := require_auth()):
+    """Devolve (erro_response, ambiente_normalizado). Guarda das rotas
+    /api/protheus/* — credencial e coleta do ambiente do cliente são operação,
+    não consulta: o usuário do cliente não passa por aqui."""
+    if (r := require_interno()):
         return r, None
     if (d := deny_customer(customer)):
         return d, None
@@ -1689,7 +1980,7 @@ def _guarda_ambiente(customer, ambiente, escrita=False):
 def api_protheus_listar(customer):
     """Parâmetros dos dois ambientes + as últimas coletas. Segredo NUNCA sai
     daqui: só os booleanos tem_senha/tem_token, que é o que a tela precisa."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -1983,7 +2274,7 @@ def _cenarios_do_txt(texto):
 
 @app.get("/api/monitmov/<customer>/cenarios")
 def api_monitmov_cenarios(customer):
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -1998,7 +2289,7 @@ def api_monitmov_cenarios(customer):
 def api_monitmov_cenarios_salvar(customer):
     """Substitui a lista inteira. O arquivo é a verdade — mesma regra do
     TABELAS_MONITOR.TXT: editar em dois lugares é como as listas divergem."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -2042,7 +2333,7 @@ def api_monitmov_cenarios_salvar(customer):
 
 @app.delete("/api/monitmov/<customer>/cenarios")
 def api_monitmov_cenarios_remover(customer):
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if (d := deny_customer(customer)):
         return d
@@ -2128,7 +2419,7 @@ def api_tarefas(customer):
     então serve para qualquer tarefa sem rota nova."""
     if (r := require_auth()):
         return r
-    if (d := deny_customer(customer)):
+    if (d := deny_aba(customer, "tarefas")):
         return d
     itens = q(SQL_TAREFAS, (customer,))
     horas = sum(float(t["time_estimate"] or 0) for t in itens)
@@ -2143,14 +2434,14 @@ def _guarda_ticket(uuid):
     cust = _customer_do_ticket(uuid)
     if not cust:
         return _err(404, "GAP não encontrado."), None
-    return deny_customer(cust), cust
+    return deny_aba(cust, "gaps", "tarefas"), cust
 
 
 @app.get("/api/gaps/<customer>")
 def api_gaps(customer):
     if (r := require_auth()):
         return r
-    if (d := deny_customer(customer)):
+    if (d := deny_aba(customer, "gaps")):
         return d
     gaps = q(SQL_GAPS, (customer,))
     horas = sum(float(g["time_estimate"] or 0) for g in gaps)
@@ -2187,7 +2478,7 @@ def api_gap_detalhe(uuid):
 @app.post("/api/gaps/ticket/<uuid>/decisao")
 def api_gap_decisao(uuid):
     """Grava a decisão LOCAL (cockpit.decisoes). Não toca no Tasks SC."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     negado, _ = _guarda_ticket(uuid)
     if negado:
@@ -2216,7 +2507,7 @@ def api_gap_decisao(uuid):
 def api_gap_alinhamento(uuid):
     """Alinhamento comercial do GAP. ATENÇÃO: argumentacao_interna é INTERNA —
     não expor ao cliente em e-mail nem em painel compartilhado."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     negado, cust = _guarda_ticket(uuid)
     if negado:
@@ -2333,7 +2624,7 @@ def api_gmail_cred_del():
 @app.post("/api/gmail/rascunho")
 def api_gmail_rascunho():
     """Cria um rascunho HTML na conta do usuário logado (IMAP APPEND)."""
-    if (r := require_auth()):
+    if (r := require_interno()):
         return r
     if effective_user() != current_user():
         return _err(409, "Saia da simulação ('ver como') antes de criar rascunhos.")
@@ -2397,7 +2688,7 @@ def page_painel(customer, slug):
     ao cliente. É por isso que o HTML não pode morar em web/ (estático livre)."""
     if not current_user():
         return redirect("/login", 302)
-    if (d := deny_customer(customer)):
+    if (d := deny_aba(customer, "transicao")):
         return d
     row = q("select html from cockpit.paineis_cliente "
             "where customer=%s and slug=%s and ativo", (customer, slug), one=True)

@@ -79,6 +79,16 @@
                          font-weight: 700; }
   /* Sparkline da matriz de evolução */
   .spark { display: block; overflow: visible; }
+
+  /* ÁREA DE CLIENTES — a MESMA tela, sem as ações de operação.
+     Esconder aqui é conveniência de leitura; quem barra de verdade é o
+     servidor (require_interno / deny_aba). Nunca troque um pelo outro. */
+  body.modo-cliente [data-interno] { display: none !important; }
+  .chip-aba { display: inline-block; padding: 1px 7px; border-radius: 999px;
+              font-size: 11px; background: #e8f7fb; color: #00566b; margin: 1px 2px; }
+  .cx-linha { display: flex; align-items: center; gap: 8px; padding: 3px 6px;
+              border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .cx-linha:hover { background: #f1f5f9; }
 </style>
 </head>
 <body class="bg-totvs-beige text-totvs-petroleo">
@@ -98,11 +108,12 @@
         <input type="checkbox" id="toggle-all" class="rounded accent-totvs-blue">
         Mostrar todos os clientes
       </label>
-      <select id="view-as" title="Ver o dashboard com a visão de outro usuário"
+      <select id="view-as" data-interno title="Ver o dashboard com a visão de outro usuário"
               class="hidden px-2 py-1.5 rounded-md bg-white/10 text-totvs-white text-xs border border-white/20">
         <option value="">👁 Ver como…</option>
       </select>
-      <button id="btn-sync" class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base (só a regional e os clientes da carteira). O cron do Supabase já faz isso de hora em hora.">⟳ Sincronizar API</button>
+      <button id="btn-acessos" data-interno class="hidden px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Liberar usuários por cliente e escolher as abas que cada um enxerga">👥 Acessos</button>
+      <button id="btn-sync" data-interno class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base (só a regional e os clientes da carteira). O cron do Supabase já faz isso de hora em hora.">⟳ Sincronizar API</button>
       <button id="btn-refresh" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde transition-colors">↻ Atualizar</button>
     </div>
   </div>
@@ -181,8 +192,15 @@
               <span class="w-px h-4 bg-slate-200"></span>
             </span>
             <button id="ab-html"  class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">⬇ Exportar HTML</button>
-            <button id="ab-email" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">✉ Rascunho no Gmail</button>
+            <button id="ab-email" data-interno class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">✉ Rascunho no Gmail</button>
           </div>
+        </div>
+
+        <!-- Área de clientes: liberação existe, mas sem nenhuma aba marcada.
+             Tela em branco sem explicação vira chamado; esta faixa evita isso. -->
+        <div id="sem-aba" class="hidden p-8 text-center">
+          <p class="text-slate-600 text-sm">Seu acesso a este cliente ainda não tem nenhuma aba liberada.</p>
+          <p class="text-slate-400 text-xs mt-1">Fale com a equipe TOTVS responsável pelo projeto.</p>
         </div>
 
         <!-- Aba Resumo (KPIs + Apontamentos por tipo) -->
@@ -356,10 +374,10 @@
             </div>
             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
-              <button id="cad-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
-              <button id="cad-ambiente" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
-              <button id="cad-coletar" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
-              <label id="cad-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+              <button id="cad-sql" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
+              <button id="cad-ambiente" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
+              <button id="cad-coletar" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
+              <label id="cad-upload-wrap" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
                 ⬆ Subir medição (.csv / .json)
                 <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
               </label>
@@ -380,11 +398,11 @@
             </div>
             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
-              <button id="mov-sql" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
-              <button id="mov-ambiente" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
-              <button id="mov-coletar" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
-              <button id="mov-cenarios" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
-              <label id="mov-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+              <button id="mov-sql" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
+              <button id="mov-ambiente" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
+              <button id="mov-coletar" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
+              <button id="mov-cenarios" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
+              <label id="mov-upload-wrap" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
                 ⬆ Importar movimentos (.csv / .json)
                 <input id="mov-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
               </label>
@@ -405,8 +423,8 @@
             <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">Testes × Produção</span>
             <button id="cob-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <div class="ml-auto flex items-center gap-2">
-              <button id="cob-cenarios" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
-              <label id="cob-upload-wrap" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+              <button id="cob-cenarios" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
+              <label id="cob-upload-wrap" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
                 ⬆ Importar análise (.csv / .json)
                 <input id="cob-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
               </label>
@@ -422,7 +440,7 @@
             <span class="text-xs text-slate-500">Cliente</span>
             <span id="tr-cliente-nome" class="font-medium"></span>
             <select id="tr-painel" class="hidden px-3 py-1.5 border border-slate-300 rounded-md bg-white"></select>
-            <label id="tr-upload-wrap" class="hidden ml-auto px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
+            <label id="tr-upload-wrap" data-interno class="hidden ml-auto px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
               ⬆ Publicar painel (.html)
               <input id="tr-file" type="file" accept="text/html" class="hidden">
             </label>
@@ -693,6 +711,7 @@ async function abrirDetalhe(sel) {
   consumo.iniciado = false;             // outro projeto, outra base de horas
   consumo.excluidos.clear();
   setTab('resumo');                     // todo projeto abre pelo Resumo
+  aplicaAbas();                         // ...e a área de clientes corrige para a 1ª liberada
   $('#view-lista').classList.add('hidden');
   $('#view-detalhe').classList.remove('hidden');
   $('#nav-back').classList.remove('hidden');
@@ -1410,6 +1429,53 @@ function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+// ============================================================================
+//  ÁREA DE CLIENTES — mesma tela, recorte diferente
+// ============================================================================
+// TRÊS EIXOS, e confundi-los abre acesso:
+//   allowed_customers (backend) → QUAIS CLIENTES ele vê
+//   acesso.abas                 → QUE ABAS ele vê NAQUELE cliente
+//   acesso.modo                 → 'interno' (TOTVS) ou 'cliente'
+//
+// Aqui só se ESCONDE. Quem barra é o servidor: require_interno() nas ações de
+// operação e deny_aba() nas leituras. Se um dia alguém tirar o data-interno de
+// um botão, o backend continua devolvendo 403 — é assim que tem que ser.
+const acesso = { modo: 'interno', abas: null, catalogo: [] };
+
+function aplicaModo(me) {
+  acesso.modo = me.modo || 'interno';
+  acesso.abas = me.abas || null;          // null = interno: todas as abas
+  acesso.catalogo = me.abas_catalogo || [];
+  document.body.classList.toggle('modo-cliente', acesso.modo === 'cliente');
+  if (acesso.modo === 'cliente') {
+    const h = document.querySelector('header h1');
+    if (h) h.textContent = 'Acompanhamento do Projeto';
+  }
+  if (me.is_admin) $('#btn-acessos')?.classList.remove('hidden');
+}
+
+/** Abas liberadas para o cliente do projeto aberto. null = todas (interno). */
+function abasDoCliente(cli) {
+  if (!acesso.abas) return null;
+  return new Set(acesso.abas[cli] || []);
+}
+
+/** Esconde as abas não liberadas e garante que a aba ATIVA é uma delas —
+ *  sem isso o usuário do cliente abriria o projeto no Resumo, que ele não tem,
+ *  e veria um painel vazio sem entender por quê. */
+function aplicaAbas() {
+  const ok = abasDoCliente(state.selected?.cli);
+  $$('.tab-btn').forEach(b => b.classList.toggle('hidden', !!ok && !ok.has(b.dataset.tab)));
+  const vazio = !!ok && !TABS.some(t => ok.has(t));
+  $('#sem-aba').classList.toggle('hidden', !vazio);
+  if (vazio) {
+    TABS.forEach(t => $(`#tab-${t}`).classList.add('hidden'));
+    $('#tab-acoes').classList.add('hidden');
+    return;
+  }
+  if (ok && !ok.has(state.tab)) setTab(TABS.find(t => ok.has(t)));
+}
+
 // ── "Ver como" (só admin): simula a visão de outro usuário, sem trocar de login.
 //    A simulação só restringe o escopo; nunca amplia (garantido no backend).
 let euSou = null;                       // /api/me — quem está logado (e se é admin)
@@ -1418,6 +1484,8 @@ async function initViewAs() {
   let me;
   try { me = await api('/api/me'); } catch (_) { return; }
   euSou = me;                           // usado por quem depende de admin (ex.: apagar medição)
+  aplicaModo(me);                       // modo cliente + abas liberadas
+  if (state.view === 'detalhe') aplicaAbas();
   const sel = $('#view-as');
   const faixa = $('#simulando');
 
@@ -1529,10 +1597,21 @@ const AMB = {
 };
 
 function setTab(nome) {
+  // Portão de tela: TABS[0] é o Resumo, que o usuário do cliente pode não ter.
+  const ok = abasDoCliente(state.selected?.cli);
+  if (ok && !ok.has(nome)) {
+    const alt = TABS.find(t => ok.has(t));
+    if (!alt) return;
+    nome = alt;
+  }
   state.tab = nome;
   $$('.tab-btn').forEach(b => {
     const on = b.dataset.tab === state.tab;
     b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${on ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
+    // ARMADILHA: a linha acima REESCREVE o className inteiro e apagava o
+    // 'hidden' que aplicaAbas() tinha posto. Resultado: o usuário do cliente
+    // clicava numa aba e as dez voltavam. Reponha aqui, no mesmo passo.
+    b.classList.toggle('hidden', !!ok && !ok.has(b.dataset.tab));
   });
   TABS.forEach(t => $(`#tab-${t}`).classList.toggle('hidden', t !== nome));
   // A barra de ações acompanha TODAS as abas: exportar e rascunho valem em
@@ -5078,6 +5157,226 @@ function abreModalCredGmail(depois) {
     }
   });
 }
+
+// ============================================================================
+//  ACESSOS — e-mails × cliente × abas (só admin)
+// ============================================================================
+// A pergunta que esta tela responde não é "quem tem login", é "QUEM VÊ O QUÊ,
+// DE QUAL CLIENTE". Por isso a unidade da tela é o par (usuário, cliente) e as
+// abas ficam NELE, não no usuário: o mesmo e-mail pode ver Cadastros no Olim e
+// Cadastros + GAPs na Dígitro.
+//
+// Colar e-mails é de propósito: o admin recebe a lista pronta do cliente
+// ("fulano@, ciclano@ e beltrano@") e cola inteira — o backend extrai os
+// endereços de qualquer formato, inclusive "Nome <email>".
+const acs = { dados: null, sel: new Set(), abas: new Set(), busca: '' };
+
+async function abreAcessos() {
+  const fundo = document.createElement('div');
+  fundo.className = 'fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto';
+  fundo.innerHTML = `
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl mt-8 mb-8">
+      <div class="px-5 py-3 border-b border-slate-200 flex items-center justify-between">
+        <div>
+          <h3 class="font-totvs text-totvs-petroleo">Acessos · quem vê o quê</h3>
+          <p class="text-xs text-slate-500 mt-0.5">Libere e-mails em um ou mais clientes e marque as abas que cada um enxerga.</p>
+        </div>
+        <button data-fechar class="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
+      </div>
+      <div id="acs-corpo" class="p-5 text-sm">
+        <p class="text-slate-400 py-8 text-center">Carregando…</p>
+      </div>
+    </div>`;
+  document.body.appendChild(fundo);
+  const fecha = () => fundo.remove();
+  fundo.querySelectorAll('[data-fechar]').forEach(b => b.addEventListener('click', fecha));
+  fundo.addEventListener('click', e => { if (e.target === fundo) fecha(); });
+  acs.el = fundo; acs.fecha = fecha;
+  acs.sel = new Set(); acs.abas = new Set(); acs.busca = '';
+  try {
+    acs.dados = await api('/api/acessos');
+    // Protótipo: já vem com a aba padrão da área de clientes marcada.
+    (acs.dados.abas_padrao_cliente || []).forEach(a => acs.abas.add(a));
+    pintaAcessos();
+  } catch (e) {
+    fundo.querySelector('#acs-corpo').innerHTML =
+      `<p class="text-rose-600 py-8 text-center">${escapeHtml(e.message)}</p>`;
+  }
+}
+
+function perfilAcessos() {
+  return acs.el.querySelector('#acs-perfil')?.value || 'cliente';
+}
+
+function pintaAcessos() {
+  const d = acs.dados;
+  const perfil = perfilAcessos();
+  // 'consumo' não é liberável para o cliente (margem/valoração). A lista de
+  // abas muda com o perfil para não oferecer o que o backend vai recusar.
+  const abasVis = d.abas.filter(a => perfil !== 'cliente' || a.cliente);
+  const busca = semAcento(acs.busca);
+  const clis = d.clientes.filter(c =>
+    !busca || semAcento(`${c.nome} ${c.customer}`).includes(busca));
+
+  const nomeCli = Object.fromEntries(d.clientes.map(c => [c.customer, c.nome]));
+  const nomeUsr = Object.fromEntries(d.usuarios.map(u => [u.email.toLowerCase(), u.nome || u.email]));
+  const porCliente = new Map();
+  d.liberacoes.forEach(l => porCliente.set(l.customer, (porCliente.get(l.customer) || []).concat([l])));
+
+  const rotAbas = (abas) => abas === null
+    ? '<span class="chip-aba" title="Nenhuma aba marcada: herda o padrão">herda o padrão</span>'
+    : (abas.length ? abas.map(a => `<span class="chip-aba">${escapeHtml(
+        (d.abas.find(x => x.id === a) || {}).label || a)}</span>`).join('')
+      : '<span class="chip-aba" style="background:#fee2e2;color:#991b1b">nenhuma aba</span>');
+
+  const tabela = [...porCliente.entries()]
+    .sort((a, b) => (nomeCli[a[0]] || a[0]).localeCompare(nomeCli[b[0]] || b[0]))
+    .map(([cust, ls]) => `
+      <div class="border-t border-slate-100 py-2">
+        <p class="font-semibold text-totvs-petroleo text-xs uppercase tracking-wide">
+          ${escapeHtml(nomeCli[cust] || cust)} <span class="text-slate-400 font-normal">· ${escapeHtml(cust)}</span></p>
+        ${ls.map(l => `
+          <div class="flex items-start gap-2 py-1">
+            <span class="w-64 shrink-0 truncate" title="${escapeHtml(l.email)}">${escapeHtml(nomeUsr[l.email.toLowerCase()] || l.email)}</span>
+            <span class="flex-1">${rotAbas(l.abas)}</span>
+            <button data-edita="${escapeHtml(l.email)}|${escapeHtml(cust)}"
+              class="px-2 py-0.5 rounded border border-slate-300 text-xs hover:bg-slate-50">editar</button>
+            <button data-remove="${escapeHtml(l.email)}|${escapeHtml(cust)}"
+              class="px-2 py-0.5 rounded border border-rose-200 text-rose-700 text-xs hover:bg-rose-50">tirar</button>
+          </div>`).join('')}
+      </div>`).join('') || '<p class="text-slate-400 py-6 text-center">Nenhuma liberação ainda.</p>';
+
+  acs.el.querySelector('#acs-corpo').innerHTML = `
+    <div class="grid md:grid-cols-2 gap-6">
+      <div class="space-y-3">
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">E-mails (cole a lista — vírgula, ponto-e-vírgula ou uma por linha)</label>
+          <textarea id="acs-emails" rows="4" placeholder="fulano@cliente.com.br, Ciclano &lt;ciclano@cliente.com.br&gt;"
+            class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"></textarea>
+        </div>
+        <div class="flex items-center gap-3">
+          <label class="text-xs text-slate-500">Perfil</label>
+          <select id="acs-perfil" class="px-2 py-1.5 border border-slate-300 rounded-md">
+            <option value="cliente">Cliente — consulta, não altera o Tasks SC</option>
+            <option value="leitor">Leitor — somente visualização</option>
+            <option value="comum">Comum — equipe TOTVS</option>
+          </select>
+          <label class="flex items-center gap-1.5 text-xs text-slate-500">
+            <input type="checkbox" id="acs-aplicar-perfil" class="rounded"> aplicar a quem já existe
+          </label>
+        </div>
+        <div>
+          <div class="flex items-center justify-between mb-1">
+            <label class="text-xs text-slate-500">Clientes <span id="acs-n-cli" class="text-totvs-petroleo font-semibold"></span></label>
+            <input id="acs-busca" type="search" placeholder="filtrar…" value="${escapeHtml(acs.busca)}"
+              class="px-2 py-1 border border-slate-300 rounded-md text-xs">
+          </div>
+          <div class="border border-slate-200 rounded-md p-1 max-h-52 overflow-y-auto">
+            ${clis.map(c => `
+              <label class="cx-linha">
+                <input type="checkbox" data-cli="${escapeHtml(c.customer)}" ${acs.sel.has(c.customer) ? 'checked' : ''} class="rounded">
+                <span class="truncate">${escapeHtml(c.nome)}</span>
+                <span class="ml-auto text-[11px] text-slate-400">${escapeHtml(c.customer)}</span>
+              </label>`).join('') || '<p class="text-slate-400 text-xs p-2">Nenhum cliente com esse filtro.</p>'}
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs text-slate-500 mb-1">Abas liberadas <span class="text-slate-400">(valem para cada par usuário × cliente acima)</span></label>
+          <div class="border border-slate-200 rounded-md p-1 grid grid-cols-2">
+            ${abasVis.map(a => `
+              <label class="cx-linha">
+                <input type="checkbox" data-aba="${a.id}" ${acs.abas.has(a.id) ? 'checked' : ''} class="rounded">
+                <span>${escapeHtml(a.label)}</span>
+              </label>`).join('')}
+          </div>
+          <p class="text-[11px] text-slate-400 mt-1">Sem nenhuma marcada, o usuário do cliente fica liberado no cliente e sem aba — de propósito, não por engano.</p>
+        </div>
+        <div class="flex items-center gap-2 pt-1">
+          <button id="acs-salvar" class="px-4 py-2 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">Liberar</button>
+          <p id="acs-msg" class="text-xs"></p>
+        </div>
+        <div id="acs-senhas"></div>
+      </div>
+      <div>
+        <p class="text-xs text-slate-500 mb-1">Liberações atuais</p>
+        <div class="max-h-[28rem] overflow-y-auto pr-1">${tabela}</div>
+      </div>
+    </div>`;
+
+  const el = (q) => acs.el.querySelector(q);
+  el('#acs-n-cli').textContent = acs.sel.size ? `(${acs.sel.size} marcado(s))` : '';
+  el('#acs-perfil').value = perfil;
+  el('#acs-busca').addEventListener('input', (e) => { acs.busca = e.target.value; pintaAcessos(); });
+  el('#acs-perfil').addEventListener('change', pintaAcessos);
+  acs.el.querySelectorAll('[data-cli]').forEach(c => c.addEventListener('change', () => {
+    c.checked ? acs.sel.add(c.dataset.cli) : acs.sel.delete(c.dataset.cli);
+    el('#acs-n-cli').textContent = acs.sel.size ? `(${acs.sel.size} marcado(s))` : '';
+  }));
+  acs.el.querySelectorAll('[data-aba]').forEach(c => c.addEventListener('change', () => {
+    c.checked ? acs.abas.add(c.dataset.aba) : acs.abas.delete(c.dataset.aba);
+  }));
+  acs.el.querySelectorAll('[data-edita]').forEach(b => b.addEventListener('click', () => {
+    const [email, cust] = b.dataset.edita.split('|');
+    const l = acs.dados.liberacoes.find(x => x.email === email && x.customer === cust);
+    acs.sel = new Set([cust]);
+    acs.abas = new Set(l?.abas || acs.dados.abas_padrao_cliente || []);
+    pintaAcessos();
+    el('#acs-emails').value = email;
+    el('#acs-emails').scrollIntoView({ block: 'nearest' });
+  }));
+  acs.el.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', async () => {
+    const [email, cust] = b.dataset.remove.split('|');
+    if (!confirm(`Tirar ${email} do cliente ${cust}?\n\nO login continua existindo — só a liberação neste cliente sai.`)) return;
+    try {
+      await api(`/api/acessos?email=${encodeURIComponent(email)}&customer=${encodeURIComponent(cust)}`,
+                { method: 'DELETE' });
+      acs.dados = await api('/api/acessos');
+      pintaAcessos();
+    } catch (e) { alert('Não foi possível tirar: ' + e.message); }
+  }));
+  el('#acs-salvar').addEventListener('click', salvaAcessos);
+}
+
+async function salvaAcessos() {
+  const el = (q) => acs.el.querySelector(q);
+  const b = el('#acs-salvar'), msg = el('#acs-msg');
+  msg.className = 'text-xs text-slate-500'; msg.textContent = '';
+  b.disabled = true; b.textContent = 'Liberando…';
+  try {
+    const j = await api('/api/acessos', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        emails: el('#acs-emails').value,
+        customers: [...acs.sel],
+        abas: [...acs.abas],
+        perfil: el('#acs-perfil').value,
+        aplicar_perfil: el('#acs-aplicar-perfil').checked,
+      }),
+    });
+    acs.dados = await api('/api/acessos');
+    pintaAcessos();
+    const m2 = acs.el.querySelector('#acs-msg');
+    m2.className = 'text-xs text-emerald-700';
+    m2.textContent = `${j.liberacoes} liberação(ões) — ${j.emails.length} e-mail(s) × ${j.customers.length} cliente(s).`;
+    // A senha provisória aparece UMA vez: não fica gravada em lugar nenhum.
+    if (j.criados.length) {
+      acs.el.querySelector('#acs-senhas').innerHTML = `
+        <div class="border border-amber-300 bg-amber-50 rounded-md p-3">
+          <p class="text-xs font-semibold text-amber-900">Logins criados agora — copie as senhas, elas não aparecem de novo:</p>
+          <pre class="text-xs mt-1 whitespace-pre-wrap">${j.criados.map(c =>
+            `${c.email}  ${c.senha_provisoria}`).join('\n')}</pre>
+        </div>`;
+    }
+  } catch (e) {
+    const m2 = acs.el.querySelector('#acs-msg');
+    m2.className = 'text-xs text-rose-600'; m2.textContent = e.message;
+  } finally {
+    const bb = acs.el.querySelector('#acs-salvar');
+    if (bb) { bb.disabled = false; bb.textContent = 'Liberar'; }
+  }
+}
+
+$('#btn-acessos').addEventListener('click', abreAcessos);
 
 carregaLista();
 </script>
