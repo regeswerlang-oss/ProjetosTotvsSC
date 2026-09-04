@@ -140,6 +140,33 @@ Foi essa auditoria que pegou o bug do patch: `_guarda_ambiente` **retorna tupla*
 dele para a rota seguinte e cascateou até `api_tarefas`. Rodar a auditoria depois
 de mexer em portão não é opcional.
 
+## Ajuste 04/09/2026 — lixeira de medição some na visão de cliente
+
+`listaMedicoes()` decidia pela lixeira com `!!euSou?.is_admin`, e `/api/me`
+devolve o `is_admin` do login **REAL**, não do efetivo. Consequência: no
+`👁 Ver como` de um cliente a lixeira continuava lá — e apagar medição **não tem
+desfazer**, some do histórico de todo mundo. Agora:
+
+```js
+const adm = !!euSou?.is_admin && acesso.modo !== 'cliente';
+```
+
+O botão também ganhou `data-interno` (cinto e suspensório) e o rodapé "Apagar
+medição é ação de administrador" — recado para colega interno — não aparece mais
+para o cliente.
+
+No servidor, `DELETE /api/monitcad/<c>/medicao` passou a recusar durante a
+simulação (`effective_user() != current_user()` → 409), o mesmo tratamento que
+já existia em `cenarios` e no rascunho do Gmail. Sem isso, o admin simulando
+continuava conseguindo apagar pela rota, mesmo com o botão escondido.
+
+**Regra que fica:** `is_admin` do `/api/me` é do login real. Para decidir o que
+a TELA mostra, use `acesso.modo` / `abas_liberadas`; `is_admin` só para o que é
+privilégio de administração de verdade.
+
+Conferido no `test3.mjs` nos três cenários — admin (2 lixeiras), admin simulando
+cliente (0) e cliente real (0).
+
 ## Pendências
 
 1. Commit + push + redeploy (git não roda pela ponte — é no Terminal do Mac).

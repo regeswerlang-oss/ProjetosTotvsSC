@@ -1223,6 +1223,10 @@ def api_monitcad_medicao_remover(customer):
     uma queda que não existiu."""
     if (r := require_admin()):
         return r
+    # A simulação ('ver como') só restringe: apagar medição enquanto se olha a
+    # tela de outro é o jeito mais fácil de destruir histórico sem perceber.
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de apagar medições.")
     if (d := deny_customer(customer)):
         return d
     amb = _ambiente()

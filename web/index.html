@@ -2980,7 +2980,10 @@ function renderEvolucao(mod) {
 /** Todas as medições, inclusive as que não fecham semana (essas não aparecem
  *  no gráfico acima). É daqui que o admin apaga uma medição furada. */
 function listaMedicoes(mod) {
-  const adm = !!euSou?.is_admin;
+  // ARMADILHA: `euSou.is_admin` é o admin REAL do login, não o efetivo — num
+  // 'ver como' de cliente a lixeira continuava aparecendo, e apagar medição não
+  // tem desfazer. Na área de clientes ela não existe, ponto.
+  const adm = !!euSou?.is_admin && acesso.modo !== 'cliente';
   const linhas = mod.meds.slice().reverse().map(m => {
     const zerada = m.tabelas > 0 && m.realizado === 0;
     return `<div class="flex items-center gap-3 py-1.5 border-t border-slate-100 text-xs">
@@ -2990,7 +2993,7 @@ function listaMedicoes(mod) {
       <span class="flex-1"></span>
       <span class="w-24 text-right tabular-nums ${zerada ? 'text-rose-600 font-semibold' : ''}">${fmtNum(m.realizado)}</span>
       <span class="w-32 text-right text-slate-500">${m.comCarga}/${m.tabelas} tabelas</span>
-      ${adm ? `<button data-del-med="${m.data}" title="Apagar esta medição"
+      ${adm ? `<button data-del-med="${m.data}" data-interno title="Apagar esta medição"
                  class="px-2 py-0.5 rounded border border-rose-200 text-rose-700 hover:bg-rose-50">🗑</button>`
             : '<span class="w-8"></span>'}
     </div>`;
@@ -2999,7 +3002,8 @@ function listaMedicoes(mod) {
     <summary class="text-xs text-slate-500 cursor-pointer hover:text-totvs-petroleo">
       <span class="chev inline-block">▶</span> Todas as medições (${mod.meds.length})</summary>
     <div class="mt-1">${linhas}</div>
-    ${adm ? '' : '<p class="text-[11px] text-slate-400 mt-2">Apagar medição é ação de administrador.</p>'}
+    ${(adm || acesso.modo === 'cliente') ? ''
+       : '<p class="text-[11px] text-slate-400 mt-2">Apagar medição é ação de administrador.</p>'}
   </details>`;
 }
 
