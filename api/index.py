@@ -2083,7 +2083,7 @@ def _trecho(r):
     return (txt[:160] + "...") if len(txt) > 160 else (txt or "(corpo vazio)")
 
 
-def _sessao_protheus(cfg, customer, amb):
+def _sessao_protheus(cfg, customer, amb, tenant=True):
     """Monta (headers, auth, timeout) a partir do cadastro.
 
     `tenantId` e obrigatorio quando a URI REST do cliente esta com
@@ -2092,15 +2092,45 @@ def _sessao_protheus(cfg, customer, amb):
     query params porque instalacoes mais antigas so entendem daquele jeito —
     quem nao usa um dos dois simplesmente ignora.
     Basic auth vai sempre que houver usuario cadastrado: com `SECURITY=1` no
-    [HTTPREST] a chamada sem credencial leva 401 mesmo com o token correto."""
+    [HTTPREST] a chamada sem credencial leva 401 mesmo com o token correto.
+
+    `tenant=False` derruba o tenantId de proposito: e assim que descobrimos a
+    empresa/filial REAIS da base. Sem o header o AppServer prepara o ambiente
+    pelo PrepareIn e o /ping devolve o cEmpAnt/cFilAnt que valem ali. A
+    mascara da filial muda de cliente para cliente (01, 0101, 010101) e
+    digitar essa mascara a mao e o erro que essa segunda tentativa evita."""
     tok = _decifra(cfg.get("token_enc"), _aad(customer, amb))
     sen = _decifra(cfg.get("senha_enc"), _aad(customer, amb))
-    heads = {"Accept": "application/json",
-             "tenantId": f"{cfg.get('empresa') or '01'},{cfg.get('filial') or '01'}"}
+    heads = {"Accept": "application/json"}
+    if tenant:
+        heads["tenantId"] = f"{cfg.get('empresa') or '01'},{cfg.get('filial') or '01'}"
     if tok:
         heads["X-TSC-Token"] = tok
     auth = (cfg.get("usuario"), sen) if cfg.get("usuario") else None
     return heads, auth, tok, min(int(cfg.get("timeout_s") or 45), TIMEOUT_TETO)
+
+
+def _ping_protheus(cfg, customer, amb, tenant=True):
+    """GET /tscmonit/ping. Com `tenant=False` sai sem tenantId e sem os query
+    params de empresa/filial — a chamada de DESCOBERTA."""
+    heads, auth, _tok, tmo = _sessao_protheus(cfg, customer, amb, tenant)
+    params = ({"empresa": cfg.get("empresa") or "01",
+               "filial": cfg.get("filial") or "01"} if tenant else None)
+    r = requests.get(f"{cfg['url_rest']}/ping", headers=heads, auth=auth,
+                     params=params, timeout=min(tmo, 30))
+    return r, _json_da_resposta(r)
+
+
+def _sugestao_tenant(cfg, dados):
+    """Empresa/filial que a BASE informou, quando diferem do cadastro. Devolve
+    sempre os dois campos: a tela aplica o par inteiro, nao metade dele."""
+    emp, fil = str(dados.get("empresa") or "").strip(), str(dados.get("filial") or "").strip()
+    if not emp and not fil:
+        return None
+    if emp == (cfg.get("empresa") or "").strip() and fil == (cfg.get("filial") or "").strip():
+        return None
+    return {"empresa": emp or (cfg.get("empresa") or ""),
+            "filial": fil or (cfg.get("filial") or "")}
 
 
 @app.post("/api/protheus/<customer>/<ambiente>/testar")
@@ -2117,23 +2147,32 @@ def api_protheus_testar(customer, ambiente):
 
     ini = time.time()
     try:
-        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
-        r = requests.get(f"{cfg['url_rest']}/ping", headers=heads, auth=auth,
-                         params={"empresa": cfg.get("empresa") or "01",
-                                 "filial": cfg.get("filial") or "01"},
-                         timeout=min(tmo, 30))
-        dados = _json_da_resposta(r)
+        r, dados = _ping_protheus(cfg, customer, amb)
     except requests.RequestException as e:
         return _fecha_teste(customer, amb, ini, False, None,
                             f"Sem resposta: {type(e).__name__}. Confira URL, porta, VPN e o "
                             f"[HTTPURI] do appserver.ini.")
 
     if r.status_code >= 400 or not dados.get("ok"):
-        return _fecha_teste(
-            customer, amb, ini, False, r.status_code,
-            dados.get("erro") or
-            f"HTTP {r.status_code} na rota /ping, mas a resposta nao é o JSON do "
-            f"TSCMONITREST. A base devolveu: {_trecho(r)}")
+        # Segunda tentativa SEM tenantId: se a base responder assim, ela mesma
+        # diz a empresa/filial que valem ali. E o caso do 403 "Usuario sem
+        # acesso a empresa/filial", que quase sempre e mascara de filial
+        # errada — 01 onde a base usa 010101.
+        sug = None
+        try:
+            r2, d2 = _ping_protheus(cfg, customer, amb, tenant=False)
+            if r2.status_code < 400 and d2.get("ok"):
+                sug = _sugestao_tenant(cfg, d2)
+        except requests.RequestException:
+            pass
+        msg = (dados.get("erro") or
+               f"HTTP {r.status_code} na rota /ping, mas a resposta nao é o JSON do "
+               f"TSCMONITREST. A base devolveu: {_trecho(r)}")
+        if sug:
+            msg = (f"HTTP {r.status_code} com empresa/filial "
+                   f"{cfg.get('empresa')}/{cfg.get('filial')}. Sem o tenantId a base "
+                   f"respondeu como {sug['empresa']}/{sug['filial']} — use esses valores.")
+        return _fecha_teste(customer, amb, ini, False, r.status_code, msg, sugestao=sug)
 
     avisos = []
     if cfg.get("environment") and dados.get("environment") and \
@@ -2143,21 +2182,25 @@ def api_protheus_testar(customer, ambiente):
     if cfg.get("banco") and dados.get("banco") and \
             cfg["banco"] != str(dados["banco"]).strip().lower():
         avisos.append(f"banco cadastrado ({cfg['banco']}) ≠ do servidor ({dados['banco']})")
+    if (sug := _sugestao_tenant(cfg, dados)):
+        avisos.append(f"empresa/filial cadastrada ({cfg.get('empresa')}/{cfg.get('filial')}) "
+                      f"≠ do servidor ({sug['empresa']}/{sug['filial']})")
     if not dados.get("token_ok"):
         avisos.append("token recusado pela base (confira MV_TSCTOKN) — a coleta vai falhar")
 
     msg = "Conexão OK." if not avisos else "Conectou, mas: " + "; ".join(avisos)
-    return _fecha_teste(customer, amb, ini, not avisos, r.status_code, msg, dados)
+    return _fecha_teste(customer, amb, ini, not avisos, r.status_code, msg, dados, sug)
 
 
-def _fecha_teste(customer, amb, ini, ok, status, msg, dados=None):
+def _fecha_teste(customer, amb, ini, ok, status, msg, dados=None, sugestao=None):
     execute("""update cockpit.protheus_ambientes
                   set ultimo_teste_em=now(), ultimo_teste_ok=%s, ultimo_teste_msg=%s
                 where customer=%s and ambiente=%s""", (ok, msg[:500], customer, amb))
     _log_coleta(customer, amb, "ping", ini, ok, http_status=status,
                 erro=None if ok else msg)
     return _json({"ok": ok, "customer": customer, "ambiente": amb, "mensagem": msg,
-                  "http_status": status, "servidor": dados or {}}, 200)
+                  "http_status": status, "servidor": dados or {},
+                  "sugestao": sugestao}, 200)
 
 
 @app.post("/api/protheus/<customer>/<ambiente>/coletar")

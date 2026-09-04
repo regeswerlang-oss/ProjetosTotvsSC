@@ -4949,6 +4949,7 @@ async function abreModalAmbiente(ambiente) {
          Salvar e testar conexão</button>
        <span id="am-status" class="text-xs ${atual && atual.ultimo_teste_ok ? 'text-emerald-700' : 'text-slate-500'}">
          ${atual && atual.ultimo_teste_em ? escapeHtml(`${atual.ultimo_teste_ok ? '✓' : '✕'} ${atual.ultimo_teste_msg || ''}`) : 'Nunca testado.'}</span>
+       <span id="am-sugestao"></span>
      </div>
      ${ultimas.length ? `<div class="text-xs text-slate-500 border-t border-slate-200 pt-2">
         <b>Últimas chamadas</b><br>${ultimas.map(c =>
@@ -4986,11 +4987,16 @@ async function abreModalAmbiente(ambiente) {
   m.campo('am-testar').addEventListener('click', async () => {
     const st = m.campo('am-status');
     st.textContent = 'Testando…'; st.className = 'text-xs text-slate-500';
+    ofereceTenant(m, null);
     try {
       await salva();
       const j = await api(`/api/protheus/${encodeURIComponent(cli)}/${ambiente}/testar`, { method: 'POST' });
       st.textContent = `${j.ok ? '✓' : '⚠'} ${j.mensagem}`;
       st.className = `text-xs ${j.ok ? 'text-emerald-700' : 'text-amber-700'}`;
+      // A mascara de empresa/filial muda de cliente para cliente. Quando a
+      // base informa um par diferente do cadastrado, oferecemos o dela em vez
+      // de deixar o consultor adivinhar quantas posicoes tem aquela filial.
+      ofereceTenant(m, j.sugestao, () => m.campo('am-testar').click());
     } catch (e) {
       st.textContent = '✕ ' + e.message;
       st.className = 'text-xs text-rose-600';
@@ -5002,6 +5008,26 @@ async function abreModalAmbiente(ambiente) {
     try { await salva(); m.fecha(); }
     catch (e) { m.ocupado(false, 'Salvar'); m.erro(e.message); }
   });
+}
+
+function ofereceTenant(m, sug, aoAplicar) {
+  const alvo = m.campo('am-sugestao');
+  if (!alvo) return;
+  alvo.innerHTML = '';
+  if (!sug || (!sug.empresa && !sug.filial)) return;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'px-2 py-1 rounded-md border border-amber-300 bg-amber-50 ' +
+                'hover:bg-amber-100 text-xs whitespace-nowrap';
+  b.textContent = `Usar ${sug.empresa || '—'} / ${sug.filial || '—'}`;
+  b.title = 'Preenche empresa e filial com o que a base respondeu e testa de novo';
+  b.addEventListener('click', () => {
+    if (sug.empresa) m.campo('am-empresa').value = sug.empresa;
+    if (sug.filial) m.campo('am-filial').value = sug.filial;
+    alvo.innerHTML = '';
+    if (aoAplicar) aoAplicar();
+  });
+  alvo.appendChild(b);
 }
 
 async function coletaAgora(tipo) {

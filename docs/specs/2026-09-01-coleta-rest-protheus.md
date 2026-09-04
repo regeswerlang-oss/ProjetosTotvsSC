@@ -97,10 +97,34 @@ Dois botões novos nas sub-abas Cadastros e Movimentos, ao lado do *Script SQL*:
   teste roda com o que está gravado.
 - **⚡ Coletar agora** — confirma a base, executa e recarrega a sub-aba.
 
-**Divergência de environment ou banco é aviso, não erro.** Quem decide se a URL
-aponta para a base certa é o consultor — mas coletar de teste achando que é
-produção é o erro caro deste processo: o número chega bonito, plausível, e vem
-do lugar errado.
+**Divergência de environment, banco ou empresa/filial é aviso, não erro.** Quem
+decide se a URL aponta para a base certa é o consultor — mas coletar de teste
+achando que é produção é o erro caro deste processo: o número chega bonito,
+plausível, e vem do lugar errado.
+
+### Empresa/filial: a base informa, o painel oferece
+
+*04/09/2026.* A máscara da filial muda de cliente para cliente — `01`, `0101`,
+`010101` — e não há como adivinhá-la na tela. Com o par errado no header
+`tenantId`, o AppServer responde **HTTP 403
+`{"errorCode":403,"errorMessage":"Usuário sem acesso a empresa/filial."}`** antes
+de rotear: o fonte nem chega a executar (foi o caso do Olim, cadastrado com
+filial `01` numa base cujo código é `010101`).
+
+Guardar a máscara como mais um parâmetro digitado só desloca o erro. A base já
+sabe o formato dela, então o teste passou a **perguntar**:
+
+1. o `/ping` falha com o `tenantId` cadastrado;
+2. o painel repete a chamada **sem `tenantId`** (`_ping_protheus(..., tenant=False)`)
+   — sem o header o AppServer prepara o ambiente pelo `PrepareIn` e o `/ping`
+   devolve o `cEmpAnt`/`cFilAnt` que valem ali;
+3. a mensagem passa a nomear os dois pares e a tela mostra o botão
+   **“Usar 01 / 010101”**, que preenche os campos e testa de novo.
+
+A mesma comparação roda no caminho feliz: se o `/ping` responder com um par
+diferente do cadastrado, entra na lista de avisos junto com environment e banco.
+A segunda chamada só acontece quando a primeira falha — não custa nada no fluxo
+normal.
 
 ## Limites que valem lembrar
 
