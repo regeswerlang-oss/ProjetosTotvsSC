@@ -147,23 +147,24 @@
     <div id="detalhe-loading" class="text-center py-12 text-slate-400">Carregando projeto…</div>
     <div id="detalhe-conteudo" class="hidden">
       <!-- Cabeçalho -->
-      <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
-        <div class="flex items-start justify-between flex-wrap gap-3">
-          <div>
-            <p class="text-xs text-totvs-blue uppercase tracking-wide font-semibold" id="d-cliente"></p>
-            <h2 class="text-xl font-totvs text-totvs-petroleo mt-0.5" id="d-titulo"></h2>
-            <p class="text-sm text-slate-600 mt-1" id="d-codigo"></p>
+      <div class="bg-white rounded-lg border border-slate-200 px-4 py-2.5 mb-3">
+        <div class="flex items-baseline justify-between flex-wrap gap-x-4 gap-y-1">
+          <div class="min-w-0">
+            <p class="text-[11px] text-totvs-blue uppercase tracking-wide font-semibold leading-tight" id="d-cliente"></p>
+            <h2 class="text-base font-totvs text-totvs-petroleo leading-snug" id="d-titulo"></h2>
           </div>
-          <div class="flex flex-col items-end gap-2">
-            <span id="d-status" class="px-3 py-1 rounded-full text-xs font-medium"></span>
-            <p class="text-xs text-slate-500" id="d-contrato"></p>
+          <div class="flex items-center gap-3 shrink-0">
+            <p class="text-[11px] text-slate-500" id="d-contrato"></p>
+            <span id="d-status" class="px-2.5 py-0.5 rounded-full text-[11px] font-medium"></span>
           </div>
         </div>
-        <div class="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-          <div><p class="text-xs text-slate-500">Coordenador</p><p class="font-medium" id="d-coord"></p></div>
-          <div><p class="text-xs text-slate-500">Coord. Auxiliar</p><p class="font-medium" id="d-coord2"></p></div>
-          <div><p class="text-xs text-slate-500">Vigência</p><p class="font-medium" id="d-vigencia"></p></div>
-          <div><p class="text-xs text-slate-500">Tipo</p><p class="font-medium" id="d-tipo"></p></div>
+        <div class="mt-1.5 pt-1.5 border-t border-slate-100 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-xs text-slate-500">
+          <span id="d-codigo" class="text-slate-600"></span>
+          <span class="text-slate-300">|</span>
+          <span>Coord. <span class="font-medium text-slate-700" id="d-coord"></span></span>
+          <span>Aux. <span class="font-medium text-slate-700" id="d-coord2"></span></span>
+          <span>Vigência <span class="font-medium text-slate-700" id="d-vigencia"></span></span>
+          <span>Tipo <span class="font-medium text-slate-700" id="d-tipo"></span></span>
         </div>
       </div>
 
@@ -837,7 +838,7 @@ function preencheMapa(m, projeto) {
 
   const stKey = (m.IBL_STATUS || '').trim();
   const st = STATUS_IBL[stKey] || { label: m.IBL_STATUS_DESC || stKey || '—', cls: 'bg-slate-100 text-slate-700' };
-  $('#d-status').className = `px-3 py-1 rounded-full text-xs font-medium ${st.cls}`;
+  $('#d-status').className = `px-2.5 py-0.5 rounded-full text-[11px] font-medium ${st.cls}`;
   $('#d-status').textContent = m.IBL_STATUS_DESC?.trim() || st.label;
   $('#d-contrato').textContent = `Contrato: ${(m.IB7_CONTRA || '—').trim()} · ${(m.IB7_FPAGTO_DESC || '').trim()}`;
 
