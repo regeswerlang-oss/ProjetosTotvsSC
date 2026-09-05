@@ -289,6 +289,7 @@ ABAS = [
     {"id": "tarefas",   "label": "Tarefas",              "cliente": True},
     {"id": "cadastros", "label": "Cadastros e Movimentos", "cliente": True},
     {"id": "cobertura", "label": "Cobertura",            "cliente": True},
+    {"id": "prototipo", "label": "Protótipo",            "cliente": True},
     {"id": "transicao", "label": "Transição",            "cliente": True},
 ]
 ABAS_IDS = [a["id"] for a in ABAS]
@@ -2803,6 +2804,675 @@ def api_projeto_detalhe(cli, cod, ver, loja, kind):
         params["t"] = int(time.time() * 1000)
     url = MAPA_URL if kind == "mapa" else CRONO_URL
     return _json(_cached(f"{kind}:{cli}:{cod}:{ver}:{loja}", lambda: pci_get(url, params)))
+
+
+# ============================================================================
+#  PROTÓTIPO — roteiro MIT045, ciclos e aproveitamento
+# ============================================================================
+# A PERGUNTA QUE ESTA ÁREA RESPONDE não é "qual o status do item", é
+# **"o aproveitamento ANDOU do ciclo anterior para este?"**. Por isso o
+# resultado NÃO mora no item: mora no par (item × ciclo). O mesmo roteiro é
+# executado de novo a cada ciclo — interno, isolado, integrado — e comparar os
+# ciclos é o produto final. Guardar o status no item apagaria a história.
+#
+# DOIS INDICADORES, e confundi-los esconde problema:
+#   APROVEITAMENTO = % de itens com êxito sobre os APLICÁVEIS (execução)
+#   MATURAÇÃO      = média das notas 0–10 (o quanto o usuário se sente seguro)
+# Item pode executar com êxito e o usuário ainda não dominar o processo. Um
+# módulo 100% executado com maturação 4 é um treinamento que não pegou.
+
+PROTO_STATUS = ("nao_iniciado", "exito", "ressalva", "erro", "nao_aplicavel")
+PROTO_STATUS_LABEL = {
+    "nao_iniciado": "Não iniciado",
+    "exito": "Executado com êxito",
+    "ressalva": "Executado com ressalva",
+    "erro": "Erro / Necessário ajuste",
+    "nao_aplicavel": "Não aplicável",
+}
+PROTO_TIPOS = ("interno", "isolado", "integrado")
+PROTO_TIPO_LABEL = {"interno": "Interno (consultoria)", "isolado": "Isolado",
+                    "integrado": "Integrado"}
+
+# De-para do texto da planilha para o domínio. Chave normalizada por _norm_col.
+PROTO_STATUS_DE = {
+    "NAOINICIADO": "nao_iniciado", "": "nao_iniciado",
+    "EXECUTADOCOMEXITO": "exito", "EXITO": "exito", "OK": "exito",
+    "EXECUTADOCOMRESSALVA": "ressalva", "COMRESSALVA": "ressalva", "RESSALVA": "ressalva",
+    "ERRONECESSARIOAJUSTE": "erro", "ERRO": "erro", "NECESSARIOAJUSTE": "erro",
+    "NAOAPLICAVEL": "nao_aplicavel", "NA": "nao_aplicavel",
+}
+
+# Cabeçalho do MIT045. Aceita com e sem acento porque a planilha viaja entre
+# xlsx, Sheets e CSV exportado, e cada um mexe no acento de um jeito.
+PROTO_COLS = {
+    "ID": "ordem", "ITEM": "ordem", "SEQ": "ordem",
+    "MODULO": "modulo", "PROCESSO": "processo", "SUBPROCESSO": "subprocesso",
+    "DESCRICAO": "descricao", "ATIVIDADE": "descricao",
+    "CONSULTOR": "consultor", "USUARIO": "usuario", "USUARIOCHAVE": "usuario",
+    "DATAPLANEJADA": "data_planejada", "DATAPREVISTA": "data_planejada",
+    "STATUS": "status", "SITUACAO": "status",
+    "DATACONCLUSAO": "data_conclusao", "OCORRENCIA": "ocorrencia",
+    "OBSERVACAO": "ocorrencia", "OBSERVACOES": "ocorrencia",
+}
+
+
+def _proto_data(v):
+    """Datas do roteiro chegam em três dialetos: '1/5/2026' (Sheets), o date do
+    openpyxl e o ISO. Nada de dateutil — a função tem que ser previsível."""
+    if v is None:
+        return None
+    if hasattr(v, "isoformat"):                     # date/datetime do openpyxl
+        try:
+            return v.date().isoformat() if hasattr(v, "date") else v.isoformat()
+        except Exception:
+            return None
+    s = str(v).strip()
+    if not s:
+        return None
+    # ARMADILHA: a célula de data já chegou aqui como TEXTO ("2026-05-01 00:00:00"),
+    # porque quem lê a planilha normaliza tudo para string antes. Sem cortar a
+    # hora, _data_iso não casa e a Data do Protótipo entra NULA — o roteiro
+    # importa 40 itens certinhos e sem data, e ninguém percebe.
+    if (m := re.match(r"(\d{4}-\d{2}-\d{2})[T ]", s)):
+        return m.group(1)
+    if (iso := _data_iso(s)):
+        return iso
+    m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{2,4})", s)
+    if m:
+        d, mth, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if y < 100:
+            y += 2000
+        # dd/mm/aaaa é o padrão daqui; só inverte quando o primeiro campo não
+        # pode ser dia. Adivinhar mais do que isso troca 05/01 por 01/05.
+        if d > 12 and mth <= 12:
+            pass
+        elif mth > 12 and d <= 12:
+            d, mth = mth, d
+        try:
+            return f"{y:04d}-{mth:02d}-{d:02d}"
+        except Exception:
+            return None
+    return None
+
+
+def _proto_linhas_xlsx(dados):
+    """Lê a primeira aba do .xlsx. openpyxl é dependência declarada; se faltar,
+    a mensagem tem que dizer o que fazer, não estourar ImportError na cara."""
+    try:
+        import openpyxl
+    except ImportError:
+        raise ValueError("Leitura de .xlsx indisponível no servidor (openpyxl). "
+                         "Exporte o roteiro como CSV e suba de novo.")
+    wb = openpyxl.load_workbook(io.BytesIO(dados), data_only=True, read_only=True)
+    ws = wb[wb.sheetnames[0]]
+    return [list(r) for r in ws.iter_rows(values_only=True)]
+
+
+def _proto_linhas_csv(texto):
+    amostra = texto[:4096]
+    try:
+        dial = csv.Sniffer().sniff(amostra, delimiters=",;\t|")
+    except csv.Error:
+        dial = csv.excel
+    return [list(r) for r in csv.reader(io.StringIO(texto), dial)]
+
+
+def _proto_cel(v):
+    return "" if v is None else str(v).strip()
+
+
+def _proto_parse(linhas):
+    """Devolve {meta:{projeto,data_prototipo}, itens:[...]}.
+
+    ARMADILHA: o MIT045 tem uma COLUNA VAZIA à esquerda e três linhas de
+    cabeçalho antes da tabela. Procurar a linha de cabeçalho pelo CONTEÚDO
+    (tem 'descricao' e ('modulo' ou 'processo')) é o que faz o parser aguentar
+    a planilha ganhar uma linha de logo amanhã.
+    """
+    idx_cabec, mapa = None, {}
+    for i, linha in enumerate(linhas[:40]):
+        m = {}
+        for j, c in enumerate(linha):
+            alvo = PROTO_COLS.get(_norm_col(_proto_cel(c)))
+            if alvo and alvo not in m:
+                m[alvo] = j
+        if "descricao" in m and ("modulo" in m or "processo" in m):
+            idx_cabec, mapa = i, m
+            break
+    if idx_cabec is None:
+        raise ValueError("Não achei o cabeçalho do roteiro. Esperado uma linha com "
+                         "DESCRIÇÃO e MÓDULO/PROCESSO (padrão MIT045).")
+
+    # Metadados ficam ACIMA do cabeçalho, no formato rótulo | valor.
+    meta = {"projeto": None, "data_prototipo": None}
+    for linha in linhas[:idx_cabec]:
+        celulas = [_proto_cel(c) for c in linha]
+        for j, c in enumerate(celulas):
+            rot = _norm_col(c)
+            val = next((x for x in celulas[j + 1:] if x), "")
+            if rot == "PROJETO" and val and not meta["projeto"]:
+                meta["projeto"] = val
+            if rot in ("DATAPROTOTIPO", "DATADOPROTOTIPO") and val:
+                meta["data_prototipo"] = _proto_data(val)
+
+    def pega(linha, campo):
+        j = mapa.get(campo)
+        return _proto_cel(linha[j]) if (j is not None and j < len(linha)) else ""
+
+    itens, ordem_auto = [], 0
+    for linha in linhas[idx_cabec + 1:]:
+        if not any(_proto_cel(c) for c in linha):
+            continue
+        desc = pega(linha, "descricao")
+        if not desc:
+            continue                       # linha de nota/rodapé, não é item
+        bruto = pega(linha, "ordem")
+        try:
+            ordem = int(float(bruto))
+        except (TypeError, ValueError):
+            ordem_auto += 1
+            ordem = ordem_auto
+        ordem_auto = max(ordem_auto, ordem)
+        itens.append({
+            "ordem": ordem,
+            "modulo": pega(linha, "modulo") or None,
+            "processo": pega(linha, "processo") or None,
+            "subprocesso": pega(linha, "subprocesso") or None,
+            "descricao": desc,
+            "consultor": pega(linha, "consultor") or None,
+            "usuario": pega(linha, "usuario") or None,
+            "data_planejada": _proto_data(pega(linha, "data_planejada")),
+            # o status que JÁ estava na planilha: não vira item, mas serve para
+            # semear o primeiro ciclo (senão o CP redigita 40 linhas).
+            "status_planilha": PROTO_STATUS_DE.get(_norm_col(pega(linha, "status"))),
+            "ocorrencia_planilha": pega(linha, "ocorrencia") or None,
+            "data_conclusao_planilha": _proto_data(pega(linha, "data_conclusao")),
+        })
+    if not itens:
+        raise ValueError("Cabeçalho encontrado, mas nenhuma linha de item com descrição.")
+    # ordem repetida quebraria o unique (roteiro_id, ordem) no meio do insert
+    vistos, saida = set(), []
+    for it in itens:
+        while it["ordem"] in vistos:
+            it["ordem"] += 1
+        vistos.add(it["ordem"])
+        saida.append(it)
+    return {"meta": meta, "itens": saida}
+
+
+# ── Acesso: quais módulos este usuário pode EDITAR neste cliente ────────────
+def proto_modulos_do_usuario(customer, email=None):
+    """None = todos (interno). Conjunto vazio = não edita nada.
+    '*' na tabela libera o cliente inteiro."""
+    email = (email or effective_user() or "").lower()
+    if not email:
+        return set()
+    if eh_interno(email):
+        return None
+    rows = q("select modulo from cockpit.proto_usuario_modulos "
+             "where customer=%s and lower(email)=%s", (customer, email))
+    mods = {r["modulo"] for r in rows}
+    return None if "*" in mods else mods
+
+
+def _proto_pode_editar(customer, ciclo, modulo):
+    """Devolve a mensagem do erro ou None. TRÊS portas, todas obrigatórias:
+    o ciclo aceita resposta, o ciclo é visível para quem responde, e o módulo
+    está liberado para ele."""
+    if not ciclo:
+        return "Ciclo não encontrado."
+    if not ciclo["aberto"]:
+        return "Este ciclo está fechado — a foto dele já foi congelada."
+    interno = eh_interno()
+    if not interno and not ciclo["visivel_cliente"]:
+        return "Ciclo não disponível para você."
+    mods = proto_modulos_do_usuario(customer)
+    if mods is None:
+        return None
+    if not mods:
+        return ("Nenhum módulo liberado para você neste cliente. "
+                "Fale com o coordenador do projeto.")
+    if (modulo or "") not in mods:
+        return f"O módulo {modulo or '(sem módulo)'} não está liberado para você."
+    return None
+
+
+# ── Leitura ────────────────────────────────────────────────────────────────
+@app.get("/api/proto/<customer>")
+def api_proto_lista(customer):
+    """Roteiros do cliente + ciclos + um resumo por ciclo. O cliente NUNCA vê o
+    ciclo interno: ele é a consultoria ensaiando, não resultado."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "prototipo")):
+        return d
+    interno = eh_interno()
+    roteiros = q("""select r.*, (select count(*) from cockpit.proto_itens i
+                                  where i.roteiro_id=r.id and i.ativo) as n_itens
+                      from cockpit.proto_roteiros r
+                     where r.customer=%s and r.ativo
+                     order by r.created_at desc""", (customer,))
+    ids = [r["id"] for r in roteiros]
+    ciclos = []
+    if ids:
+        ciclos = q("""select c.*,
+                        (select count(*) from cockpit.proto_resultados x
+                          where x.ciclo_id=c.id and x.status <> 'nao_iniciado') as respondidos
+                       from cockpit.proto_ciclos c
+                      where c.roteiro_id = any(%s)
+                      order by c.tipo, c.numero""", (ids,))
+    if not interno:
+        ciclos = [c for c in ciclos if c["visivel_cliente"]]
+    return _json({"ok": True, "customer": customer, "interno": interno,
+                  "roteiros": roteiros, "ciclos": ciclos,
+                  "meus_modulos": (None if (m := proto_modulos_do_usuario(customer)) is None
+                                   else sorted(m)),
+                  "status": [{"id": k, "label": PROTO_STATUS_LABEL[k]} for k in PROTO_STATUS],
+                  "tipos": [{"id": t, "label": PROTO_TIPO_LABEL[t]} for t in PROTO_TIPOS]})
+
+
+@app.get("/api/proto/<customer>/roteiro/<rid>")
+def api_proto_roteiro(customer, rid):
+    """Itens + ciclos + resultados. Uma consulta por tabela, junção em Python:
+    a matriz item × ciclo é pequena (dezenas × poucos) e assim a tela recebe o
+    formato que ela desenha."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "prototipo")):
+        return d
+    rot = q("select * from cockpit.proto_roteiros where id=%s and customer=%s",
+            (rid, customer), one=True)
+    if not rot:
+        return _err(404, "Roteiro não encontrado.")
+    interno = eh_interno()
+    itens = q("""select * from cockpit.proto_itens where roteiro_id=%s and ativo
+                 order by ordem""", (rid,))
+    ciclos = q("select * from cockpit.proto_ciclos where roteiro_id=%s order by tipo, numero",
+               (rid,))
+    if not interno:
+        ciclos = [c for c in ciclos if c["visivel_cliente"]]
+    cids = [c["id"] for c in ciclos]
+    res = q("select * from cockpit.proto_resultados where ciclo_id = any(%s)",
+            (cids,)) if cids else []
+    mods = proto_modulos_do_usuario(customer)
+    return _json({"ok": True, "roteiro": rot, "itens": itens, "ciclos": ciclos,
+                  "resultados": res, "interno": interno,
+                  "meus_modulos": None if mods is None else sorted(mods),
+                  "status": [{"id": k, "label": PROTO_STATUS_LABEL[k]} for k in PROTO_STATUS]})
+
+
+# ── Importação do roteiro ──────────────────────────────────────────────────
+@app.post("/api/proto/<customer>/roteiro")
+def api_proto_importar(customer):
+    """Importa um MIT045. Três caminhos, um parser só:
+      - arquivo .xlsx/.csv no corpo (multipart 'arquivo' ou corpo cru)
+      - ?csv_url= (a URL de 'Publicar na web > CSV' do Sheets)
+      - ?texto=   (colar o CSV)
+
+    O LINK DO DRIVE não é fonte de dados: o backend na Vercel não tem
+    credencial Google. Ele é gravado em fonte_url para rastreabilidade — quem
+    quiser re-sync automático preenche fonte_csv_url.
+    """
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    a = request.args
+    escopo = (a.get("escopo") or "modulo").strip().lower()
+    if escopo not in ("modulo", "processo"):
+        return _err(400, "escopo deve ser 'modulo' ou 'processo'.")
+    escopo_nome = (a.get("escopo_nome") or "").strip()
+    if not escopo_nome:
+        return _err(400, "Informe o nome do módulo ou do processo do roteiro.")
+    titulo = (a.get("titulo") or escopo_nome).strip()
+    fonte_url = (a.get("fonte_url") or "").strip() or None
+    csv_url = (a.get("csv_url") or "").strip() or None
+    semear = a.get("semear") == "1"          # cria o 1º ciclo com o status da planilha
+
+    nome = (a.get("arquivo") or "").strip()
+    origem, linhas = "upload", None
+    if csv_url:
+        origem = "csv"
+        try:
+            rr = requests.get(csv_url, timeout=25)
+            rr.raise_for_status()
+            rr.encoding = rr.encoding or "utf-8"
+            linhas = _proto_linhas_csv(rr.text)
+        except Exception as e:
+            return _err(502, f"Não consegui ler o CSV publicado: {e}")
+    else:
+        arq = request.files.get("arquivo")
+        dados = arq.read() if arq else request.get_data()
+        nome = nome or (arq.filename if arq else "")
+        if not dados:
+            return _err(400, "Envie o arquivo do roteiro (.xlsx ou .csv) ou uma csv_url.")
+        if nome.lower().endswith(".xlsx") or dados[:2] == b"PK":
+            linhas = _proto_linhas_xlsx(dados)
+        else:
+            linhas = _proto_linhas_csv(dados.decode("utf-8-sig", "replace"))
+    try:
+        parsed = _proto_parse(linhas)
+    except ValueError as e:
+        return _err(422, str(e))
+
+    itens = parsed["itens"]
+    rot = q("""insert into cockpit.proto_roteiros
+                 (customer, codigo_projeto, escopo, escopo_nome, titulo, fonte_url,
+                  fonte_csv_url, origem, arquivo_nome, data_prototipo, created_by, updated_by)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning *""",
+             (customer, (a.get("codigo_projeto") or "").strip() or None, escopo,
+              escopo_nome, titulo, fonte_url, csv_url, origem, nome or None,
+              parsed["meta"]["data_prototipo"], current_user(), current_user()),
+             one=True)
+    with db() as conn, conn.cursor() as cur:
+        execute_values(cur,
+            """insert into cockpit.proto_itens
+                 (roteiro_id, ordem, modulo, processo, subprocesso, descricao,
+                  consultor, usuario, data_planejada) values %s""",
+            [(rot["id"], i["ordem"], i["modulo"], i["processo"], i["subprocesso"],
+              i["descricao"], i["consultor"], i["usuario"], i["data_planejada"])
+             for i in itens])
+
+    ciclo = None
+    if semear:
+        ciclo = _proto_cria_ciclo(rot["id"], "interno", 1, visivel_cliente=False)
+        novos = q("select id, ordem from cockpit.proto_itens where roteiro_id=%s",
+                  (rot["id"],))
+        por_ordem = {r["ordem"]: r["id"] for r in novos}
+        semente = [(ciclo["id"], por_ordem[i["ordem"]],
+                    i["status_planilha"] or "nao_iniciado",
+                    i["ocorrencia_planilha"], i["data_conclusao_planilha"], current_user())
+                   for i in itens if i["ordem"] in por_ordem]
+        with db() as conn, conn.cursor() as cur:
+            execute_values(cur,
+                """insert into cockpit.proto_resultados
+                     (ciclo_id, item_id, status, ocorrencia, data_conclusao, respondido_por)
+                   values %s on conflict (ciclo_id, item_id) do nothing""", semente)
+
+    modulos = sorted({i["modulo"] for i in itens if i["modulo"]})
+    return _json({"ok": True, "roteiro": rot, "itens": len(itens),
+                  "modulos": modulos, "ciclo_semeado": ciclo,
+                  "meta": parsed["meta"]})
+
+
+@app.delete("/api/proto/<customer>/roteiro/<rid>")
+def api_proto_remover(customer, rid):
+    """Inativa o roteiro. NÃO apaga: os resultados dos ciclos são histórico do
+    projeto e sumir com eles é irreversível."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    execute("update cockpit.proto_roteiros set ativo=false, updated_at=now(), updated_by=%s "
+            "where id=%s and customer=%s", (current_user(), rid, customer))
+    return _json({"ok": True})
+
+
+# ── Ciclos ─────────────────────────────────────────────────────────────────
+def _proto_cria_ciclo(roteiro_id, tipo, numero=None, visivel_cliente=None, **kw):
+    if numero is None:
+        r = q("select coalesce(max(numero),0)+1 n from cockpit.proto_ciclos "
+              "where roteiro_id=%s and tipo=%s", (roteiro_id, tipo), one=True)
+        numero = r["n"]
+    if visivel_cliente is None:
+        # Interno é ensaio da consultoria: nasce fechado para o cliente.
+        visivel_cliente = tipo != "interno"
+    return q("""insert into cockpit.proto_ciclos
+                  (roteiro_id, tipo, numero, visivel_cliente, data_inicio, observacao, created_by)
+                values (%s,%s,%s,%s,%s,%s,%s)
+                on conflict (roteiro_id, tipo, numero) do update
+                  set visivel_cliente = excluded.visivel_cliente
+                returning *""",
+             (roteiro_id, tipo, numero, visivel_cliente, kw.get("data_inicio"),
+              kw.get("observacao"), current_user()), one=True)
+
+
+@app.post("/api/proto/<customer>/roteiro/<rid>/ciclo")
+def api_proto_ciclo_novo(customer, rid):
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if not q("select 1 from cockpit.proto_roteiros where id=%s and customer=%s",
+             (rid, customer), one=True):
+        return _err(404, "Roteiro não encontrado.")
+    b = request.get_json(silent=True) or {}
+    tipo = (b.get("tipo") or "").strip().lower()
+    if tipo not in PROTO_TIPOS:
+        return _err(400, f"tipo deve ser um de: {', '.join(PROTO_TIPOS)}.")
+    vis = b.get("visivel_cliente")
+    c = _proto_cria_ciclo(rid, tipo, b.get("numero"),
+                          None if vis is None else bool(vis),
+                          data_inicio=_proto_data(b.get("data_inicio")),
+                          observacao=(b.get("observacao") or "").strip() or None)
+    return _json({"ok": True, "ciclo": c})
+
+
+@app.route("/api/proto/<customer>/ciclo/<cid>", methods=["PATCH", "POST"])
+def api_proto_ciclo_editar(customer, cid):
+    """Abre/fecha, publica para o cliente, datas e observação."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    c = q("""select c.* from cockpit.proto_ciclos c
+               join cockpit.proto_roteiros r on r.id=c.roteiro_id
+              where c.id=%s and r.customer=%s""", (cid, customer), one=True)
+    if not c:
+        return _err(404, "Ciclo não encontrado.")
+    b = request.get_json(silent=True) or {}
+    campos, vals = [], []
+    for k, conv in (("aberto", bool), ("visivel_cliente", bool),
+                    ("data_inicio", _proto_data), ("data_fim", _proto_data),
+                    ("observacao", lambda v: (v or "").strip() or None)):
+        if k in b:
+            campos.append(f"{k}=%s")
+            vals.append(conv(b[k]))
+    if not campos:
+        return _err(400, "Nada para alterar.")
+    vals.append(cid)
+    execute(f"update cockpit.proto_ciclos set {', '.join(campos)} where id=%s", tuple(vals))
+    return _json({"ok": True, "ciclo": q("select * from cockpit.proto_ciclos where id=%s",
+                                         (cid,), one=True)})
+
+
+@app.delete("/api/proto/<customer>/ciclo/<cid>")
+def api_proto_ciclo_remover(customer, cid):
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de apagar ciclos.")
+    n = q("""select count(*) n from cockpit.proto_resultados x
+               join cockpit.proto_ciclos c on c.id=x.ciclo_id
+               join cockpit.proto_roteiros r on r.id=c.roteiro_id
+              where c.id=%s and r.customer=%s and x.status <> 'nao_iniciado'""",
+          (cid, customer), one=True)
+    if n and n["n"] and request.args.get("confirmar") != "1":
+        return _err(409, f"Este ciclo já tem {n['n']} item(ns) respondido(s). "
+                         "Reenvie com confirmar=1 se é isso mesmo — não há desfazer.")
+    execute("""delete from cockpit.proto_ciclos c using cockpit.proto_roteiros r
+                where c.roteiro_id=r.id and c.id=%s and r.customer=%s""", (cid, customer))
+    return _json({"ok": True})
+
+
+# ── Resultado: o preenchimento em si ───────────────────────────────────────
+@app.post("/api/proto/<customer>/ciclo/<cid>/resultado")
+def api_proto_resultado(customer, cid):
+    """Grava um ou vários resultados. Body: {itens:[{item_id,status,nota,
+    ocorrencia,data_conclusao}]} — ou os mesmos campos soltos para um item só.
+
+    ESCONDER NÃO É PROTEGER: a tela do cliente só desenha os módulos dele, mas
+    é AQUI que se barra o item de outro módulo mandado na mão.
+    """
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "prototipo")):
+        return d
+    ciclo = q("""select c.* from cockpit.proto_ciclos c
+                   join cockpit.proto_roteiros r on r.id=c.roteiro_id
+                  where c.id=%s and r.customer=%s""", (cid, customer), one=True)
+    if not ciclo:
+        return _err(404, "Ciclo não encontrado.")
+    b = request.get_json(silent=True) or {}
+    lote = b.get("itens") if isinstance(b.get("itens"), list) else [b]
+    if not lote:
+        return _err(400, "Nada para gravar.")
+
+    ids = [str(x.get("item_id") or "") for x in lote if x.get("item_id")]
+    if len(ids) != len(lote):
+        return _err(400, "Todo item precisa de item_id.")
+    donos = {r["id"]: r for r in q(
+        "select id, modulo from cockpit.proto_itens where id = any(%s) and roteiro_id=%s",
+        (ids, ciclo["roteiro_id"]))}
+    if len(donos) != len(set(ids)):
+        return _err(404, "Item que não pertence a este roteiro.")
+
+    linhas = []
+    for x in lote:
+        item = donos[str(x["item_id"])]
+        if (msg := _proto_pode_editar(customer, ciclo, item["modulo"])):
+            return _err(403, msg)
+        st = (x.get("status") or "nao_iniciado").strip()
+        if st not in PROTO_STATUS:
+            return _err(400, f"Status inválido: {st}")
+        nota = x.get("nota")
+        if nota in ("", None):
+            nota = None
+        else:
+            try:
+                nota = int(nota)
+            except (TypeError, ValueError):
+                return _err(400, "Nota tem que ser um número de 0 a 10.")
+            if not 0 <= nota <= 10:
+                return _err(400, "Nota fora da faixa 0–10.")
+        linhas.append((cid, item["id"], st, nota,
+                       (x.get("ocorrencia") or "").strip() or None,
+                       _proto_data(x.get("data_conclusao")), effective_user()))
+    with db() as conn, conn.cursor() as cur:
+        execute_values(cur,
+            """insert into cockpit.proto_resultados
+                 (ciclo_id, item_id, status, nota, ocorrencia, data_conclusao, respondido_por)
+               values %s
+               on conflict (ciclo_id, item_id) do update set
+                 status=excluded.status, nota=excluded.nota,
+                 ocorrencia=excluded.ocorrencia, data_conclusao=excluded.data_conclusao,
+                 respondido_por=excluded.respondido_por, respondido_em=now()""", linhas)
+    return _json({"ok": True, "gravados": len(linhas)})
+
+
+# ── Liberação de módulos por usuário-chave ─────────────────────────────────
+@app.route("/api/proto/<customer>/modulos", methods=["GET", "POST", "DELETE"])
+def api_proto_modulos(customer):
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if request.method == "GET":
+        libs = q("select * from cockpit.proto_usuario_modulos where customer=%s "
+                 "order by email, modulo", (customer,))
+        mods = q("""select distinct i.modulo from cockpit.proto_itens i
+                      join cockpit.proto_roteiros r on r.id=i.roteiro_id
+                     where r.customer=%s and r.ativo and i.modulo is not null
+                     order by 1""", (customer,))
+        usu = q("""select uc.email, u.nome from cockpit.usuario_clientes uc
+                     join cockpit.usuarios_login u on u.email=uc.email
+                    where uc.customer=%s and u.ativo order by coalesce(u.nome,u.email)""",
+                (customer,))
+        return _json({"ok": True, "liberacoes": libs,
+                      "modulos": [m["modulo"] for m in mods], "usuarios": usu})
+    b = request.get_json(silent=True) or {}
+    emails = emails_do_texto(b.get("emails"))
+    modulos = [str(m).strip() for m in (b.get("modulos") or []) if str(m).strip()]
+    if not emails or not modulos:
+        return _err(400, "Informe e-mails e módulos.")
+    if request.method == "DELETE":
+        execute("""delete from cockpit.proto_usuario_modulos
+                    where customer=%s and lower(email)=any(%s) and modulo=any(%s)""",
+                (customer, emails, modulos))
+        return _json({"ok": True})
+    with db() as conn, conn.cursor() as cur:
+        execute_values(cur,
+            """insert into cockpit.proto_usuario_modulos (customer, email, modulo, created_by)
+               values %s on conflict do nothing""",
+            [(customer, e, m, current_user()) for e in emails for m in modulos])
+    return _json({"ok": True, "liberacoes": len(emails) * len(modulos)})
+
+
+# ── Indicadores ────────────────────────────────────────────────────────────
+def _proto_agrega(chaves, res_por_item, itens):
+    """Aproveitamento e maturação por uma chave qualquer (módulo, consultor,
+    usuário). 'nao_aplicavel' sai do denominador do aproveitamento: item que o
+    cliente não usa reprovaria o módulo sem nada de errado ter havido."""
+    saida = {}
+    for it in itens:
+        k = (it.get(chaves) or "(sem informação)")
+        b = saida.setdefault(k, {"chave": k, "total": 0, "aplicaveis": 0, "exito": 0,
+                                 "ressalva": 0, "erro": 0, "nao_iniciado": 0,
+                                 "nao_aplicavel": 0, "notas": []})
+        r = res_por_item.get(it["id"]) or {}
+        st = r.get("status") or "nao_iniciado"
+        b["total"] += 1
+        b[st] = b.get(st, 0) + 1
+        if st != "nao_aplicavel":
+            b["aplicaveis"] += 1
+        if r.get("nota") is not None:
+            b["notas"].append(r["nota"])
+    for b in saida.values():
+        b["aproveitamento"] = round(100.0 * b["exito"] / b["aplicaveis"], 1) if b["aplicaveis"] else None
+        b["maturacao"] = round(sum(b["notas"]) / len(b["notas"]), 1) if b["notas"] else None
+        b["respondidos"] = b["total"] - b["nao_iniciado"]
+        b.pop("notas", None)
+    return sorted(saida.values(), key=lambda x: x["chave"])
+
+
+@app.get("/api/proto/<customer>/indicadores/<rid>")
+def api_proto_indicadores(customer, rid):
+    """Um retrato por ciclo + o comparativo entre ciclos. O comparativo É o
+    produto: número solto de um ciclo não diz se o protótipo andou."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "prototipo")):
+        return d
+    rot = q("select * from cockpit.proto_roteiros where id=%s and customer=%s",
+            (rid, customer), one=True)
+    if not rot:
+        return _err(404, "Roteiro não encontrado.")
+    itens = q("select * from cockpit.proto_itens where roteiro_id=%s and ativo", (rid,))
+    ciclos = q("select * from cockpit.proto_ciclos where roteiro_id=%s order by tipo, numero",
+               (rid,))
+    if not eh_interno():
+        ciclos = [c for c in ciclos if c["visivel_cliente"]]
+    cids = [c["id"] for c in ciclos]
+    res = q("select * from cockpit.proto_resultados where ciclo_id = any(%s)",
+            (cids,)) if cids else []
+    por_ciclo = {}
+    for r_ in res:
+        por_ciclo.setdefault(r_["ciclo_id"], {})[r_["item_id"]] = r_
+
+    ORDEM = {"interno": 0, "isolado": 1, "integrado": 2}
+    saida = []
+    for c in sorted(ciclos, key=lambda c: (ORDEM.get(c["tipo"], 9), c["numero"])):
+        m = por_ciclo.get(c["id"], {})
+        geral = _proto_agrega("__todos__", m, [{**i, "__todos__": "Geral"} for i in itens])
+        saida.append({
+            "ciclo": c,
+            "rotulo": f"{PROTO_TIPO_LABEL[c['tipo']]} · {c['numero']}",
+            "geral": geral[0] if geral else None,
+            "por_modulo": _proto_agrega("modulo", m, itens),
+            "por_consultor": _proto_agrega("consultor", m, itens),
+            "por_usuario": _proto_agrega("usuario", m, itens),
+        })
+    # A evolução é a diferença contra o ciclo ANTERIOR na ordem metodológica.
+    for i, s in enumerate(saida):
+        ant = saida[i - 1]["geral"] if i and saida[i - 1]["geral"] else None
+        g = s["geral"]
+        s["delta_aproveitamento"] = (
+            None if not (g and ant and g["aproveitamento"] is not None
+                         and ant["aproveitamento"] is not None)
+            else round(g["aproveitamento"] - ant["aproveitamento"], 1))
+    return _json({"ok": True, "roteiro": rot, "ciclos": saida, "itens": len(itens)})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────
