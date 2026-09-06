@@ -89,6 +89,27 @@
   .cx-linha { display: flex; align-items: center; gap: 8px; padding: 3px 6px;
               border-radius: 6px; font-size: 13px; cursor: pointer; }
   .cx-linha:hover { background: #f1f5f9; }
+
+  /* RAIL DE AÇÕES (coluna à esquerda do painel do projeto).
+     As ações saíram das réguas internas de cada aba e passaram a viver aqui:
+     lugar único, previsível, e o painel exportado (#tab-*) deixa de carregar
+     botão nenhum. A régua de cada aba ficou só com CONTEXTO e FILTRO
+     (cliente, selo do ambiente, Situação atual/Evolução, ↻ Atualizar). */
+  .rail-grupo { display: flex; flex-wrap: wrap; gap: 6px; }
+  .rail-grupo.hidden { display: none !important; }
+  .rail-btn { text-align: left; padding: 6px 9px; border-radius: 6px;
+              font-size: 12.5px; line-height: 1.25; color: #1f2937; background: #fff;
+              border: 1px solid #e2e8f0; cursor: pointer; }
+  .rail-btn:hover { background: #f1f5f9; border-color: #cbd5e1; }
+  .rail-btn-cta { background: var(--totvs-blue); border-color: var(--totvs-blue);
+                  color: var(--totvs-petroleo); font-weight: 700; }
+  .rail-btn-cta:hover { background: var(--totvs-verde); border-color: var(--totvs-verde); }
+  .rail-sub { display: block; font-size: 10px; font-weight: 400; opacity: .75; margin-top: 1px; }
+  .rail-sep { margin-top: 8px; padding-top: 8px; border-top: 1px solid #e2e8f0; }
+  @media (min-width: 768px) {
+    .rail-grupo { flex-direction: column; flex-wrap: nowrap; }
+    .rail-btn { width: 100%; }
+  }
 </style>
 </head>
 <body class="bg-totvs-beige text-totvs-petroleo">
@@ -168,33 +189,86 @@
         </div>
       </div>
 
-      <!-- Tabs do projeto: Resumo | Cronograma | Por Módulo | Por Etapa
-           A barra fica logo abaixo do card do projeto; KPIs e Apontamentos
-           passaram a viver dentro da aba Resumo. -->
-      <div class="bg-white rounded-lg border border-slate-200">
-        <div class="flex items-center justify-between px-5 pt-4 border-b border-slate-200">
-          <div class="flex gap-1 -mb-px">
-            <button data-tab="resumo"   class="tab-btn px-4 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Resumo</button>
-            <button data-tab="crono"    class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
-            <button data-tab="modulos"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
-            <button data-tab="etapas"   class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
-            <button data-tab="consumo"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
+      <!-- Detalhe = rail de ações (esquerda) + card das abas (direita).
+           Em telas < 768px o rail vira uma faixa horizontal acima do card. -->
+      <div class="flex flex-col md:flex-row items-stretch md:items-start gap-3">
+
+      <!-- RAIL DE AÇÕES — id mantido em #tab-acoes de propósito: setTab() e
+           aplicaAbas() já sabem mostrar/esconder esse id. Grupos por aba via
+           data-rail; o grupo global (Exportar/Gmail) vale para TODAS. -->
+      <aside id="tab-acoes" class="hidden w-full md:w-[178px] md:shrink-0 self-start md:sticky md:top-[84px]
+                                   bg-white rounded-lg border border-slate-200 p-2.5">
+        <p class="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ações</p>
+
+        <div id="acoes-arvore" data-rail="arvore" class="rail-grupo hidden">
+          <button data-act="expand-all"   class="rail-btn">▾ Expandir tudo</button>
+          <button data-act="collapse-all" class="rail-btn">▸ Recolher tudo</button>
+        </div>
+
+        <div data-rail="cad" class="rail-grupo hidden">
+          <button id="cad-sql"      data-interno class="rail-btn">🗄 Script SQL</button>
+          <button id="cad-ambiente" data-interno class="rail-btn">⚙ Ambiente</button>
+          <button id="cad-coletar"  data-interno class="rail-btn">⚡ Coletar agora</button>
+          <label id="cad-upload-wrap" data-interno class="rail-btn rail-btn-cta">
+            ⬆ Subir medição<span class="rail-sub">.csv / .json</span>
+            <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
+          </label>
+        </div>
+
+        <div data-rail="mov" class="rail-grupo hidden">
+          <button id="mov-sql"      data-interno class="rail-btn">🗄 Script SQL</button>
+          <button id="mov-ambiente" data-interno class="rail-btn">⚙ Ambiente</button>
+          <button id="mov-coletar"  data-interno class="rail-btn">⚡ Coletar agora</button>
+          <button id="mov-cenarios" data-interno class="rail-btn">🎯 Cenários</button>
+          <label id="mov-upload-wrap" data-interno class="rail-btn rail-btn-cta">
+            ⬆ Importar movimentos<span class="rail-sub">.csv / .json</span>
+            <input id="mov-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
+          </label>
+        </div>
+
+        <div data-rail="cob" class="rail-grupo hidden">
+          <button id="cob-cenarios" data-interno class="rail-btn">🎯 Cenários</button>
+          <label id="cob-upload-wrap" data-interno class="rail-btn rail-btn-cta">
+            ⬆ Importar análise<span class="rail-sub">.csv / .json</span>
+            <input id="cob-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
+          </label>
+        </div>
+
+        <div data-rail="pro" class="rail-grupo hidden">
+          <button id="pro-modulos" data-interno class="rail-btn" title="Quais módulos cada usuário-chave do cliente pode preencher">👥 Módulos por usuário</button>
+          <button id="pro-ciclo-novo" data-interno class="rail-btn">＋ Novo ciclo</button>
+          <button id="pro-importar" data-interno class="rail-btn rail-btn-cta">⬆ Importar roteiro</button>
+        </div>
+
+        <div data-rail="tr" class="rail-grupo hidden">
+          <label id="tr-upload-wrap" data-interno class="hidden rail-btn rail-btn-cta">
+            ⬆ Publicar painel<span class="rail-sub">.html</span>
+            <input id="tr-file" type="file" accept="text/html" class="hidden">
+          </label>
+        </div>
+
+        <div class="rail-grupo rail-sep">
+          <button id="ab-html" class="rail-btn">⬇ Exportar HTML</button>
+          <button id="ab-email" data-interno class="rail-btn">✉ Rascunho no Gmail</button>
+        </div>
+      </aside>
+
+      <!-- Card das abas: Resumo | Cronograma | … | Transição -->
+      <div class="flex-1 min-w-0 bg-white rounded-lg border border-slate-200">
+        <div class="flex items-center px-4 pt-4 border-b border-slate-200 overflow-x-auto">
+          <div class="flex gap-0.5 -mb-px whitespace-nowrap">
+            <button data-tab="resumo"   class="tab-btn px-3 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Resumo</button>
+            <button data-tab="crono"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
+            <button data-tab="modulos"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
+            <button data-tab="etapas"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
+            <button data-tab="consumo"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
-            <button data-tab="gaps"     class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
-            <button data-tab="tarefas"  class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Tarefas</button>
-            <button data-tab="cadastros" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
-            <button data-tab="cobertura" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cobertura</button>
-            <button data-tab="prototipo" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
-            <button data-tab="transicao" class="tab-btn px-4 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
-          </div>
-          <div id="tab-acoes" class="flex items-center gap-2 text-xs pb-2 hidden">
-            <span id="acoes-arvore" class="flex items-center gap-2">
-              <button data-act="expand-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Expandir</button>
-              <button data-act="collapse-all" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Recolher</button>
-              <span class="w-px h-4 bg-slate-200"></span>
-            </span>
-            <button id="ab-html"  class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">⬇ Exportar HTML</button>
-            <button id="ab-email" data-interno class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">✉ Rascunho no Gmail</button>
+            <button data-tab="gaps"     class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
+            <button data-tab="tarefas"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Tarefas</button>
+            <button data-tab="cadastros" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
+            <button data-tab="cobertura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cobertura</button>
+            <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
+            <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
         </div>
 
@@ -375,15 +449,6 @@
               <button data-visao="evolucao" class="cad-visao-btn border-l border-slate-300">Evolução</button>
             </div>
             <button id="cad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
-            <div class="ml-auto flex items-center gap-2">
-              <button id="cad-sql" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
-              <button id="cad-ambiente" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
-              <button id="cad-coletar" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
-              <label id="cad-upload-wrap" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-                ⬆ Subir medição (.csv / .json)
-                <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
-              </label>
-            </div>
           </div>
           <div id="cad-conteudo"></div>
         </div>
@@ -399,16 +464,6 @@
               <button data-movvisao="evolucao" class="mov-visao-btn px-3 py-1.5">Evolução</button>
             </div>
             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
-            <div class="ml-auto flex items-center gap-2">
-              <button id="mov-sql" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🗄 Script SQL</button>
-              <button id="mov-ambiente" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚙ Ambiente</button>
-              <button id="mov-coletar" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⚡ Coletar agora</button>
-              <button id="mov-cenarios" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
-              <label id="mov-upload-wrap" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-                ⬆ Importar movimentos (.csv / .json)
-                <input id="mov-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
-              </label>
-            </div>
           </div>
           <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
           <div id="mov-conteudo"></div>
@@ -424,13 +479,6 @@
             <span id="cob-cliente-nome" class="font-medium"></span>
             <span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">Testes × Produção</span>
             <button id="cob-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
-            <div class="ml-auto flex items-center gap-2">
-              <button id="cob-cenarios" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">🎯 Cenários</button>
-              <label id="cob-upload-wrap" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-                ⬆ Importar análise (.csv / .json)
-                <input id="cob-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
-              </label>
-            </div>
           </div>
           <div id="cob-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
           <div id="cob-conteudo"></div>
@@ -446,11 +494,6 @@
             <span id="pro-cliente-nome" class="font-medium"></span>
             <select id="pro-roteiro" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white"></select>
             <button id="pro-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
-            <div class="ml-auto flex items-center gap-2">
-              <button id="pro-modulos" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50" title="Quais módulos cada usuário-chave do cliente pode preencher">👥 Módulos por usuário</button>
-              <button id="pro-ciclo-novo" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">＋ Novo ciclo</button>
-              <button id="pro-importar" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">⬆ Importar roteiro</button>
-            </div>
           </div>
           <div id="pro-ciclos" class="mb-4 flex items-center gap-2 flex-wrap"></div>
           <div id="pro-conteudo"></div>
@@ -462,16 +505,13 @@
             <span class="text-xs text-slate-500">Cliente</span>
             <span id="tr-cliente-nome" class="font-medium"></span>
             <select id="tr-painel" class="hidden px-3 py-1.5 border border-slate-300 rounded-md bg-white"></select>
-            <label id="tr-upload-wrap" data-interno class="hidden ml-auto px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold cursor-pointer hover:bg-totvs-verde">
-              ⬆ Publicar painel (.html)
-              <input id="tr-file" type="file" accept="text/html" class="hidden">
-            </label>
           </div>
           <div id="tr-conteudo"></div>
           <div id="transicao-box" class="hidden -mx-5 -mb-5 border-t border-slate-200 overflow-hidden">
             <iframe id="frame-transicao" title="Painel de status do cliente" loading="lazy"></iframe>
           </div>
         </div>
+      </div>
       </div>
     </div>
   </section>
@@ -1618,6 +1658,17 @@ const AMB = {
   teste: { label: 'Base de Testes', cls: 'bg-amber-100 text-amber-900' },
 };
 
+// ── Rail de ações: qual grupo contextual aparece em cada aba ───────────────
+// Cadastros é a única que depende da SUB-ABA (cadastros × movimentos), então
+// lá quem decide é o setSub() — que roda depois deste mapa e sobrepõe.
+const RAIL_ABA = { crono: 'arvore', modulos: 'arvore', etapas: 'arvore',
+                   cobertura: 'cob', prototipo: 'pro', transicao: 'tr' };
+
+function railGrupo(chave) {
+  $$('#tab-acoes [data-rail]').forEach(g =>
+    g.classList.toggle('hidden', g.dataset.rail !== chave));
+}
+
 function setTab(nome) {
   // Portão de tela: TABS[0] é o Resumo, que o usuário do cliente pode não ter.
   const ok = abasDoCliente(state.selected?.cli);
@@ -1629,17 +1680,18 @@ function setTab(nome) {
   state.tab = nome;
   $$('.tab-btn').forEach(b => {
     const on = b.dataset.tab === state.tab;
-    b.className = `tab-btn px-4 py-2 text-sm border-b-2 ${on ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
+    b.className = `tab-btn px-3 py-2 text-sm border-b-2 ${on ? 'border-totvs-blue text-totvs-petroleo font-semibold' : 'border-transparent text-slate-500 hover:text-totvs-petroleo'}`;
     // ARMADILHA: a linha acima REESCREVE o className inteiro e apagava o
     // 'hidden' que aplicaAbas() tinha posto. Resultado: o usuário do cliente
     // clicava numa aba e as dez voltavam. Reponha aqui, no mesmo passo.
     b.classList.toggle('hidden', !!ok && !ok.has(b.dataset.tab));
   });
   TABS.forEach(t => $(`#tab-${t}`).classList.toggle('hidden', t !== nome));
-  // A barra de ações acompanha TODAS as abas: exportar e rascunho valem em
-  // qualquer uma. Só Expandir/Recolher continua restrito às abas com árvore.
+  // O rail de ações acompanha TODAS as abas: exportar e rascunho valem em
+  // qualquer uma. O grupo contextual (árvore, cad, mov, cob, pro, tr) é que
+  // troca conforme a aba.
   $('#tab-acoes').classList.remove('hidden');
-  $('#acoes-arvore').classList.toggle('hidden', !['crono', 'modulos', 'etapas'].includes(nome));
+  railGrupo(RAIL_ABA[nome] || null);
   // Carga preguiçosa: todas seguem o cliente do projeto aberto
   if (nome === 'consumo') renderConsumo();
   if (nome === 'gaps') initGaps();
@@ -1656,6 +1708,7 @@ function setSub(nome) {
   $$('.sub-tab').forEach(b => b.classList.toggle('is-active', b.dataset.sub === nome));
   $('#sub-cadastros').classList.toggle('hidden', sub.painel !== 'cadastros');
   $('#sub-movimentos').classList.toggle('hidden', sub.painel !== 'movimentos');
+  railGrupo(sub.painel === 'movimentos' ? 'mov' : 'cad');
   if (sub.painel === 'cadastros') initCadastros(sub.ambiente);
   else initMovimentos(sub.ambiente);
 }
