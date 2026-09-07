@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 .vercel
 .DS_Store
+.proto_template.py

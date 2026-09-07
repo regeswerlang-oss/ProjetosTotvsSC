@@ -235,9 +235,16 @@
         </div>
 
         <div data-rail="pro" class="rail-grupo hidden">
-          <button id="pro-modulos" data-interno class="rail-btn" title="Quais módulos cada usuário-chave do cliente pode preencher">👥 Módulos por usuário</button>
-          <button id="pro-ciclo-novo" data-interno class="rail-btn">＋ Novo ciclo</button>
-          <button id="pro-importar" data-interno class="rail-btn rail-btn-cta">⬆ Importar roteiro</button>
+          <!-- .pro-cp  = só o Coordenador de Projetos TOTVS deste cliente.
+               .pro-cps = CP da TOTVS OU CP do Cliente (distribuir é dos dois).
+               NÃO usam data-interno de propósito: consultor comum É interno e
+               mesmo assim não coordena. Quem decide é o ctx que vem do servidor. -->
+          <button id="pro-equipe" class="pro-cp hidden rail-btn" title="Papel de cada um neste cliente e os módulos que executa/valida">👥 Equipe</button>
+          <button id="pro-atribuir" class="pro-cps hidden rail-btn" title="Quem executa cada módulo, processo ou linha">🎯 Atribuir</button>
+          <button id="pro-ciclo-novo" class="pro-cp hidden rail-btn">＋ Novo ciclo</button>
+          <button id="pro-manual" class="pro-cp hidden rail-btn" title="Criar um roteiro de processo do zero ou copiar de outro cliente">✎ Roteiro manual</button>
+          <button id="pro-export" class="rail-btn" title="Baixa o ciclo preenchido no layout MIT045">⬇ Exportar MIT045</button>
+          <button id="pro-importar" class="pro-cp hidden rail-btn rail-btn-cta">⬆ Importar roteiro</button>
         </div>
 
         <div data-rail="tr" class="rail-grupo hidden">
@@ -4843,13 +4850,22 @@ function abreModalSQL(tipo = 'cadastros') {
        <button id="sql-carregar" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm" disabled>Carregar salvo</button>
        <button id="sql-remover" class="px-3 py-1.5 rounded-md border border-rose-200 text-rose-700 hover:bg-rose-50 text-sm hidden">Remover salvo</button>
      </div>
-     <p id="sql-msg" class="text-xs text-emerald-700"></p>`,
+     <p id="sql-msg" class="text-xs hidden"></p>`,
     'Salvar script');
   // Editar SQL em caixa estreita é sofrimento — este modal nasce largo
   m.el.firstElementChild.classList.replace('max-w-lg', 'max-w-3xl');
 
   let manual = false;      // o texto na tela foi digitado/colado pelo usuário
   let salvo = null;        // o que está gravado no banco para este cliente/tipo
+
+  const avisaSalvo = (txt, ok = true) => {
+    const el = m.campo('sql-msg');
+    el.textContent = txt;
+    el.className = 'text-xs px-3 py-2 rounded-md border ' + (ok
+      ? 'text-emerald-800 bg-emerald-50 border-emerald-200 font-medium'
+      : 'text-slate-600 bg-slate-50 border-slate-200');
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
 
   const marcaManual = (v) => {
     manual = v;
@@ -4895,7 +4911,7 @@ function abreModalSQL(tipo = 'cadastros') {
   m.campo('sql-padrao').addEventListener('click', () => {
     if (manual && !confirm('Recriar o script automático descarta o texto que está na tela. Continuar?')) return;
     gera();
-    m.campo('sql-msg').textContent = 'Script padrão recriado (nada foi salvo ainda).';
+    avisaSalvo('Script padrão recriado — nada foi salvo ainda. Clique em "Salvar script".', false);
   });
 
   m.campo('sql-carregar').addEventListener('click', () => {
@@ -4905,7 +4921,7 @@ function abreModalSQL(tipo = 'cadastros') {
     if (salvo.sufixo) m.campo('sql-sufixo').value = salvo.sufixo;
     if (salvo.dialeto) m.campo('sql-dialeto').value = salvo.dialeto;
     marcaManual(true);          // é o script do usuário: não pode ser sobrescrito
-    m.campo('sql-msg').textContent = 'Script salvo carregado.';
+    avisaSalvo('Script salvo carregado na tela.', false);
   });
 
   m.campo('sql-remover').addEventListener('click', async () => {
@@ -4913,7 +4929,7 @@ function abreModalSQL(tipo = 'cadastros') {
     try {
       await api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`, { method: 'DELETE' });
       salvo = null; pintaSalvo();
-      m.campo('sql-msg').textContent = 'Script salvo removido.';
+      avisaSalvo('Script salvo removido.', false);
     } catch (e) { m.erro(e.message); }
   });
 
@@ -4921,7 +4937,7 @@ function abreModalSQL(tipo = 'cadastros') {
     const txt = m.campo('sql-txt').value;
     try { await navigator.clipboard.writeText(txt); }
     catch { m.campo('sql-txt').select(); document.execCommand('copy'); }
-    m.campo('sql-msg').textContent = 'Copiado.';
+    avisaSalvo('Copiado para a área de transferência.', false);
   });
 
   m.campo('sql-baixar').addEventListener('click', () => {
@@ -4947,7 +4963,14 @@ function abreModalSQL(tipo = 'cadastros') {
       });
       const j = await api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`);
       salvo = j.script || null; pintaSalvo();
-      m.campo('sql-msg').textContent = 'Script salvo para este cliente — vale para produção e testes.';
+      // O modal não fecha ao salvar (o passo seguinte quase sempre é copiar o
+      // script). Só que num modal longo a confirmação nascia abaixo da dobra: o
+      // usuário clicava, não via nada e concluía que não tinha salvo — foi o que
+      // aconteceu em 07/09/2026. Agora a mensagem é destacada, traz hora e
+      // tamanho como prova, e rola sozinha até ficar visível.
+      avisaSalvo(`Script salvo em ${fmtDataHora(salvo?.updated_at)} · `
+                 + `${(salvo?.sql || '').length.toLocaleString('pt-BR')} caracteres `
+                 + `· vale para produção e testes.`);
     } catch (e) { m.erro(e.message); }
     m.ocupado(false, 'Salvar script');
   });
@@ -5265,29 +5288,36 @@ function abreModalCredGmail(depois) {
 }
 
 // ============================================================================
-//  ABA PROTÓTIPO — roteiro MIT045, ciclos e aproveitamento
+//  ABA PROTÓTIPO — roteiro MIT045, ciclos, papéis e aproveitamento
 // ============================================================================
 // A PERGUNTA DESTA TELA não é "qual o status do item", é
-// **"o aproveitamento ANDOU do ciclo anterior para este?"**. Por isso:
-//   - o CICLO é a primeira escolha da barra, não um filtro escondido;
-//   - o KPI de aproveitamento vem com a variação contra o ciclo anterior;
-//   - número solto de um ciclo não vira destaque sozinho.
+// **"o aproveitamento ANDOU do ciclo anterior para este?"**.
 //
-// DOIS INDICADORES, e confundi-los esconde problema:
-//   APROVEITAMENTO = % de êxito sobre os APLICÁVEIS (a execução andou?)
-//   MATURAÇÃO      = média das notas 0–10 (o usuário se sente seguro?)
-// Módulo 100% executado com maturação 4 é treinamento que não pegou.
+// DOIS EIXOS DE RESPOSTA, lado a lado na grade:
+//   Cliente  → status (executado / dúvida / erro / n/a) + nota 0–10 + ocorrência
+//   TOTVS    → validação (pendente / OK / reprovado) + parecer
+// "Executei" não é "está certo": o APROVEITAMENTO conta só o OK do consultor.
+// A distância entre execução e aproveitamento é a FILA DE VALIDAÇÃO.
+//
+// Aqui só se ESCONDE. Quem barra é o servidor (require_cp, proto_pode_responder,
+// proto_pode_validar) — tirar uma classe daqui não abre nada.
 const pro = { customer: null, lista: null, rid: null, dados: null, indic: null,
-              ciclo: null, filtro: '', salvando: 0 };
+              ciclo: null, filtro: '', salvando: 0, ctx: {} };
 
 const PRO_ST = {
-  nao_iniciado:  { rot: 'Não iniciado',   cls: 'bg-slate-100 text-slate-600' },
-  exito:         { rot: 'Êxito',          cls: 'bg-emerald-100 text-emerald-800' },
-  ressalva:      { rot: 'Com ressalva',   cls: 'bg-amber-100 text-amber-900' },
-  erro:          { rot: 'Erro / ajuste',  cls: 'bg-rose-100 text-rose-700' },
-  nao_aplicavel: { rot: 'Não aplicável',  cls: 'bg-slate-100 text-slate-400' },
+  nao_iniciado:  { rot: 'Não iniciado', cls: 'bg-slate-100 text-slate-600' },
+  executado:     { rot: 'Executado',    cls: 'bg-emerald-100 text-emerald-800' },
+  duvida:        { rot: 'Com dúvida',   cls: 'bg-amber-100 text-amber-900' },
+  erro:          { rot: 'Com erro',     cls: 'bg-rose-100 text-rose-700' },
+  nao_aplicavel: { rot: 'Não aplicável', cls: 'bg-slate-100 text-slate-400' },
+};
+const PRO_VAL = {
+  pendente:  { rot: 'Aguardando', cls: 'bg-slate-100 text-slate-500' },
+  ok:        { rot: 'OK',         cls: 'bg-emerald-100 text-emerald-800' },
+  reprovado: { rot: 'Reprovado',  cls: 'bg-rose-100 text-rose-700' },
 };
 const PRO_TIPO = { interno: 'Interno', isolado: 'Isolado', integrado: 'Integrado' };
+const PRO_ORDEM = { interno: 0, isolado: 1, integrado: 2 };
 
 function initPrototipo() {
   const cli = state.selected?.cli;
@@ -5296,6 +5326,15 @@ function initPrototipo() {
   if (pro.customer === cli && pro.lista) { renderProto(); return; }
   pro.customer = cli; pro.lista = null; pro.rid = null; pro.dados = null; pro.indic = null;
   carregaProto(cli);
+}
+
+/** Mostra os botões de coordenação conforme o papel que o SERVIDOR devolveu.
+ *  Consultor comum é interno e mesmo assim não coordena — por isso o recorte
+ *  não pode sair de data-interno. */
+function aplicaPapelProto() {
+  const c = pro.ctx || {};
+  $$('.pro-cp').forEach(b => b.classList.toggle('hidden', !c.cp_totvs));
+  $$('.pro-cps').forEach(b => b.classList.toggle('hidden', !(c.cp_totvs || c.cp_cliente)));
 }
 
 async function carregaProto(cli) {
@@ -5308,9 +5347,11 @@ async function carregaProto(cli) {
     box.innerHTML = blocoErro('Não foi possível carregar o protótipo', e, () => carregaProto(cli));
     return;
   }
+  pro.ctx = pro.lista.ctx || {};
+  aplicaPapelProto();
   const sel = $('#pro-roteiro');
   sel.innerHTML = pro.lista.roteiros.map(r =>
-    `<option value="${r.id}">${escapeHtml(r.titulo)} · ${escapeHtml(r.escopo_nome)}</option>`).join('')
+    `<option value="${r.id}">${escapeHtml(r.escopo_nome)} · ${escapeHtml(r.titulo)}</option>`).join('')
     || '<option value="">— nenhum roteiro —</option>';
   pro.rid = pro.lista.roteiros[0]?.id || null;
   if (pro.rid) sel.value = pro.rid;
@@ -5321,10 +5362,9 @@ async function carregaRoteiro() {
   const box = $('#pro-conteudo');
   $('#pro-ciclos').innerHTML = '';
   if (!pro.rid) {
-    box.innerHTML = blocoVazioCad(
-      pro.lista?.interno
-        ? 'Nenhum roteiro importado para este cliente ainda. Use "Importar roteiro" — cole o link do Drive e suba o MIT045 (.xlsx ou .csv).'
-        : 'O roteiro de protótipo deste projeto ainda não foi publicado. Fale com o coordenador do projeto.');
+    box.innerHTML = blocoVazioCad(pro.ctx.cp_totvs
+      ? 'Nenhum roteiro para este cliente ainda. Use "Importar roteiro" (MIT045 do Drive) ou "Roteiro manual" para criar um processo do zero.'
+      : 'O roteiro de protótipo deste projeto ainda não foi publicado. Fale com o coordenador do projeto.');
     return;
   }
   box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando roteiro…</div>';
@@ -5338,202 +5378,234 @@ async function carregaRoteiro() {
     box.innerHTML = blocoErro('Não foi possível carregar o roteiro', e, carregaRoteiro);
     return;
   }
-  // Mantém o ciclo escolhido se ele ainda existe; senão vai para o mais recente
-  // na ORDEM METODOLÓGICA (interno → isolado → integrado), não na de criação.
+  pro.ctx = pro.dados.ctx || pro.ctx;
+  aplicaPapelProto();
   const cs = ciclosOrdenados();
   if (!cs.find(c => c.id === pro.ciclo)) pro.ciclo = cs.length ? cs[cs.length - 1].id : null;
   renderProto();
 }
 
-const PRO_ORDEM = { interno: 0, isolado: 1, integrado: 2 };
 function ciclosOrdenados() {
   return (pro.dados?.ciclos || []).slice().sort(
     (a, b) => (PRO_ORDEM[a.tipo] - PRO_ORDEM[b.tipo]) || (a.numero - b.numero));
 }
+const cicloAtual = () => (pro.dados?.ciclos || []).find(c => c.id === pro.ciclo);
+const respDoItem = (id) => (pro.dados?.responsaveis?.[pro.ciclo] || {})[id] || null;
 
-/** Pode editar este item? Três portas, as mesmas do servidor. */
-function proPodeEditar(item) {
-  const c = (pro.dados.ciclos || []).find(x => x.id === pro.ciclo);
+/** Espelho do proto_pode_responder do servidor. */
+function proPodeResponder(item) {
+  const c = cicloAtual(), x = pro.ctx || {};
   if (!c || !c.aberto) return false;
-  if (!pro.dados.interno && !c.visivel_cliente) return false;
-  const meus = pro.dados.meus_modulos;      // null = todos (interno)
-  return meus === null || meus.includes(item.modulo || '');
+  if (!x.interno && !c.visivel_cliente) return false;
+  if (x.interno || x.cp_cliente) return true;
+  const r = respDoItem(item.id);
+  if (r && r.toLowerCase() === (x.email || '').toLowerCase()) return true;
+  const m = x.modulos_executa;
+  return m === null || (m || []).includes(item.modulo || '');
+}
+
+/** Espelho do proto_pode_validar. Validar é da TOTVS — o cliente nunca dá OK
+ *  no próprio trabalho, é isso que faz o aproveitamento significar algo. */
+function proPodeValidar(item) {
+  const c = cicloAtual(), x = pro.ctx || {};
+  if (!c || !c.aberto || !x.interno) return false;
+  if (x.cp_totvs) return true;
+  const m = x.modulos_valida;
+  return m === null || (m || []).includes(item.modulo || '');
 }
 
 function renderProto() {
   if (!pro.dados) return;
   const cs = ciclosOrdenados();
-  const interno = pro.dados.interno;
-
   $('#pro-ciclos').innerHTML = cs.map(c => {
     const on = c.id === pro.ciclo;
-    const selos = [
-      !c.aberto ? '<span class="text-[10px] uppercase tracking-wide">fechado</span>' : '',
-      (interno && !c.visivel_cliente) ? '<span class="text-[10px] uppercase tracking-wide">só interno</span>' : '',
-    ].filter(Boolean).join(' · ');
+    const selos = [!c.aberto ? 'fechado' : '',
+                   (pro.ctx.interno && !c.visivel_cliente) ? 'só interno' : '']
+      .filter(Boolean).join(' · ');
     return `<button data-ciclo="${c.id}" class="px-3 py-1.5 rounded-md border text-sm ${
       on ? 'border-totvs-blue bg-totvs-blue text-totvs-petroleo font-semibold'
          : 'border-slate-300 bg-white hover:bg-slate-50'}">
-      ${PRO_TIPO[c.tipo]} · ${c.numero}${selos ? ` <span class="opacity-70">${selos}</span>` : ''}</button>`;
+      ${PRO_TIPO[c.tipo]} · ${c.numero}${selos
+        ? ` <span class="text-[10px] uppercase tracking-wide opacity-70">${selos}</span>` : ''}</button>`;
   }).join('') || '<span class="text-sm text-slate-400">Nenhum ciclo criado ainda.</span>';
 
   const ind = (pro.indic?.ciclos || []).find(x => x.ciclo.id === pro.ciclo);
   const g = ind?.geral;
-  const dlt = ind?.delta_aproveitamento;
   const kpis = !g ? '' : `<div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
     ${kpi('Aproveitamento', g.aproveitamento === null ? '—' : g.aproveitamento + '%',
-          dlt === null || dlt === undefined ? 'primeiro ciclo'
-            : (dlt > 0 ? `▲ ${dlt} p.p. vs ciclo anterior`
-               : dlt < 0 ? `▼ ${Math.abs(dlt)} p.p. vs ciclo anterior`
-                         : 'sem avanço vs ciclo anterior'),
+          deltaTxt(ind.delta_aproveitamento, 'validado com OK do consultor'),
           'bg-totvs-petroleo text-white')}
+    ${kpi('Execução', g.execucao === null ? '—' : g.execucao + '%',
+          deltaTxt(ind.delta_execucao, 'respondido pelo cliente'), 'bg-totvs-blue text-totvs-petroleo')}
+    ${kpi('Aguardando validação', String(g.aguardando),
+          g.aguardando ? 'feito e ninguém conferiu ainda' : 'nada na fila',
+          g.aguardando ? 'bg-totvs-purple text-white' : 'bg-white border border-slate-200')}
     ${kpi('Maturação', g.maturacao === null ? '—' : g.maturacao + '/10',
-          'média das notas dos usuários', 'bg-totvs-purple text-white')}
-    ${kpi('Respondidos', `${g.respondidos}/${g.total}`,
-          `${g.nao_aplicavel} não aplicável(is)`, 'bg-totvs-blue text-totvs-petroleo')}
-    ${kpi('Precisam de ajuste', String(g.erro + g.ressalva),
-          `${g.erro} com erro · ${g.ressalva} com ressalva`, 'bg-white border border-slate-200')}
+          `${g.erro} com erro · ${g.duvida} com dúvida`, 'bg-white border border-slate-200')}
   </div>`;
 
-  $('#pro-conteudo').innerHTML = kpis + comparativoCiclos() + gradeProto() + porModuloProto();
+  $('#pro-conteudo').innerHTML = kpis + comparativoCiclos() + gradeProto() + porGrupoProto();
   ligaProto();
 }
 
-/** O comparativo É o produto: um número solto não diz se o protótipo andou. */
+const deltaTxt = (d, base) =>
+  (d === null || d === undefined) ? base
+  : d > 0 ? `▲ ${d} p.p. vs ciclo anterior`
+  : d < 0 ? `▼ ${Math.abs(d)} p.p. vs ciclo anterior`
+          : 'sem avanço vs ciclo anterior';
+
+/** O comparativo É o produto: um número solto não diz se o protótipo andou.
+ *  Duas barras por ciclo — a clara é o que o cliente executou, a escura é o que
+ *  a TOTVS validou. O vão entre elas é a fila de validação, visível de longe. */
 function comparativoCiclos() {
   const cs = (pro.indic?.ciclos || []).filter(c => c.geral);
   if (cs.length < 2) return '';
   const linhas = cs.map(c => {
-    const a = c.geral.aproveitamento;
-    const larg = a === null ? 0 : a;
-    // ARMADILHA: cor de barra por classe Tailwind gerada em runtime pode não
-    // existir na folha (o JIT varre o HTML inicial). O resto do arquivo usa
-    // .fill-exec/.fill-plan por isso mesmo — aqui vai cor inline.
-    const cor = a === null ? '#cbd5e1'
-      : a >= 90 ? '#10b981' : a >= 70 ? '#00DBFF' : '#fbbf24';
-    return `<div class="flex items-center gap-3 py-1 text-sm">
+    const ap = c.geral.aproveitamento, ex = c.geral.execucao;
+    return `<div class="flex items-center gap-3 py-1.5 text-sm">
       <span class="w-48 shrink-0 text-slate-600">${escapeHtml(c.rotulo)}</span>
-      <div class="flex-1 bar-track"><div class="bar-fill" style="width:${larg}%;background:${cor}"></div></div>
-      <span class="w-16 text-right tabular-nums font-medium">${a === null ? '—' : a + '%'}</span>
+      <div class="flex-1 bar-track relative">
+        <div class="bar-fill" style="width:${ex === null ? 0 : ex}%;background:#bfe9f5"></div>
+        <div class="bar-fill absolute left-0 top-0" style="width:${ap === null ? 0 : ap}%;background:#002233"></div>
+      </div>
+      <span class="w-16 text-right tabular-nums font-medium">${ap === null ? '—' : ap + '%'}</span>
       <span class="w-24 text-right text-xs ${
         c.delta_aproveitamento > 0 ? 'text-emerald-700'
         : c.delta_aproveitamento < 0 ? 'text-rose-600' : 'text-slate-400'}">${
-        c.delta_aproveitamento === null || c.delta_aproveitamento === undefined ? ''
+        (c.delta_aproveitamento === null || c.delta_aproveitamento === undefined) ? ''
         : (c.delta_aproveitamento > 0 ? '+' : '') + c.delta_aproveitamento + ' p.p.'}</span>
-      <span class="w-20 text-right text-xs text-slate-500">${
-        c.geral.maturacao === null ? '' : 'mat. ' + c.geral.maturacao}</span>
+      <span class="w-28 text-right text-xs text-slate-500">${
+        c.geral.aguardando ? c.geral.aguardando + ' na fila' : ''}</span>
     </div>`;
   }).join('');
   return `<div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
     <h3 class="text-sm font-semibold text-slate-700">Evolução entre os ciclos</h3>
-    <p class="text-xs text-slate-400 mb-2">Aproveitamento sobre os itens aplicáveis, na ordem interno → isolado → integrado.</p>
+    <p class="text-xs text-slate-400 mb-2">Barra escura = validado com OK · barra clara = executado pelo cliente.
+      O vão entre as duas é o que está esperando conferência.</p>
     ${linhas}</div>`;
 }
 
-function porModuloProto() {
+function porGrupoProto() {
   const ind = (pro.indic?.ciclos || []).find(x => x.ciclo.id === pro.ciclo);
   if (!ind) return '';
   const bloco = (titulo, lista, dica) => {
-    const ls = lista.filter(b => b.chave !== '(sem informação)' || b.total);
+    const ls = (lista || []).filter(b => b.total);
     if (!ls.length) return '';
     return `<div class="bg-white rounded-lg border border-slate-200 p-5">
       <h3 class="text-sm font-semibold text-slate-700">${titulo}</h3>
       <p class="text-xs text-slate-400 mb-2">${dica}</p>
       ${ls.map(b => `<div class="flex items-center gap-3 py-1 text-sm border-t border-slate-100">
-        <span class="flex-1 truncate" title="${escapeHtml(b.chave)}">${escapeHtml(b.chave)}</span>
-        <span class="w-28 text-right text-xs text-slate-500">${b.respondidos}/${b.total} resp.</span>
-        <span class="w-20 text-right tabular-nums font-medium">${
-          b.aproveitamento === null ? '—' : b.aproveitamento + '%'}</span>
-        <span class="w-20 text-right text-xs text-slate-500">${
-          b.maturacao === null ? '' : 'mat. ' + b.maturacao}</span>
+        <span class="flex-1 truncate" title="${escapeHtml(String(b.chave))}">${escapeHtml(String(b.chave))}</span>
+        ${b.aguardando ? `<span class="text-[11px] px-1.5 rounded bg-totvs-purple text-white">${b.aguardando} na fila</span>` : ''}
+        <span class="w-16 text-right text-xs text-slate-500">${b.execucao === null ? '' : b.execucao + '% ex.'}</span>
+        <span class="w-16 text-right tabular-nums font-medium">${b.aproveitamento === null ? '—' : b.aproveitamento + '%'}</span>
       </div>`).join('')}</div>`;
   };
   return `<div class="grid md:grid-cols-3 gap-4 mt-4">
     ${bloco('Por módulo', ind.por_modulo, 'Onde o protótipo trava.')}
-    ${bloco('Por consultor', ind.por_consultor, 'Responsável pelo item no roteiro.')}
-    ${bloco('Por usuário-chave', ind.por_usuario, 'Quem executa do lado do cliente.')}
+    ${bloco('Por consultor', ind.por_consultor, 'Quem valida os itens do módulo.')}
+    ${bloco('Por responsável', ind.por_responsavel, 'Quem foi atribuído para executar.')}
   </div>`;
 }
 
 function gradeProto() {
   const cs = pro.dados.ciclos || [];
   if (!cs.length) {
-    return blocoVazioCad(pro.dados.interno
-      ? 'Roteiro importado, mas sem nenhum ciclo. Crie o primeiro em "Novo ciclo".'
+    return blocoVazioCad(pro.ctx.cp_totvs
+      ? 'Roteiro carregado, mas sem nenhum ciclo. Crie o primeiro em "Novo ciclo".'
       : 'Ainda não há ciclo disponível para você neste roteiro.');
   }
-  const ciclo = cs.find(c => c.id === pro.ciclo);
+  const ciclo = cicloAtual();
   const res = {};
-  (pro.dados.resultados || []).forEach(r => {
-    if (r.ciclo_id === pro.ciclo) res[r.item_id] = r;
-  });
+  (pro.dados.resultados || []).forEach(r => { if (r.ciclo_id === pro.ciclo) res[r.item_id] = r; });
   const q = semAcento(pro.filtro);
   const itens = (pro.dados.itens || []).filter(i => !q ||
-    semAcento(`${i.modulo} ${i.processo} ${i.subprocesso} ${i.descricao} ${i.consultor} ${i.usuario}`).includes(q));
+    semAcento(`${i.modulo} ${i.processo} ${i.subprocesso} ${i.descricao} ${i.consultor} ${respDoItem(i.id) || ''}`).includes(q));
 
   const grupos = new Map();
   itens.forEach(i => grupos.set(i.modulo || '(sem módulo)',
     (grupos.get(i.modulo || '(sem módulo)') || []).concat([i])));
 
-  const opts = (sel) => Object.entries(PRO_ST).map(([k, v]) =>
+  const opts = (mapa, sel) => Object.entries(mapa).map(([k, v]) =>
     `<option value="${k}" ${k === sel ? 'selected' : ''}>${v.rot}</option>`).join('');
 
   const linha = (i) => {
     const r = res[i.id] || {};
     const st = r.status || 'nao_iniciado';
-    const pode = proPodeEditar(i);
-    return `<tr class="border-t border-slate-100 align-top" data-item="${i.id}">
+    const vl = r.validacao || 'pendente';
+    const resp = respDoItem(i.id);
+    const podeR = proPodeResponder(i), podeV = proPodeValidar(i);
+    const meu = resp && (resp.toLowerCase() === (pro.ctx.email || '').toLowerCase());
+    return `<tr class="border-t border-slate-100 align-top ${meu ? 'bg-cyan-50/40' : ''}" data-item="${i.id}">
       <td class="py-2 pr-2 text-slate-400 tabular-nums w-10">${i.ordem}</td>
-      <td class="py-2 pr-3">
+      <td class="py-2 pr-3 min-w-[240px]">
         <div>${escapeHtml(i.descricao)}</div>
         <div class="text-xs text-slate-400">${escapeHtml(i.processo || '')}${
           i.subprocesso ? ' · ' + escapeHtml(i.subprocesso) : ''}</div>
       </td>
-      <td class="py-2 pr-3 text-xs text-slate-500 w-40">
-        ${i.consultor ? escapeHtml(i.consultor) : '<span class="text-slate-300">sem consultor</span>'}<br>
-        ${i.usuario ? escapeHtml(i.usuario) : '<span class="text-slate-300">sem usuário</span>'}</td>
-      <td class="py-2 pr-2 w-44">${pode
-        ? `<select data-campo="status" class="w-full px-2 py-1 border border-slate-300 rounded-md text-xs">${opts(st)}</select>`
+      <td class="py-2 pr-3 text-xs w-40">
+        ${resp ? `<span class="${meu ? 'font-semibold text-totvs-petroleo' : ''}">${escapeHtml(resp)}</span>`
+               : '<span class="text-slate-300">sem responsável</span>'}
+        ${i.consultor ? `<div class="text-slate-400">cons. ${escapeHtml(i.consultor)}</div>` : ''}</td>
+      <td class="py-2 pr-2 w-40">${podeR
+        ? `<select data-campo="status" class="w-full px-2 py-1 border border-slate-300 rounded-md text-xs">${opts(PRO_ST, st)}</select>`
         : `<span class="px-2 py-0.5 rounded-full text-xs ${PRO_ST[st].cls}">${PRO_ST[st].rot}</span>`}</td>
-      <td class="py-2 pr-2 w-20">${pode
+      <td class="py-2 pr-2 w-16">${podeR
         ? `<input data-campo="nota" type="number" min="0" max="10" value="${r.nota ?? ''}"
              placeholder="0-10" class="w-full px-2 py-1 border border-slate-300 rounded-md text-xs">`
         : `<span class="text-xs text-slate-500">${r.nota ?? '—'}</span>`}</td>
-      <td class="py-2 w-64">${pode
+      <td class="py-2 pr-3 w-52">${podeR
         ? `<input data-campo="ocorrencia" value="${escapeHtml(r.ocorrencia || '')}"
              placeholder="ocorrência" class="w-full px-2 py-1 border border-slate-300 rounded-md text-xs">`
         : `<span class="text-xs text-slate-500">${escapeHtml(r.ocorrencia || '')}</span>`}
         ${r.respondido_por ? `<div class="text-[10px] text-slate-400 mt-0.5">por ${escapeHtml(r.respondido_por)}</div>` : ''}</td>
+      <td class="py-2 pr-2 w-36 bg-slate-50/60">${podeV
+        ? `<select data-campo="validacao" class="w-full px-2 py-1 border border-slate-300 rounded-md text-xs">${opts(PRO_VAL, vl)}</select>`
+        : `<span class="px-2 py-0.5 rounded-full text-xs ${PRO_VAL[vl].cls}">${PRO_VAL[vl].rot}</span>`}</td>
+      <td class="py-2 w-52 bg-slate-50/60">${podeV
+        ? `<input data-campo="parecer" value="${escapeHtml(r.parecer || '')}"
+             placeholder="parecer do consultor" class="w-full px-2 py-1 border border-slate-300 rounded-md text-xs">`
+        : `<span class="text-xs text-slate-500">${escapeHtml(r.parecer || '')}</span>`}
+        ${r.validado_por ? `<div class="text-[10px] text-slate-400 mt-0.5">por ${escapeHtml(r.validado_por)}</div>` : ''}</td>
     </tr>`;
   };
 
   const corpo = [...grupos.entries()].map(([mod, ls]) => `
     <tbody>
-      <tr class="bg-slate-50"><td colspan="6" class="py-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-totvs-petroleo">
+      <tr class="bg-slate-50"><td colspan="8" class="py-1.5 px-2 text-xs font-semibold uppercase tracking-wide text-totvs-petroleo">
         ${escapeHtml(mod)} <span class="font-normal text-slate-400">· ${ls.length} item(ns)</span></td></tr>
       ${ls.map(linha).join('')}
     </tbody>`).join('');
 
-  const aviso = !ciclo ? '' :
-    !ciclo.aberto ? '<p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-3">Este ciclo está <b>fechado</b>: a foto dele já foi congelada e não aceita mais resposta.</p>'
-    : (pro.dados.meus_modulos && !pro.dados.meus_modulos.length)
-      ? '<p class="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2 mb-3">Você ainda não tem módulo liberado para preencher neste cliente — está vendo o roteiro em leitura. Fale com o coordenador do projeto.</p>'
-      : '';
+  // ARMADILHA: "não tem módulo liberado" NÃO é o mesmo que "não tem o que
+  // fazer". Quem recebeu uma LINHA atribuída edita sem módulo nenhum — foi
+  // exatamente para isso que a atribuição por linha existe. Perguntar ao
+  // proPodeResponder é a única leitura fiel.
+  const semNada = !(pro.dados.itens || []).some(proPodeResponder);
+  const aviso = !ciclo ? ''
+    : !ciclo.aberto ? '<p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-3">Este ciclo está <b>fechado</b>: a foto dele já foi congelada e não aceita mais resposta.</p>'
+    : semNada ? '<p class="text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2 mb-3">Você está vendo o roteiro em leitura: nenhum item foi atribuído a você e você não tem módulo liberado neste cliente. Fale com o coordenador do projeto.</p>'
+    : '';
 
   return `<div class="bg-white rounded-lg border border-slate-200 p-5 mt-4">
     <div class="flex items-center gap-3 mb-3 flex-wrap">
       <h3 class="text-sm font-semibold text-slate-700">Itens do roteiro</h3>
       <span class="text-xs text-slate-400">${itens.length} de ${(pro.dados.itens || []).length}</span>
-      <input id="pro-busca" type="search" placeholder="filtrar item, módulo, consultor…" value="${escapeHtml(pro.filtro)}"
+      <input id="pro-busca" type="search" placeholder="filtrar item, módulo, responsável…" value="${escapeHtml(pro.filtro)}"
              class="ml-auto px-3 py-1.5 border border-slate-300 rounded-md text-sm min-w-[240px]">
       <span id="pro-salvo" class="text-xs text-emerald-700"></span>
     </div>
     ${aviso}
     <div class="overflow-x-auto"><table class="w-full text-sm">
-      <thead><tr class="text-xs text-slate-500 text-left">
-        <th class="pb-1">#</th><th class="pb-1">Item</th><th class="pb-1">Consultor / Usuário</th>
-        <th class="pb-1">Status</th><th class="pb-1">Nota</th><th class="pb-1">Ocorrência</th>
-      </tr></thead>${corpo}
+      <thead>
+        <tr class="text-[10px] uppercase tracking-wide text-slate-400 text-left">
+          <th colspan="3"></th><th colspan="3">Resposta do cliente</th>
+          <th colspan="2" class="bg-slate-50/60">Validação da TOTVS</th></tr>
+        <tr class="text-xs text-slate-500 text-left">
+          <th class="pb-1">#</th><th class="pb-1">Item</th><th class="pb-1">Responsável</th>
+          <th class="pb-1">Status</th><th class="pb-1">Nota</th><th class="pb-1">Ocorrência</th>
+          <th class="pb-1 bg-slate-50/60">OK?</th><th class="pb-1 bg-slate-50/60">Parecer</th>
+        </tr></thead>${corpo}
     </table></div></div>`;
 }
 
@@ -5555,28 +5627,28 @@ function ligaProto() {
     if (b2) { b2.focus(); b2.setSelectionRange(b2.value.length, b2.value.length); }
   });
   $$('#pro-conteudo [data-item] [data-campo]').forEach(el =>
-    el.addEventListener('change', () => gravaProto(el.closest('[data-item]'))));
+    el.addEventListener('change', () => gravaProto(el.closest('[data-item]'), el.dataset.campo)));
 }
 
-async function gravaProto(tr) {
+/** Grava no endpoint CERTO conforme o campo: resposta do cliente e validação do
+ *  consultor são rotas diferentes porque são autorizações diferentes. */
+async function gravaProto(tr, campo) {
   if (!tr) return;
-  const campo = (c) => tr.querySelector(`[data-campo="${c}"]`);
-  const nota = campo('nota')?.value;
-  const corpo = {
-    item_id: tr.dataset.item,
-    status: campo('status')?.value || 'nao_iniciado',
-    nota: nota === '' ? null : nota,
-    ocorrencia: campo('ocorrencia')?.value || '',
-  };
+  const val = (c) => tr.querySelector(`[data-campo="${c}"]`)?.value;
+  const validando = campo === 'validacao' || campo === 'parecer';
+  const rota = validando ? 'validar' : 'resultado';
+  const corpo = validando
+    ? { item_id: tr.dataset.item, validacao: val('validacao') || 'pendente', parecer: val('parecer') || '' }
+    : { item_id: tr.dataset.item, status: val('status') || 'nao_iniciado',
+        nota: val('nota') === '' ? null : val('nota'), ocorrencia: val('ocorrencia') || '' };
   const selo = $('#pro-salvo');
   pro.salvando++;
   if (selo) { selo.className = 'text-xs text-slate-400'; selo.textContent = 'salvando…'; }
   try {
-    await api(`/api/proto/${encodeURIComponent(pro.customer)}/ciclo/${pro.ciclo}/resultado`, {
+    await api(`/api/proto/${encodeURIComponent(pro.customer)}/ciclo/${pro.ciclo}/${rota}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(corpo),
     });
-    // O resultado alimenta os indicadores — recarrega para o KPI não mentir.
     const cli = encodeURIComponent(pro.customer);
     [pro.dados, pro.indic] = await Promise.all([
       api(`/api/proto/${cli}/roteiro/${pro.rid}`),
@@ -5599,8 +5671,13 @@ async function gravaProto(tr) {
 
 $('#pro-roteiro').addEventListener('change', (e) => { pro.rid = e.target.value; carregaRoteiro(); });
 $('#pro-reload').addEventListener('click', () => { pro.customer = null; initPrototipo(); });
+$('#pro-export').addEventListener('click', () => {
+  if (!pro.rid) { alert('Selecione um roteiro.'); return; }
+  location.href = `/api/proto/${encodeURIComponent(pro.customer)}/roteiro/${pro.rid}`
+                + `/export${pro.ciclo ? `?ciclo=${pro.ciclo}` : ''}`;
+});
 
-// ── Importar roteiro ───────────────────────────────────────────────────────
+// ── Importar roteiro (MIT045) ──────────────────────────────────────────────
 // O LINK DO DRIVE NÃO É A FONTE DE DADOS: o backend na Vercel não tem
 // credencial Google. Ele é gravado para rastreabilidade; os itens vêm do
 // arquivo subido ou da URL de "Publicar na web > CSV".
@@ -5633,8 +5710,7 @@ function abreImportarRoteiro() {
     if (!arq && !csv) { m.erro('Suba o arquivo ou informe a URL do CSV publicado.'); return; }
     m.erro(''); m.ocupado(true, 'Importando…');
     const qs = new URLSearchParams({
-      escopo: m.campo('imp-escopo').value,
-      escopo_nome: nome,
+      escopo: m.campo('imp-escopo').value, escopo_nome: nome,
       titulo: m.campo('imp-titulo').value.trim() || nome,
       fonte_url: m.campo('imp-link').value.trim(),
       semear: m.campo('imp-semear').checked ? '1' : '0',
@@ -5648,16 +5724,72 @@ function abreImportarRoteiro() {
       alert(`Roteiro importado: ${j.itens} item(ns).\n\nMódulos encontrados: ${
         j.modulos.join(', ') || '—'}${j.ciclo_semeado ? '\n\nCiclo Interno 1 criado com o status da planilha.' : ''}`);
       pro.customer = null; initPrototipo();
-    } catch (e) {
-      m.ocupado(false, 'Importar'); m.erro(e.message);
-    }
+    } catch (e) { m.ocupado(false, 'Importar'); m.erro(e.message); }
   });
 }
 $('#pro-importar').addEventListener('click', abreImportarRoteiro);
 
+// ── Roteiro manual: do zero ou copiando outro cliente ──────────────────────
+// Copiar é o que faz a biblioteca crescer sozinha: o roteiro de um cliente vira
+// o ponto de partida do próximo. Copia a ESTRUTURA, nunca os resultados.
+async function abreRoteiroManual() {
+  let modelos = [];
+  try { modelos = (await api('/api/proto/modelos')).roteiros || []; } catch (_) { }
+  const m = modal('Roteiro manual', `
+    ${campo('man-titulo', 'Título do roteiro', '', 'text', 'Ex.: Faturamento de Serviços')}
+    <div class="flex gap-2">
+      <label class="flex-1"><span class="block text-xs text-slate-500 mb-1">Este roteiro é por</span>
+        <select id="man-escopo" class="w-full px-3 py-2 border border-slate-300 rounded-md">
+          <option value="processo">Processo</option><option value="modulo">Módulo</option>
+        </select></label>
+      <label class="flex-1"><span class="block text-xs text-slate-500 mb-1">Nome do módulo / processo</span>
+        <input id="man-nome" class="w-full px-3 py-2 border border-slate-300 rounded-md" placeholder="Faturamento"></label>
+    </div>
+    <label class="block"><span class="block text-xs text-slate-500 mb-1">Copiar a estrutura de um roteiro existente</span>
+      <select id="man-copia" class="w-full px-3 py-2 border border-slate-300 rounded-md">
+        <option value="">— criar do zero —</option>
+        ${modelos.map(r => `<option value="${r.id}">${escapeHtml(r.cliente_nome || r.customer)} · ${
+          escapeHtml(r.titulo)} (${r.n_itens} itens)</option>`).join('')}
+      </select>
+      <span class="block text-[11px] text-slate-400 mt-1">Copia só os itens. Resultados e ciclos ficam onde foram executados.</span></label>
+    <label class="block"><span class="block text-xs text-slate-500 mb-1">Ou cole os itens, um por linha</span>
+      <textarea id="man-itens" rows="6" class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"
+        placeholder="SIGACTR | Gestão de Contratos | Cadastro | Incluir contrato no sistema&#10;SIGACTR | Gestão de Contratos | Vigência | Definir início e término"></textarea>
+      <span class="block text-[11px] text-slate-400 mt-1">Formato: <code>Módulo | Processo | Subprocesso | Descrição</code>.
+        Só a descrição é obrigatória — uma linha com um texto só vira um item sem módulo.</span></label>`,
+    'Criar roteiro');
+  m.aoConfirmar(async () => {
+    const nome = m.campo('man-nome').value.trim();
+    const copia = m.campo('man-copia').value;
+    if (!nome) { m.erro('Informe o nome do módulo ou processo.'); return; }
+    const itens = m.campo('man-itens').value.split('\n').map(l => l.trim()).filter(Boolean)
+      .map(l => {
+        const p = l.split('|').map(x => x.trim());
+        return p.length >= 4 ? { modulo: p[0], processo: p[1], subprocesso: p[2], descricao: p.slice(3).join(' | ') }
+             : p.length === 3 ? { modulo: p[0], processo: p[1], descricao: p[2] }
+             : p.length === 2 ? { modulo: p[0], descricao: p[1] }
+             : { descricao: p[0] };
+      });
+    m.erro(''); m.ocupado(true, 'Criando…');
+    try {
+      const j = await api(`/api/proto/${encodeURIComponent(pro.customer)}/roteiro/manual${
+        copia ? `?copiar_de=${encodeURIComponent(copia)}` : ''}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titulo: m.campo('man-titulo').value.trim() || nome,
+                               escopo: m.campo('man-escopo').value, escopo_nome: nome, itens }),
+      });
+      m.fecha();
+      alert(`Roteiro criado com ${j.itens} item(ns).` +
+            (j.itens ? '' : '\n\nEle está vazio: use "Atribuir" depois de acrescentar itens.'));
+      pro.customer = null; initPrototipo();
+    } catch (e) { m.ocupado(false, 'Criar roteiro'); m.erro(e.message); }
+  });
+}
+$('#pro-manual').addEventListener('click', abreRoteiroManual);
+
 // ── Ciclos ─────────────────────────────────────────────────────────────────
 function abreNovoCiclo() {
-  if (!pro.rid) { alert('Importe um roteiro antes de criar ciclo.'); return; }
+  if (!pro.rid) { alert('Importe ou crie um roteiro antes.'); return; }
   const m = modal('Novo ciclo de protótipo', `
     <label class="block"><span class="block text-xs text-slate-500 mb-1">Tipo</span>
       <select id="cic-tipo" class="w-full px-3 py-2 border border-slate-300 rounded-md">
@@ -5667,11 +5799,9 @@ function abreNovoCiclo() {
       </select></label>
     ${campo('cic-inicio', 'Data de início', '', 'date')}
     <label class="flex items-center gap-2 text-xs text-slate-600">
-      <input type="checkbox" id="cic-vis" class="rounded">
-      Visível para o cliente</label>
+      <input type="checkbox" id="cic-vis" class="rounded"> Visível para o cliente</label>
     <p class="text-xs text-slate-400">O ciclo <b>Interno</b> nasce fechado para o cliente de propósito:
-      é a consultoria ensaiando, não resultado. Marque a caixa só quando quiser publicá-lo.</p>`,
-    'Criar ciclo');
+      é a consultoria ensaiando, não resultado.</p>`, 'Criar ciclo');
   const tipo = m.campo('cic-tipo'), vis = m.campo('cic-vis');
   const ajusta = () => { vis.checked = tipo.value !== 'interno'; };
   ajusta(); tipo.addEventListener('change', ajusta);
@@ -5689,53 +5819,137 @@ function abreNovoCiclo() {
 }
 $('#pro-ciclo-novo').addEventListener('click', abreNovoCiclo);
 
-// ── Módulos por usuário-chave ──────────────────────────────────────────────
-async function abreModulosProto() {
+// ── Equipe: papel de cada um + quem EXECUTA e quem VALIDA ──────────────────
+async function abreEquipeProto() {
   let j;
-  try { j = await api(`/api/proto/${encodeURIComponent(pro.customer)}/modulos`); }
+  try { j = await api(`/api/proto/${encodeURIComponent(pro.customer)}/equipe`); }
   catch (e) { alert(e.message); return; }
-  const atuais = new Map();
-  j.liberacoes.forEach(l => atuais.set(l.email.toLowerCase(),
-    (atuais.get(l.email.toLowerCase()) || []).concat([l.modulo])));
-  const m = modal('Módulos por usuário-chave', `
-    <p class="text-xs text-slate-500">Quem tem o módulo liberado <b>preenche</b> os itens daquele
-      módulo; os demais veem o roteiro em leitura. <code>*</code> libera todos.</p>
-    <div class="border border-slate-200 rounded-md p-2 max-h-40 overflow-y-auto text-xs">
-      ${[...atuais.entries()].map(([e, ms]) =>
-        `<div class="flex items-center gap-2 py-0.5">
-           <span class="flex-1 truncate">${escapeHtml(e)}</span>
-           <span>${ms.map(x => `<span class="chip-aba">${escapeHtml(x)}</span>`).join('')}</span>
-         </div>`).join('') || '<p class="text-slate-400 p-1">Nenhuma liberação ainda.</p>'}
+  const porEmail = new Map();
+  j.liberacoes.forEach(l => porEmail.set(l.email.toLowerCase(),
+    (porEmail.get(l.email.toLowerCase()) || []).concat([l])));
+  const rotPapel = Object.fromEntries(j.papeis.map(p => [p.id, p.label]));
+
+  const m = modal('Equipe do protótipo', `
+    <p class="text-xs text-slate-500">O <b>papel</b> vale só neste cliente. Os <b>módulos</b> dizem
+      quem <b>executa</b> (usuário-chave) e quem <b>valida</b> (consultor). Papel não cria acesso —
+      quem entra no sistema continua sendo decidido em <b>Acessos</b>.</p>
+    <div class="border border-slate-200 rounded-md p-2 max-h-48 overflow-y-auto text-xs">
+      ${j.pessoas.map(p => {
+        const ms = porEmail.get(p.email.toLowerCase()) || [];
+        return `<div class="flex items-start gap-2 py-1 border-b border-slate-50">
+          <span class="w-56 truncate" title="${escapeHtml(p.email)}">${escapeHtml(p.nome || p.email)}</span>
+          <span class="w-44 text-slate-500">${p.papel ? escapeHtml(rotPapel[p.papel] || p.papel) : '—'}</span>
+          <span class="flex-1">${ms.map(x => `<span class="chip-aba" title="${x.papel}">${
+            x.papel === 'valida' ? '✓ ' : ''}${escapeHtml(x.modulo)}</span>`).join('') || ''}</span>
+        </div>`;
+      }).join('') || '<p class="text-slate-400 p-1">Ninguém liberado neste cliente ainda.</p>'}
     </div>
     <label class="block"><span class="block text-xs text-slate-500 mb-1">E-mails (cole a lista)</span>
-      <textarea id="pm-emails" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"
-        placeholder="${escapeHtml((j.usuarios[0]?.email) || 'fulano@cliente.com.br')}"></textarea></label>
-    <div><span class="block text-xs text-slate-500 mb-1">Módulos</span>
-      <div class="border border-slate-200 rounded-md p-1 grid grid-cols-2 max-h-40 overflow-y-auto">
-        <label class="cx-linha"><input type="checkbox" data-mod="*" class="rounded"><span><b>*</b> todos</span></label>
-        ${j.modulos.map(x => `<label class="cx-linha">
-          <input type="checkbox" data-mod="${escapeHtml(x)}" class="rounded"><span>${escapeHtml(x)}</span></label>`).join('')}
-      </div></div>
+      <textarea id="eq-emails" rows="2" class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"
+        placeholder="${escapeHtml(j.pessoas[0]?.email || 'fulano@cliente.com.br')}"></textarea></label>
+    <label class="block"><span class="block text-xs text-slate-500 mb-1">Papel neste cliente</span>
+      <select id="eq-papel" class="w-full px-3 py-2 border border-slate-300 rounded-md">
+        <option value="">— não alterar —</option>
+        ${j.papeis.map(p => `<option value="${p.id}">${escapeHtml(p.label)}</option>`).join('')}
+      </select></label>
+    <div class="flex gap-2">
+      <label class="w-40"><span class="block text-xs text-slate-500 mb-1">Nos módulos, ele</span>
+        <select id="eq-fun" class="w-full px-3 py-2 border border-slate-300 rounded-md">
+          <option value="executa">Executa</option><option value="valida">Valida</option>
+        </select></label>
+      <div class="flex-1"><span class="block text-xs text-slate-500 mb-1">Módulos</span>
+        <div class="border border-slate-200 rounded-md p-1 grid grid-cols-2 max-h-32 overflow-y-auto">
+          <label class="cx-linha"><input type="checkbox" data-mod="*" class="rounded"><span><b>*</b> todos</span></label>
+          ${j.modulos.map(x => `<label class="cx-linha">
+            <input type="checkbox" data-mod="${escapeHtml(x)}" class="rounded"><span>${escapeHtml(x)}</span></label>`).join('')}
+        </div></div>
+    </div>
     <label class="flex items-center gap-2 text-xs text-slate-600">
-      <input type="checkbox" id="pm-tirar" class="rounded"> Tirar em vez de liberar</label>`,
-    'Liberar');
+      <input type="checkbox" id="eq-tirar" class="rounded"> Tirar em vez de conceder</label>`,
+    'Gravar');
   m.aoConfirmar(async () => {
     const mods = [...m.el.querySelectorAll('[data-mod]')].filter(c => c.checked).map(c => c.dataset.mod);
-    const emails = m.campo('pm-emails').value;
-    if (!emails.trim() || !mods.length) { m.erro('Informe e-mails e ao menos um módulo.'); return; }
+    const emails = m.campo('eq-emails').value;
+    const papel = m.campo('eq-papel').value;
+    if (!emails.trim()) { m.erro('Informe pelo menos um e-mail.'); return; }
+    if (!papel && !mods.length) { m.erro('Escolha um papel ou pelo menos um módulo.'); return; }
     m.erro(''); m.ocupado(true, 'Gravando…');
     try {
-      await api(`/api/proto/${encodeURIComponent(pro.customer)}/modulos`, {
-        method: m.campo('pm-tirar').checked ? 'DELETE' : 'POST',
+      await api(`/api/proto/${encodeURIComponent(pro.customer)}/equipe`, {
+        method: m.campo('eq-tirar').checked ? 'DELETE' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emails, modulos: mods }),
+        body: JSON.stringify({ emails, papel: papel || null, modulos: mods,
+                               papel_modulo: m.campo('eq-fun').value }),
       });
-      m.fecha(); carregaRoteiro();
-    } catch (e) { m.ocupado(false, 'Liberar'); m.erro(e.message); }
+      m.fecha(); pro.customer = null; initPrototipo();
+    } catch (e) { m.ocupado(false, 'Gravar'); m.erro(e.message); }
   });
 }
-$('#pro-modulos').addEventListener('click', abreModulosProto);
+$('#pro-equipe').addEventListener('click', abreEquipeProto);
 
+// ── Atribuir: quem executa cada módulo, processo ou linha ──────────────────
+// PRECEDÊNCIA (o servidor resolve igual): exceção do ciclo > padrão do roteiro,
+// e dentro de cada um: linha > processo > módulo. É isso que permite definir
+// uma vez e sobrescrever só onde precisa.
+function abreAtribuirProto() {
+  if (!pro.dados) { alert('Abra um roteiro antes.'); return; }
+  const itens = pro.dados.itens || [];
+  const mods = [...new Set(itens.map(i => i.modulo).filter(Boolean))].sort();
+  const procs = [...new Set(itens.map(i => i.processo).filter(Boolean))].sort();
+  const pessoas = [...new Set([
+    ...Object.values(pro.dados.responsaveis?.[pro.ciclo] || {}).filter(Boolean),
+    ...itens.map(i => i.usuario).filter(Boolean)])].sort();
+  const c = cicloAtual();
+  const m = modal('Atribuir responsável', `
+    <p class="text-xs text-slate-500">Mais específico ganha: <b>linha</b> vence <b>processo</b>,
+      que vence <b>módulo</b>. E a exceção do ciclo vence qualquer padrão do roteiro.</p>
+    <label class="block"><span class="block text-xs text-slate-500 mb-1">Vale para</span>
+      <select id="at-ciclo" class="w-full px-3 py-2 border border-slate-300 rounded-md">
+        <option value="">Todos os ciclos (padrão do roteiro)</option>
+        ${(pro.dados.ciclos || []).map(x => `<option value="${x.id}" ${x.id === pro.ciclo ? 'selected' : ''}>
+          Só ${PRO_TIPO[x.tipo]} · ${x.numero} (exceção)</option>`).join('')}
+      </select></label>
+    <div class="flex gap-2">
+      <label class="w-36"><span class="block text-xs text-slate-500 mb-1">Escopo</span>
+        <select id="at-escopo" class="w-full px-3 py-2 border border-slate-300 rounded-md">
+          <option value="modulo">Módulo</option><option value="processo">Processo</option>
+          <option value="item">Linha</option>
+        </select></label>
+      <label class="flex-1"><span class="block text-xs text-slate-500 mb-1">Alvo</span>
+        <select id="at-alvo" class="w-full px-3 py-2 border border-slate-300 rounded-md"></select></label>
+    </div>
+    ${campo('at-email', 'E-mail do responsável', '', 'email',
+            'Precisa já ter acesso a este cliente — atribuir a quem não tem cria dono fantasma.')}
+    <datalist id="at-pessoas">${pessoas.map(p => `<option value="${escapeHtml(p)}">`).join('')}</datalist>
+    <label class="flex items-center gap-2 text-xs text-slate-600">
+      <input type="checkbox" id="at-tirar" class="rounded"> Tirar a atribuição em vez de gravar</label>`,
+    'Atribuir');
+  m.campo('at-email').setAttribute('list', 'at-pessoas');
+  const escopo = m.campo('at-escopo'), alvo = m.campo('at-alvo');
+  const pintaAlvo = () => {
+    const v = escopo.value;
+    alvo.innerHTML = v === 'modulo' ? mods.map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('')
+      : v === 'processo' ? procs.map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('')
+      : itens.map(i => `<option value="${i.id}">${i.ordem} · ${escapeHtml(i.descricao.slice(0, 60))}</option>`).join('');
+  };
+  pintaAlvo(); escopo.addEventListener('change', pintaAlvo);
+  m.aoConfirmar(async () => {
+    const email = m.campo('at-email').value.trim();
+    const tirar = m.campo('at-tirar').checked;
+    if (!alvo.value) { m.erro('Escolha o alvo.'); return; }
+    if (!email && !tirar) { m.erro('Informe o e-mail do responsável.'); return; }
+    m.erro(''); m.ocupado(true, tirar ? 'Removendo…' : 'Atribuindo…');
+    try {
+      await api(`/api/proto/${encodeURIComponent(pro.customer)}/roteiro/${pro.rid}/atribuicoes`, {
+        method: tirar ? 'DELETE' : 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ciclo_id: m.campo('at-ciclo').value || null,
+                               regras: [{ escopo: escopo.value, alvo: alvo.value, email }] }),
+      });
+      m.fecha(); carregaRoteiro();
+    } catch (e) { m.ocupado(false, 'Atribuir'); m.erro(e.message); }
+  });
+}
+$('#pro-atribuir').addEventListener('click', abreAtribuirProto);
 
 // ============================================================================
 //  ACESSOS — e-mails × cliente × abas (só admin)
