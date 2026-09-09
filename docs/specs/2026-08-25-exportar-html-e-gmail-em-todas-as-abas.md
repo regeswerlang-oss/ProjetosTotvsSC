@@ -168,3 +168,40 @@ segue com o inline de sempre):
 
 **Como conferir:** `/tmp/print_check.py` gera o PDF em A4 paisagem e confirma a
 regra `@page`, o fator de zoom e a contagem de páginas.
+
+## De que BASE é este relatório? (09/09/2026)
+
+O export de Cadastros saía sem dizer se era **Base Produção** ou **Base de
+Testes**. Um relatório de teste circula por e-mail e é lido como se fosse
+produção — o erro é silencioso e caro.
+
+**Por que faltava só ali:** a moldura comum já recebia um `extra` com o rótulo,
+mas o relatório de Cadastros é **curado** — monta a própria moldura e não passa
+por `molduraRelatorio()`. Quem só olha a função comum não encontra o buraco.
+
+**O que mudou:**
+
+- `seloBaseHTML(ambiente)` — um selo colorido (verde para produção, âmbar para
+  testes) **ao lado do título**, não uma palavra perdida no subtítulo. Quem bate
+  o olho vê a base antes de ler o número.
+- O selo entra nos **dois** caminhos: na `molduraRelatorio()` (novo parâmetro
+  `base`) e, à mão, no relatório curado de Cadastros.
+- Vai também no `<title>` da página, no **nome do arquivo**
+  (`cadastros-teste-tfehxq00-20260909.html`) e no **assunto do e-mail**
+  (`Status dos Cadastros · BASE DE TESTES · …`). O arquivo baixado vive solto na
+  pasta e o assunto é o que decide se alguém abre.
+
+**A armadilha que isso evitou:** `baseDaAba()` NÃO usa `cad.ambiente` sempre. A
+aba Cadastros é guarda-chuva de quatro sub-abas, e as de Movimentos leem
+`mov.ambiente`. Rotular o relatório de Movimentos com a base de Cadastros seria
+pior do que não rotular — um rótulo errado é lido como verdade.
+
+Abas que não são por base (Resumo, Por Etapa, GAPs, Tarefas…) continuam sem
+selo: `baseDaAba()` devolve `null` e nada é impresso.
+
+**De quebra:** a aba **Protótipo** nasceu sem entrada em `RELATORIOS` — o botão
+de export morria nela com "não há nada nesta aba". Registrada.
+
+**Como conferir:** `/tmp/base_check.py` percorre as quatro sub-abas e confere o
+selo no HTML, no `<title>`, no nome do arquivo e no assunto do e-mail, mais uma
+aba sem base (não pode ganhar selo) e a Protótipo (tem que exportar).

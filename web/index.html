@@ -4389,14 +4389,19 @@ function relatorioCadastrosHTML() {
       <b>Sem estimativa cadastrada.</b> Os números são a contagem absoluta da última medição —
       não há % de carga nem semáforo.</p>`;
 
+  // Este relatório monta a própria moldura (não passa por molduraRelatorio),
+  // então o selo da base tem que ser posto aqui também — foi por isso que o
+  // export de Cadastros saía sem dizer de que base era.
+  const base = cad.ambiente;
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
-<title>Status dos Cadastros · ${escapeHtml(cliente)}</title></head>
+<title>Status dos Cadastros · ${SELO_BASE[base] ? SELO_BASE[base].rot : ''} · ${escapeHtml(cliente)}</title></head>
 <body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
 <div style="max-width:900px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
   <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
-  <h1 style="margin:4px 0 2px;font-size:22px">Status dos Cadastros</h1>
+  <h1 style="margin:4px 0 2px;font-size:22px">Status dos Cadastros${seloBaseHTML(base)}</h1>
   <p style="margin:0;color:${C.cinza};font-size:13px">
     ${escapeHtml(p.projeto || 'Monitoramento de Cadastros')} ·
+    ${SELO_BASE[base] ? SELO_BASE[base].rot.toLowerCase() : ''} ·
     última medição ${fmtData(String(j.ultima_medicao || ''))} · ${j.total_medicoes} medição(ões)</p>
   ${aviso}
   <table style="width:100%;border-collapse:separate;margin:16px 0"><tr>${kpis}</tr></table>
@@ -4618,6 +4623,7 @@ const RELATORIOS = {
   tarefas:   { titulo: 'Tarefas',                 alvo: '#tab-tarefas' },
   cadastros: { titulo: 'Status dos Cadastros',    alvo: '#tab-cadastros', curado: relatorioCadastrosHTML },
   cobertura: { titulo: 'Cobertura de Cenários',   alvo: '#tab-cobertura', curado: relatorioCoberturaHTML },
+  prototipo: { titulo: 'Protótipo',               alvo: '#tab-prototipo' },
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
 };
 
@@ -4636,7 +4642,37 @@ function larguraDoConteudo(el) {
   return Math.max(0, ...larguras);
 }
 
-function molduraRelatorio(titulo, corpo, extra = '', largura = 0) {
+// A BASE PRECISA ESTAR NO PAPEL. Um relatório de Base de Testes circula por
+// e-mail e é lido como se fosse Produção — o erro é silencioso e caro. Por isso
+// o selo é um bloco colorido ao lado do título, não uma palavra no meio do
+// subtítulo: quem bate o olho tem que ver de que base é antes de ler o número.
+const SELO_BASE = {
+  producao: { rot: 'BASE PRODUÇÃO',  bg: '#d1fae5', fg: '#065f46' },
+  teste:    { rot: 'BASE DE TESTES', bg: '#fef3c7', fg: '#78350f' },
+};
+
+function seloBaseHTML(ambiente) {
+  const b = SELO_BASE[ambiente];
+  if (!b) return '';
+  return `<span style="display:inline-block;margin-left:10px;padding:3px 10px;border-radius:99px;
+    background:${b.bg};color:${b.fg};font-size:11px;font-weight:700;letter-spacing:.04em;
+    vertical-align:middle">${b.rot}</span>`;
+}
+
+/** Qual base a aba aberta está mostrando.
+ *  Cadastros é guarda-chuva de QUATRO sub-abas: as de Movimentos leem
+ *  `mov.ambiente`, não `cad.ambiente`. Usar sempre o de cadastros rotularia o
+ *  relatório de Movimentos com a base errada — pior que não rotular. */
+function baseDaAba(aba) {
+  if (aba === 'cadastros') {
+    const sub = SUBABAS[state.sub] || SUBABAS.cad_prod;
+    return sub.painel === 'movimentos' ? mov.ambiente : cad.ambiente;
+  }
+  if (aba === 'transicao') return cad.ambiente;
+  return null;                       // as demais não são por base
+}
+
+function molduraRelatorio(titulo, corpo, extra = '', largura = 0, base = null) {
   const p = state.selected?.projeto || {};
   const cliente = (p.nome_cliente_projeto || '').trim() || '—';
   const C = { petroleo: '#002233', cinza: '#545454' };
@@ -4665,11 +4701,11 @@ function molduraRelatorio(titulo, corpo, extra = '', largura = 0) {
     }
   </style>`;
   return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">
-<title>${escapeHtml(titulo)} · ${escapeHtml(cliente)}</title>${estilos}</head>
+<title>${escapeHtml(titulo)}${base ? ' · ' + SELO_BASE[base].rot : ''} · ${escapeHtml(cliente)}</title>${estilos}</head>
 <body style="margin:0;padding:24px;background:#E6E6E6;font-family:Inter,'Segoe UI',system-ui,sans-serif;color:${C.petroleo}">
 <div class="rel-cartao" style="max-width:${larg}px;margin:0 auto;background:#fff;border-radius:10px;padding:24px;overflow-x:auto">
   <p style="margin:0;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:#0891b2;font-weight:700">${escapeHtml(cliente)}</p>
-  <h1 style="margin:4px 0 2px;font-size:22px">${escapeHtml(titulo)}</h1>
+  <h1 style="margin:4px 0 2px;font-size:22px">${escapeHtml(titulo)}${seloBaseHTML(base)}</h1>
   <p style="margin:0;color:${C.cinza};font-size:13px">
     ${escapeHtml((p.descricao_projeto || p.projeto || '').trim())}${p.projeto_id ? ` · ${escapeHtml(p.projeto_id)}` : ''}${extra}</p>
   <div style="margin-top:16px">${corpo}</div>
@@ -4687,30 +4723,29 @@ function relatorioDaAba({ email = false } = {}) {
   // vale na visão "atual"; na de evolução o snapshot é que conta a história.
   if (r.curado && !(aba === 'cadastros' && cad.visao === 'evolucao')) {
     const h = r.curado();
-    if (h) return { titulo: r.titulo, html: h, aba };
+    if (h) return { titulo: r.titulo, html: h, aba, base: baseDaAba(aba) };
   }
   const el = $(r.alvo);
   const corpo = snapshotAba(el, { email });
   if (!corpo.trim()) return null;
-  let extra = '';
-  if (aba === 'cadastros' || aba === 'transicao') {
-    const a = AMB[cad.ambiente]; if (a) extra = ` · ${a.label}`;
-  }
-  return { titulo: r.titulo, aba,
-           html: molduraRelatorio(r.titulo, corpo, extra, larguraDoConteudo(el)) };
+  const base = baseDaAba(aba);
+  return { titulo: r.titulo, aba, base,
+           html: molduraRelatorio(r.titulo, corpo, '', larguraDoConteudo(el), base) };
 }
 
-function nomeArquivoRel(aba) {
+function nomeArquivoRel(aba, base) {
   const cli = (state.selected?.cli || '').toLowerCase() || 'projeto';
   const hoje = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  return `${aba}-${cli}-${hoje}.html`;
+  // o arquivo baixado vive solto na pasta do usuário: o nome também diz a base
+  const b = base ? `-${base === 'teste' ? 'teste' : 'producao'}` : '';
+  return `${aba}${b}-${cli}-${hoje}.html`;
 }
 
 $('#ab-html').addEventListener('click', () => {
   const r = relatorioDaAba();
   if (!r) { alert('Não há nada nesta aba para exportar. Abra os dados primeiro.'); return; }
   const url = URL.createObjectURL(new Blob([r.html], { type: 'text/html;charset=utf-8' }));
-  const a = Object.assign(document.createElement('a'), { href: url, download: nomeArquivoRel(r.aba) });
+  const a = Object.assign(document.createElement('a'), { href: url, download: nomeArquivoRel(r.aba, r.base) });
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 });
@@ -5322,7 +5357,10 @@ function abreModalEmail() {
   const html = r.html;
   const cliente = (state.selected?.projeto?.nome_cliente_projeto || '').trim();
   const hoje = new Date().toLocaleDateString('pt-BR');
-  const assunto = [r.titulo, cliente, hoje].filter(Boolean).join(' · ');
+  // A base entra no ASSUNTO, não só no corpo: quem recebe decide se abre pelo
+  // assunto, e confundir Testes com Produção num e-mail já custou caro.
+  const selo = r.base && SELO_BASE[r.base] ? SELO_BASE[r.base].rot : '';
+  const assunto = [r.titulo, selo, cliente, hoje].filter(Boolean).join(' · ');
 
   const m = modal('Criar rascunho no Gmail',
     campo('em-para', 'Para (separe por vírgula)') +
