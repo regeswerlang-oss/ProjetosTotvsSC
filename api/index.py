@@ -3418,7 +3418,7 @@ def api_proto_lista(customer):
                     (select count(*) from cockpit.proto_resultados x
                       where x.ciclo_id=c.id and x.status <> 'nao_iniciado') as respondidos
                    from cockpit.proto_ciclos c
-                  where c.roteiro_id = any(%s) order by c.tipo, c.numero""",
+                  where c.roteiro_id = any(%s::uuid[]) order by c.tipo, c.numero""",
                (ids,)) if ids else []
     if not ctx["interno"]:
         ciclos = [c for c in ciclos if c["visivel_cliente"]]
@@ -3449,7 +3449,7 @@ def api_proto_roteiro(customer, rid):
     if not ctx["interno"]:
         ciclos = [c for c in ciclos if c["visivel_cliente"]]
     cids = [c["id"] for c in ciclos]
-    res = q("select * from cockpit.proto_resultados where ciclo_id = any(%s)",
+    res = q("select * from cockpit.proto_resultados where ciclo_id = any(%s::uuid[])",
             (cids,)) if cids else []
     # Responsável é por CICLO (a exceção do ciclo sobrepõe o padrão do roteiro),
     # então vem um mapa por ciclo — a tela troca de ciclo sem nova requisição.
@@ -3793,7 +3793,7 @@ def api_proto_resultado(customer, cid):
     ids = [str(x.get("item_id") or "") for x in lote if x.get("item_id")]
     if not lote or len(ids) != len(lote):
         return _err(400, "Todo item precisa de item_id.")
-    itens = q("select * from cockpit.proto_itens where id = any(%s) and roteiro_id=%s",
+    itens = q("select * from cockpit.proto_itens where id = any(%s::uuid[]) and roteiro_id=%s",
               (ids, ciclo["roteiro_id"]))
     donos = {str(i["id"]): i for i in itens}
     if len(donos) != len(set(ids)):
@@ -3855,7 +3855,7 @@ def api_proto_validar(customer, cid):
     if not lote or len(ids) != len(lote):
         return _err(400, "Todo item precisa de item_id.")
     donos = {str(i["id"]): i for i in q(
-        "select * from cockpit.proto_itens where id = any(%s) and roteiro_id=%s",
+        "select * from cockpit.proto_itens where id = any(%s::uuid[]) and roteiro_id=%s",
         (ids, ciclo["roteiro_id"]))}
     if len(donos) != len(set(ids)):
         return _err(404, "Item que não pertence a este roteiro.")
@@ -4098,7 +4098,7 @@ def api_proto_indicadores(customer, rid):
     if not eh_interno():
         ciclos = [c for c in ciclos if c["visivel_cliente"]]
     cids = [c["id"] for c in ciclos]
-    res = q("select * from cockpit.proto_resultados where ciclo_id = any(%s)",
+    res = q("select * from cockpit.proto_resultados where ciclo_id = any(%s::uuid[])",
             (cids,)) if cids else []
     por_ciclo = {}
     for r_ in res:
