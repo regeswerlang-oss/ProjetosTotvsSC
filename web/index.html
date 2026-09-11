@@ -6101,7 +6101,8 @@ $('#pro-atribuir').addEventListener('click', abreAtribuirProto);
 // Colar e-mails é de propósito: o admin recebe a lista pronta do cliente
 // ("fulano@, ciclano@ e beltrano@") e cola inteira — o backend extrai os
 // endereços de qualquer formato, inclusive "Nome <email>".
-const acs = { dados: null, sel: new Set(), abas: new Set(), busca: '' };
+const acs = { dados: null, sel: new Set(), abas: new Set(), busca: '',
+              emails: '', papel: '', papelMod: '', mods: new Set() };
 
 async function abreAcessos() {
   const fundo = document.createElement('div');
@@ -6125,6 +6126,7 @@ async function abreAcessos() {
   fundo.addEventListener('click', e => { if (e.target === fundo) fecha(); });
   acs.el = fundo; acs.fecha = fecha;
   acs.sel = new Set(); acs.abas = new Set(); acs.busca = '';
+  acs.emails = ''; acs.papel = ''; acs.papelMod = ''; acs.mods = new Set();
   try {
     acs.dados = await api('/api/acessos');
     // Protótipo: já vem com a aba padrão da área de clientes marcada.
@@ -6140,6 +6142,66 @@ function perfilAcessos() {
   return acs.el.querySelector('#acs-perfil')?.value || 'cliente';
 }
 
+// Papel e módulos NA MESMA TELA das abas: quem libera o consultor no cliente
+// é quem sabe o que ele valida. A gravação é a mesma tabela do modal "Equipe
+// do protótipo" — as duas telas são portas para o mesmo dado, não dois dados.
+function papeisDoPerfil() {
+  const perfil = perfilAcessos();
+  return (acs.dados.papeis || []).filter(p => perfil !== 'cliente' || !p.totvs);
+}
+
+// Módulos dos clientes MARCADOS. A lista é só o que existe no cliente (roteiro
+// do protótipo, Cadastros e Movimentos) — oferecer um módulo inventado grava
+// uma liberação que não aparece em tela nenhuma.
+function modulosDisponiveis() {
+  const mapa = acs.dados.modulos_cliente || {};
+  const u = new Set();
+  [...acs.sel].forEach(c => (mapa[c] || []).forEach(m => u.add(m)));
+  return [...u].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+function htmlModulosAcessos() {
+  if (!acs.papel) return '';
+  const mods = modulosDisponiveis();
+  const aviso = !acs.sel.size
+    ? 'Marque os clientes acima para ver os módulos deles.'
+    : (mods.length ? '' : 'Nenhum módulo conhecido nos clientes marcados — eles aparecem '
+        + 'depois do roteiro do protótipo ou da primeira medição de Cadastros e Movimentos.');
+  return `
+    <div class="flex gap-2 pt-1">
+      <label class="w-36"><span class="block text-xs text-slate-500 mb-1">Nos módulos, ele</span>
+        <select id="acs-papel-mod" class="w-full px-2 py-1.5 border border-slate-300 rounded-md">
+          <option value="valida" ${acs.papelMod === 'valida' ? 'selected' : ''}>Valida</option>
+          <option value="executa" ${acs.papelMod === 'executa' ? 'selected' : ''}>Executa</option>
+        </select></label>
+      <div class="flex-1">
+        <span class="block text-xs text-slate-500 mb-1">Módulos
+          <span class="text-slate-400">(o que ficar desmarcado sai deste papel)</span></span>
+        ${aviso
+          ? `<p class="text-[11px] text-slate-400 border border-dashed border-slate-200 rounded-md p-2">${aviso}</p>`
+          : `<div class="border border-slate-200 rounded-md p-1 grid grid-cols-2 max-h-32 overflow-y-auto">
+              <label class="cx-linha"><input type="checkbox" data-mod="*" ${acs.mods.has('*') ? 'checked' : ''} class="rounded"><span><b>*</b> todos</span></label>
+              ${mods.map(m => `<label class="cx-linha">
+                <input type="checkbox" data-mod="${escapeHtml(m)}" ${acs.mods.has(m) ? 'checked' : ''} class="rounded">
+                <span class="truncate">${escapeHtml(m)}</span></label>`).join('')}
+            </div>`}
+      </div>
+    </div>`;
+}
+
+// Repinta SÓ o bloco de módulos. Repintar a tela inteira a cada cliente
+// marcado apagaria os e-mails já colados — que é o trabalho manual da tela.
+function renderModulosAcessos() {
+  const box = acs.el.querySelector('#acs-mods-box');
+  if (!box) return;
+  box.innerHTML = htmlModulosAcessos();
+  box.querySelectorAll('[data-mod]').forEach(c => c.addEventListener('change', () => {
+    c.checked ? acs.mods.add(c.dataset.mod) : acs.mods.delete(c.dataset.mod);
+  }));
+  const pm = box.querySelector('#acs-papel-mod');
+  if (pm) pm.addEventListener('change', () => { acs.papelMod = pm.value; });
+}
+
 function pintaAcessos() {
   const d = acs.dados;
   const perfil = perfilAcessos();
@@ -6152,8 +6214,21 @@ function pintaAcessos() {
 
   const nomeCli = Object.fromEntries(d.clientes.map(c => [c.customer, c.nome]));
   const nomeUsr = Object.fromEntries(d.usuarios.map(u => [u.email.toLowerCase(), u.nome || u.email]));
+  const rotPapelAcs = Object.fromEntries((d.papeis || []).map(p => [p.id, p.label]));
   const porCliente = new Map();
   d.liberacoes.forEach(l => porCliente.set(l.customer, (porCliente.get(l.customer) || []).concat([l])));
+  // Módulos liberados por par usuário × cliente — é o que a linha mostra
+  // embaixo das abas, para conferir sem abrir o modal do protótipo.
+  const modsPar = new Map();
+  (d.modulos_liberados || []).forEach(m => {
+    const k = `${m.customer}|${m.email.toLowerCase()}`;
+    modsPar.set(k, (modsPar.get(k) || []).concat([m]));
+  });
+  const rotPapelMods = (cust, email) => {
+    const ms = modsPar.get(`${cust}|${email.toLowerCase()}`) || [];
+    return ms.map(m => `<span class="chip-aba" title="${m.papel === 'valida' ? 'valida' : 'executa'}">${
+      m.papel === 'valida' ? '✓ ' : ''}${escapeHtml(m.modulo)}</span>`).join('');
+  };
 
   const rotAbas = (abas) => abas === null
     ? '<span class="chip-aba" title="Nenhuma aba marcada: herda o padrão">herda o padrão</span>'
@@ -6167,15 +6242,21 @@ function pintaAcessos() {
       <div class="border-t border-slate-100 py-2">
         <p class="font-semibold text-totvs-petroleo text-xs uppercase tracking-wide">
           ${escapeHtml(nomeCli[cust] || cust)} <span class="text-slate-400 font-normal">· ${escapeHtml(cust)}</span></p>
-        ${ls.map(l => `
-          <div class="flex items-start gap-2 py-1">
-            <span class="w-64 shrink-0 truncate" title="${escapeHtml(l.email)}">${escapeHtml(nomeUsr[l.email.toLowerCase()] || l.email)}</span>
-            <span class="flex-1">${rotAbas(l.abas)}</span>
-            <button data-edita="${escapeHtml(l.email)}|${escapeHtml(cust)}"
-              class="px-2 py-0.5 rounded border border-slate-300 text-xs hover:bg-slate-50">editar</button>
-            <button data-remove="${escapeHtml(l.email)}|${escapeHtml(cust)}"
-              class="px-2 py-0.5 rounded border border-rose-200 text-rose-700 text-xs hover:bg-rose-50">tirar</button>
-          </div>`).join('')}
+        ${ls.map(l => {
+          const extra = [l.papel ? `<span class="chip-aba" style="background:#e0f2fe;color:#075985">${
+            escapeHtml(rotPapelAcs[l.papel] || l.papel)}</span>` : '', rotPapelMods(cust, l.email)].join('');
+          return `
+          <div class="py-1">
+            <div class="flex items-start gap-2">
+              <span class="w-64 shrink-0 truncate" title="${escapeHtml(l.email)}">${escapeHtml(nomeUsr[l.email.toLowerCase()] || l.email)}</span>
+              <span class="flex-1">${rotAbas(l.abas)}</span>
+              <button data-edita="${escapeHtml(l.email)}|${escapeHtml(cust)}"
+                class="px-2 py-0.5 rounded border border-slate-300 text-xs hover:bg-slate-50">editar</button>
+              <button data-remove="${escapeHtml(l.email)}|${escapeHtml(cust)}"
+                class="px-2 py-0.5 rounded border border-rose-200 text-rose-700 text-xs hover:bg-rose-50">tirar</button>
+            </div>
+            ${extra ? `<div class="pl-64 -mt-0.5">${extra}</div>` : ''}
+          </div>`; }).join('')}
       </div>`).join('') || '<p class="text-slate-400 py-6 text-center">Nenhuma liberação ainda.</p>';
 
   acs.el.querySelector('#acs-corpo').innerHTML = `
@@ -6184,7 +6265,7 @@ function pintaAcessos() {
         <div>
           <label class="block text-xs text-slate-500 mb-1">E-mails (cole a lista — vírgula, ponto-e-vírgula ou uma por linha)</label>
           <textarea id="acs-emails" rows="4" placeholder="fulano@cliente.com.br, Ciclano &lt;ciclano@cliente.com.br&gt;"
-            class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"></textarea>
+            class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs">${escapeHtml(acs.emails)}</textarea>
         </div>
         <div class="flex items-center gap-3">
           <label class="text-xs text-slate-500">Perfil</label>
@@ -6192,6 +6273,7 @@ function pintaAcessos() {
             <option value="cliente">Cliente — consulta, não altera o Tasks SC</option>
             <option value="leitor">Leitor — somente visualização</option>
             <option value="comum">Comum — equipe TOTVS</option>
+            <option value="consultoria">Consultoria — consultor que cadastra no projeto</option>
           </select>
           <label class="flex items-center gap-1.5 text-xs text-slate-500">
             <input type="checkbox" id="acs-aplicar-perfil" class="rounded"> aplicar a quem já existe
@@ -6223,6 +6305,15 @@ function pintaAcessos() {
           </div>
           <p class="text-[11px] text-slate-400 mt-1">Sem nenhuma marcada, o usuário do cliente fica liberado no cliente e sem aba — de propósito, não por engano.</p>
         </div>
+        <div class="border-t border-slate-100 pt-2">
+          <label class="block text-xs text-slate-500 mb-1">Papel no cliente
+            <span class="text-slate-400">(opcional — é o que diz quem coordena, quem valida e quem executa)</span></label>
+          <select id="acs-papel" class="w-full px-2 py-1.5 border border-slate-300 rounded-md">
+            <option value="">— não alterar —</option>
+            ${papeisDoPerfil().map(p => `<option value="${p.id}" ${acs.papel === p.id ? 'selected' : ''}>${escapeHtml(p.label)}</option>`).join('')}
+          </select>
+          <div id="acs-mods-box"></div>
+        </div>
         <div class="flex items-center gap-2 pt-1">
           <button id="acs-salvar" class="px-4 py-2 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">Liberar</button>
           <p id="acs-msg" class="text-xs"></p>
@@ -6238,12 +6329,31 @@ function pintaAcessos() {
   const el = (q) => acs.el.querySelector(q);
   el('#acs-n-cli').textContent = acs.sel.size ? `(${acs.sel.size} marcado(s))` : '';
   el('#acs-perfil').value = perfil;
+  // O que foi colado fica no estado: pintaAcessos() reescreve o innerHTML
+  // inteiro, e sem isto filtrar um cliente apagava a lista de e-mails.
+  el('#acs-emails').addEventListener('input', (e) => { acs.emails = e.target.value; });
   el('#acs-busca').addEventListener('input', (e) => { acs.busca = e.target.value; pintaAcessos(); });
-  el('#acs-perfil').addEventListener('change', pintaAcessos);
+  el('#acs-perfil').addEventListener('change', () => {
+    // Papel da TOTVS não sobrevive a virar login de cliente — o servidor
+    // recusaria com 409 e a tela ficaria mentindo até o Liberar.
+    const totvs = (acs.dados.papeis || []).find(p => p.id === acs.papel);
+    if (perfilAcessos() === 'cliente' && totvs && totvs.totvs) { acs.papel = ''; acs.mods = new Set(); }
+    pintaAcessos();
+  });
+  el('#acs-papel').addEventListener('change', (e) => {
+    acs.papel = e.target.value;
+    // Consultor e CP validam; usuário-chave e CP do cliente executam. É o
+    // padrão certo em 9 de 10 vezes e continua trocável no seletor.
+    if (!acs.papelMod || acs.papel)
+      acs.papelMod = ['cp_totvs', 'consultor'].includes(acs.papel) ? 'valida' : 'executa';
+    renderModulosAcessos();
+  });
   acs.el.querySelectorAll('[data-cli]').forEach(c => c.addEventListener('change', () => {
     c.checked ? acs.sel.add(c.dataset.cli) : acs.sel.delete(c.dataset.cli);
     el('#acs-n-cli').textContent = acs.sel.size ? `(${acs.sel.size} marcado(s))` : '';
+    renderModulosAcessos();   // os módulos são os DOS clientes marcados
   }));
+  renderModulosAcessos();
   acs.el.querySelectorAll('[data-aba]').forEach(c => c.addEventListener('change', () => {
     c.checked ? acs.abas.add(c.dataset.aba) : acs.abas.delete(c.dataset.aba);
   }));
@@ -6252,8 +6362,16 @@ function pintaAcessos() {
     const l = acs.dados.liberacoes.find(x => x.email === email && x.customer === cust);
     acs.sel = new Set([cust]);
     acs.abas = new Set(l?.abas || acs.dados.abas_padrao_cliente || []);
+    acs.papel = l?.papel || '';
+    // Traz os módulos já liberados para a tela: sem isto, gravar de novo
+    // (a gravação SUBSTITUI o conjunto do papel) apagaria o que ele tinha.
+    const meus = (acs.dados.modulos_liberados || []).filter(
+      m => m.customer === cust && m.email.toLowerCase() === email.toLowerCase());
+    acs.papelMod = meus.some(m => m.papel === 'valida') ? 'valida'
+      : (meus.length ? 'executa' : (['cp_totvs', 'consultor'].includes(acs.papel) ? 'valida' : 'executa'));
+    acs.mods = new Set(meus.filter(m => m.papel === acs.papelMod).map(m => m.modulo));
+    acs.emails = email;
     pintaAcessos();
-    el('#acs-emails').value = email;
     el('#acs-emails').scrollIntoView({ block: 'nearest' });
   }));
   acs.el.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', async () => {
@@ -6283,13 +6401,28 @@ async function salvaAcessos() {
         abas: [...acs.abas],
         perfil: el('#acs-perfil').value,
         aplicar_perfil: el('#acs-aplicar-perfil').checked,
+        papel: acs.papel || null,
+        papel_modulo: acs.papelMod || null,
+        modulos: acs.papel ? [...acs.mods] : [],
       }),
     });
     acs.dados = await api('/api/acessos');
     pintaAcessos();
     const m2 = acs.el.querySelector('#acs-msg');
     m2.className = 'text-xs text-emerald-700';
-    m2.textContent = `${j.liberacoes} liberação(ões) — ${j.emails.length} e-mail(s) × ${j.customers.length} cliente(s).`;
+    const extra = [
+      j.papel ? 'papel definido' : '',
+      (j.modulos || []).length ? `${j.modulos.length} módulo(s) em "${j.papel_modulo}"` : '',
+    ].filter(Boolean).join(' · ');
+    m2.textContent = `${j.liberacoes} liberação(ões) — ${j.emails.length} e-mail(s) × `
+      + `${j.customers.length} cliente(s)${extra ? ' · ' + extra : ''}.`;
+    // Módulo marcado que não existe naquele cliente não é erro de digitação do
+    // admin — é a lista sendo a UNIÃO dos clientes marcados. Dizer qual ficou
+    // de fora evita a conclusão errada de que a gravação falhou.
+    if ((j.modulos_ignorados || []).length) {
+      m2.className = 'text-xs text-amber-700';
+      m2.textContent += ` Fora do catálogo (não gravados): ${j.modulos_ignorados.join('; ')}.`;
+    }
     // A senha provisória aparece UMA vez: não fica gravada em lugar nenhum.
     if (j.criados.length) {
       acs.el.querySelector('#acs-senhas').innerHTML = `

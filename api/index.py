@@ -273,8 +273,14 @@ def deny_customer(cust):
 #
 # Esconder o botão na tela NÃO é proteger: quem não é interno é barrado aqui,
 # no servidor (require_interno), mesmo chamando a rota na mão.
-PERFIS = ("admin", "comum", "cliente", "leitor")
-PERFIS_INTERNOS = ("admin", "comum", "leitor")     # gente da TOTVS
+PERFIS = ("admin", "comum", "consultoria", "cliente", "leitor")
+# 'consultoria' = consultor que trabalha nos projetos (TOTVS ou parceiro): tem o
+# MESMO poder de 'comum', só o rótulo é próprio, para dar para separar quem é
+# consultoria de quem é do time fixo sem inventar um terceiro eixo de permissão.
+# ARMADILHA: a tabela usuarios_login é compartilhada com o cockpit-unico-tsc, e
+# lá perfil desconhecido degrada para 'leitor' — o perfil novo tem que entrar no
+# CHECK do banco E no src/lib/auth/perfis.ts antes de ser usado de verdade.
+PERFIS_INTERNOS = ("admin", "comum", "consultoria", "leitor")   # gente da TOTVS
 
 # Catálogo das abas do detalhe do projeto. 'cliente' diz se a aba PODE ser
 # liberada para um usuário do cliente — 'consumo' fica de fora de propósito
@@ -569,14 +575,24 @@ def api_acessos():
                            u.ativo, u.last_login
                       from cockpit.usuarios_login u
                      order by coalesce(u.nome, u.email)""")
-    liberacoes = q("""select uc.email, uc.customer, uc.abas, c.nome as cliente_nome
+    liberacoes = q("""select uc.email, uc.customer, uc.abas, uc.papel,
+                             c.nome as cliente_nome
                         from cockpit.usuario_clientes uc
                         left join cockpit.clientes c on c.customer = uc.customer
                        order by uc.customer, uc.email""")
     clientes = q("select customer, nome from cockpit.clientes order by nome")
+    # Papel e módulos vêm JUNTO das abas porque é a mesma pergunta do admin:
+    # "o que essa pessoa faz neste cliente?". Ter que abrir o modal do protótipo
+    # só para dizer que fulano valida Faturamento era o atrito que sobrava.
     return _json({"ok": True, "usuarios": usuarios, "liberacoes": liberacoes,
                   "clientes": clientes, "abas": ABAS, "perfis": list(PERFIS),
-                  "abas_padrao_cliente": ABAS_PADRAO_CLIENTE})
+                  "abas_padrao_cliente": ABAS_PADRAO_CLIENTE,
+                  "papeis": [{"id": p, "label": PROTO_PAPEL_LABEL[p],
+                              "totvs": p in PROTO_PAPEIS_TOTVS} for p in PROTO_PAPEIS],
+                  "modulos_cliente": modulos_por_cliente(),
+                  "modulos_liberados": q("""select customer, email, modulo, papel
+                                              from cockpit.proto_usuario_modulos
+                                             order by customer, email, papel, modulo""")})
 
 
 @app.post("/api/acessos")
@@ -587,7 +603,9 @@ def api_acessos_salvar():
     UMA ÚNICA VEZ nesta resposta — não fica gravada em lugar nenhum, nem em log.
 
     Body: {emails: "colado ou lista", customers: [...], abas: [...],
-           perfil: "cliente", criar_login: true}
+           perfil: "cliente", criar_login: true,
+           papel: null|"consultor"|…, papel_modulo: "executa"|"valida",
+           modulos: ["Faturamento", …] ou ["*"]}
     """
     if (r := require_admin()):
         return r
@@ -655,9 +673,63 @@ def api_acessos_salvar():
                values %s
                on conflict (email, customer) do update set abas = excluded.abas""",
             [(e, c, a, current_user()) for e, c, a in pares])
+    # ── Papel e módulos NESTE cliente ──────────────────────────────────────
+    # É a mesma tabela que o modal "Equipe do protótipo" grava. Está aqui
+    # porque liberar o consultor e dizer o que ele valida é UMA decisão só:
+    # separar em duas telas era o que fazia sobrar consultor liberado no
+    # cliente e sem módulo nenhum — e ele descobria isso ao ser barrado.
+    alvos = [canon[e] for e in emails]
+    papel = (b.get("papel") or "").strip() or None
+    papel_mod = (b.get("papel_modulo") or "").strip() or None
+    modulos = [str(m).strip() for m in (b.get("modulos") or []) if str(m).strip()]
+    ignorados = []
+
+    if papel:
+        if papel not in PROTO_PAPEIS:
+            return _err(400, f"Papel desconhecido: {papel}")
+        # Papel de coordenação/validação é da TOTVS. Confere DEPOIS de criar o
+        # login e de aplicar o perfil — senão recusaria o consultor que acabou
+        # de ser criado com o perfil certo nesta mesma chamada.
+        if papel in PROTO_PAPEIS_TOTVS:
+            externos = [e for e in alvos if perfil_do(e) not in PERFIS_INTERNOS]
+            if externos:
+                return _err(409, "Papel da TOTVS não pode ser dado a login de cliente: "
+                                 + ", ".join(externos))
+        execute("""update cockpit.usuario_clientes set papel=%s
+                    where customer=any(%s) and lower(email)=any(%s)""",
+                (papel, customers, emails))
+
+    if modulos:
+        if papel_mod not in ("executa", "valida"):
+            return _err(400, "Para liberar módulos, diga se a pessoa EXECUTA ou VALIDA.")
+        # Módulo que não existe naquele cliente vira liberação fantasma: fica
+        # gravada, não aparece em lugar nenhum e engana na próxima conferência.
+        # '*' é o coringa "todos" e passa sempre.
+        catalogo = {c: set(modulos_do_cliente(c)) for c in customers}
+        linhas = []
+        for c in customers:
+            for m in modulos:
+                if m == "*" or m in catalogo[c]:
+                    linhas += [(c, e, m, papel_mod, None, current_user()) for e in alvos]
+                else:
+                    ignorados.append(f"{c} · {m}")
+        # SUBSTITUI o conjunto daquele papel nos pares marcados: o que a tela
+        # mostra desmarcado tem que sair, senão desmarcar não faria nada.
+        execute("""delete from cockpit.proto_usuario_modulos
+                    where customer=any(%s) and lower(email)=any(%s) and papel=%s""",
+                (customers, emails, papel_mod))
+        if linhas:
+            with db() as conn, conn.cursor() as cur:
+                execute_values(cur,
+                    """insert into cockpit.proto_usuario_modulos
+                         (customer, email, modulo, papel, processo, created_by) values %s
+                       on conflict do nothing""", linhas)
+
     return _json({"ok": True, "emails": emails, "customers": customers, "abas": abas,
                   "criados": criados, "existentes": existentes,
-                  "liberacoes": len(pares)})
+                  "liberacoes": len(pares), "papel": papel,
+                  "modulos": modulos if modulos else [], "papel_modulo": papel_mod,
+                  "modulos_ignorados": sorted(set(ignorados))})
 
 
 @app.delete("/api/acessos")
@@ -3153,6 +3225,56 @@ def require_cp(customer):
     return None
 
 
+# ── CATÁLOGO DE MÓDULOS DO CLIENTE ─────────────────────────────────────────
+# FONTE ÚNICA, de propósito: a tela de Acessos e o modal "Equipe do protótipo"
+# liberam módulo para a MESMA pessoa — duas listas diferentes é como se libera
+# num lugar um módulo que o outro nem enxerga.
+#
+# ARMADILHA (11/09/2026): a lista vinha SÓ dos itens do roteiro do protótipo.
+# Cliente sem MIT045 importado abria o modal com "* todos" e mais nada — e o
+# admin concluía que o recurso estava quebrado. Módulo também mora em Cadastros
+# (monitcad_tabelas) e em Movimentos (monitmov_itens), que existem bem antes do
+# roteiro: é a união das três que dá uma lista útil no primeiro dia do projeto.
+_SQL_MODULOS = """
+    select r.customer as customer, i.modulo as modulo
+      from cockpit.proto_itens i
+      join cockpit.proto_roteiros r on r.id = i.roteiro_id
+     where r.ativo
+    union
+    select t.customer, t.modulo from cockpit.monitcad_tabelas t
+    union
+    select m.customer, m.modulo from cockpit.monitmov_itens m
+"""
+
+
+# '(sem módulo)' é RÓTULO de tela que já entrou no dado (agrupamento de
+# medição sem módulo preenchido). Liberar alguém nele não significa nada.
+_MODULO_VALIDO = ("modulo is not null and btrim(modulo) <> '' "
+                  "and lower(btrim(modulo)) not in "
+                  "('(sem módulo)','(sem modulo)','sem módulo','sem modulo')")
+
+
+def modulos_do_cliente(customer):
+    """Módulos que EXISTEM neste cliente, ordenados. Lista vazia é resposta
+    legítima: o projeto ainda não tem roteiro nem medição."""
+    rows = q(f"""select distinct modulo from ({_SQL_MODULOS}) x
+                  where customer=%s and {_MODULO_VALIDO}
+                  order by 1""", (customer,))
+    return [r["modulo"] for r in rows]
+
+
+def modulos_por_cliente():
+    """{customer: [módulos]} numa consulta só — a tela de Acessos mexe em
+    vários clientes de uma vez e não pode fazer uma ida ao banco por cliente."""
+    rows = q(f"""select customer, modulo from ({_SQL_MODULOS}) x
+                  where {_MODULO_VALIDO}
+                  group by customer, modulo order by customer, modulo""")
+    mapa = {}
+    for r in rows:
+        mapa.setdefault(r["customer"], []).append(r["modulo"])
+    return mapa
+
+
 def proto_modulos_do_usuario(customer, email=None, papel="executa"):
     """Módulos em que a pessoa EXECUTA (ou VALIDA, com papel='valida').
     None = todos. Conjunto vazio = nenhum."""
@@ -3777,10 +3899,9 @@ def api_proto_equipe(customer):
                          join cockpit.usuarios_login u on u.email = uc.email
                         where uc.customer=%s order by coalesce(u.nome, uc.email)""",
                     (customer,))
-        mods = q("""select distinct i.modulo from cockpit.proto_itens i
-                      join cockpit.proto_roteiros r on r.id=i.roteiro_id
-                     where r.customer=%s and r.ativo and i.modulo is not null
-                     order by 1""", (customer,))
+        # Mesma lista da tela de Acessos (roteiro + Cadastros + Movimentos):
+        # antes vinha só do roteiro e o modal abria vazio em cliente sem MIT045.
+        mods = modulos_do_cliente(customer)
         procs = q("""select distinct i.processo from cockpit.proto_itens i
                        join cockpit.proto_roteiros r on r.id=i.roteiro_id
                       where r.customer=%s and r.ativo and i.processo is not null
@@ -3789,7 +3910,7 @@ def api_proto_equipe(customer):
                       "liberacoes": q("""select * from cockpit.proto_usuario_modulos
                                           where customer=%s order by email, papel, modulo""",
                                       (customer,)),
-                      "modulos": [m["modulo"] for m in mods],
+                      "modulos": mods,
                       "processos": [p["processo"] for p in procs],
                       "papeis": [{"id": p, "label": PROTO_PAPEL_LABEL[p]} for p in PROTO_PAPEIS]})
 
