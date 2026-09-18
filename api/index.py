@@ -295,6 +295,7 @@ ABAS = [
     {"id": "tarefas",   "label": "Tarefas",              "cliente": True},
     {"id": "cadastros", "label": "Cadastros e Movimentos", "cliente": True},
     {"id": "cobertura", "label": "Cobertura",            "cliente": True},
+    {"id": "empresas",  "label": "Empresas e Compartilhamento", "cliente": True},
     {"id": "prototipo", "label": "Protótipo",            "cliente": True},
     {"id": "transicao", "label": "Transição",            "cliente": True},
 ]
@@ -1333,7 +1334,8 @@ def api_monitcad_medicao_remover(customer):
                   "medicoes": len(ids), "linhas": linhas})
 
 
-SCRIPT_TIPOS = ("cadastros", "movimentos")
+# sm0 = P0 (leitura da SM0) e empresas = P1 da aba Empresas e Compartilhamento
+SCRIPT_TIPOS = ("cadastros", "movimentos", "sm0", "empresas")
 
 
 def _tipo_script():
@@ -1535,6 +1537,305 @@ def api_monitcad_upload(customer):
     return _json({"ok": True, "customer": customer, "ambiente": amb,
                   "formato": "csv" if ehcsv else "json", **r})
 
+
+
+# ── EMPRESAS E COMPARTILHAMENTO (MONITEMP) ──────────────────────────────────
+# Cadastros conta "quanto foi carregado"; esta aba responde "ONDE foi
+# carregado": em qual empresa (SRA010, SRA030…), com que conteúdo no campo
+# filial e se isso bate com o compartilhamento da SX2 daquela empresa. Carga de
+# legado costuma errar exatamente aqui — tudo na empresa 01, filial em branco
+# numa tabela exclusiva, código de filial de outra empresa.
+#
+# Dois passos, de propósito:
+#   P0  leitura MANUAL da SM0 (SYS_COMPANY) → cockpit.monitemp_sm0
+#   P1  medição empresa × tabela × filial   → cockpit.monitemp_medicoes/_itens
+# O script do P1 é MONTADO a partir do P0 (empresas e filiais viram literais):
+# sem conferir a SM0 com o cliente antes, o script mede a estrutura errada.
+# Gerador dos dois: web/assets/js/monitemp-sql.js (fonte única, browser + node).
+# Spec: docs/specs/2026-09-18-aba-empresas-compartilhamento.md
+
+EMP_SM0_COLS = {
+    "EMPRESA": "empresa", "FILIAL": "filial", "NOMEEMPRESA": "nome_empresa",
+    "NOMEFILIAL": "nome_filial", "CNPJ": "cnpj", "LEIAUTE": "leiaute",
+    "SIZEFIL": "sizefil", "SX2": "sx2", "QTDTABELAS": "qtd_tabelas",
+    "TABELASEXISTENTES": "tabelas", "DTLEITURA": "_dt", "SEMANA": "_semana",
+}
+EMP_COLS = {
+    "EMPRESA": "empresa", "NOMEEMPRESA": "nome_empresa", "LEIAUTE": "leiaute",
+    "TIPO": "tipo", "TABELA": "tabela", "DESCRICAO": "descricao",
+    "TABELAFISICA": "tabela_fisica", "SITUACAO": "situacao", "SX2": "sx2",
+    "FILIAL": "filial", "FILIALTIPO": "filial_tipo", "NOMEFILIAL": "nome_filial",
+    "QTDE": "qtde", "QTD": "qtde", "DTLEITURA": "_dt", "SEMANA": "_semana",
+}
+
+
+def _csv_linhas(texto, mapa, obrig):
+    """CSV → lista de dicts pelas colunas de `mapa`. Mesmo sniff do importador
+    de cadastros (';' do console e da REST, ',' de planilha)."""
+    try:
+        dial = csv.Sniffer().sniff(texto[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dial = csv.excel
+    linhas = list(csv.reader(io.StringIO(texto), dial))
+    if not linhas:
+        raise ValueError("CSV vazio.")
+    cabec = [mapa.get(_norm_col(c)) for c in linhas[0]]
+    falta = [c for c in obrig if mapa[c] not in cabec]
+    if falta:
+        raise ValueError("CSV sem a(s) coluna(s) " + ", ".join(falta) + ". Cabeçalho recebido: "
+                         + ", ".join(c.strip() for c in linhas[0] if c.strip()))
+    out = []
+    for linha in linhas[1:]:
+        if not any((c or "").strip() for c in linha):
+            continue
+        out.append({col: (val or "").strip() for col, val in zip(cabec, linha) if col})
+    return out
+
+
+def _csv_sm0(texto):
+    regs = _csv_linhas(texto, EMP_SM0_COLS, ["EMPRESA", "FILIAL"])
+    out = []
+    for r in regs:
+        if not r.get("empresa") or not r.get("filial"):
+            continue
+        r["sizefil"] = int(float(r["sizefil"])) if (r.get("sizefil") or "").strip() else None
+        r["qtd_tabelas"] = int(float(r["qtd_tabelas"])) if (r.get("qtd_tabelas") or "").strip() else None
+        r["sx2"] = (r.get("sx2") or "S").upper() != "N"
+        out.append(r)
+    if not out:
+        raise ValueError("CSV da SM0 sem nenhuma empresa/filial.")
+    return out
+
+
+def _niveis_leiaute(leiaute, tam):
+    """Tamanho de cada nível no código da filial. 'EEUUFF' → (2, 2, 2).
+    Sem leiaute de gestão corporativa, tudo é filial."""
+    lei = (leiaute or "").strip().upper()
+    if not lei:
+        return 0, 0, int(tam or 0)
+    return lei.count("E"), lei.count("U"), lei.count("F")
+
+
+def _consistencia(it, tam_fil):
+    """Confronta o conteúdo do campo filial com o compartilhamento da SX2.
+
+    SX2 vem como 'EMP|UNID|FIL' (X2_MODOEMP|X2_MODOUN|X2_MODO). O tamanho
+    esperado do conteúdo é o do último nível EXCLUSIVO: tabela exclusiva por
+    filial guarda o código inteiro; compartilhada na filial mas exclusiva na
+    empresa guarda só a parte da empresa; tudo compartilhado guarda branco."""
+    sit = (it.get("situacao") or "").upper()
+    if sit == "NAO EXISTE":
+        return "TABELA NAO EXISTE"
+    if sit == "VAZIA":
+        return "VAZIA"
+    if sit == "SEM CAMPO FILIAL":
+        return "SEM CAMPO FILIAL"
+    sx2 = (it.get("sx2") or "").upper()
+    partes = sx2.split("|")
+    if len(partes) != 3:
+        return sx2 or "SEM SX2"          # SEM SX2 / SEM REGISTRO NA SX2
+    m_emp, m_un, m_fil = [p.strip() for p in partes]
+    ne, nu, nf = _niveis_leiaute(it.get("leiaute"), tam_fil)
+    total = ne + nu + nf
+    if m_fil == "E":
+        esperado = total
+    elif m_un == "E" and nu:
+        esperado = ne + nu
+    elif m_emp == "E" and ne:
+        esperado = ne
+    else:
+        esperado = 0
+    tipo = (it.get("filial_tipo") or "").upper()
+    valor = "" if tipo == "BRANCO" else (it.get("filial") or "").strip()
+    if esperado == 0:
+        return "OK" if not valor else "PREENCHIDA EM TABELA COMPARTILHADA"
+    if not valor:
+        return "BRANCO EM TABELA EXCLUSIVA"
+    if total and len(valor) != esperado:
+        return f"TAMANHO {len(valor)} - ESPERADO {esperado}"
+    if tipo in ("FILIAL DE OUTRA EMPRESA", "NAO CADASTRADA NA SM0"):
+        return tipo
+    return "OK"
+
+
+def _csv_empresas(texto):
+    regs = _csv_linhas(texto, EMP_COLS, ["EMPRESA", "TABELA", "SITUACAO"])
+    if not regs:
+        raise ValueError("CSV sem linhas.")
+    dt = hora = None
+    semana = None
+    itens = []
+    for r in regs:
+        d, h = _dt_hora(r.pop("_dt", ""))
+        dt, hora = dt or d, hora or h
+        s = r.pop("_semana", "")
+        semana = semana or (int(re.sub(r"^.*W", "", s) or 0) or None if s else None)
+        r["qtde"] = float(str(r.get("qtde") or "0").replace(",", ".") or 0)
+        for k in ("filial", "filial_tipo", "nome_filial"):
+            r[k] = r.get(k) or None
+        itens.append(r)
+    if not dt:
+        raise ValueError("CSV sem data válida em DT_LEITURA.")
+    return {"data_iso": dt, "hora_medicao": hora, "semana": semana, "itens": itens}
+
+
+def _gravar_sm0(customer, amb, linhas):
+    """A leitura da SM0 SUBSTITUI a anterior daquela base: filial que saiu da
+    SM0 não pode continuar aparecendo como válida no painel."""
+    lido = None
+    for r in linhas:
+        lido = lido or " ".join(x for x in _dt_hora(r.get("_dt", "")) if x) or None
+    execute("delete from cockpit.monitemp_sm0 where customer=%s and ambiente=%s", (customer, amb))
+    vals = [(customer, amb, r["empresa"], r["filial"], r.get("nome_empresa"), r.get("nome_filial"),
+             r.get("cnpj"), r.get("leiaute"), r.get("sizefil"), r.get("sx2"),
+             r.get("qtd_tabelas"), r.get("tabelas"), lido, current_user() or "coleta")
+            for r in linhas]
+    with db() as c, c.cursor() as cur:
+        execute_values(cur, """
+            insert into cockpit.monitemp_sm0
+              (customer, ambiente, empresa, filial, nome_empresa, nome_filial, cnpj, leiaute,
+               sizefil, sx2, qtd_tabelas, tabelas, lido_em, updated_by)
+            values %s""", vals, page_size=200)
+    return {"empresas": len({r["empresa"] for r in linhas}), "filiais": len(linhas)}
+
+
+def _gravar_empresas(customer, amb, body, origem="upload"):
+    dt = _data_iso(body.get("data_iso"))
+    tam = {r["empresa"]: r["sizefil"] for r in q(
+        "select empresa, max(sizefil) sizefil from cockpit.monitemp_sm0 "
+        "where customer=%s and ambiente=%s group by empresa", (customer, amb))}
+    for a in q("""select id from cockpit.monitemp_medicoes
+                   where customer=%s and ambiente=%s and data_medicao=%s""", (customer, amb, dt)):
+        execute("delete from cockpit.monitemp_medicoes where id=%s", (a["id"],))   # cascade
+    mid = q("""insert into cockpit.monitemp_medicoes
+                 (customer, ambiente, data_medicao, hora_medicao, semana, origem)
+               values (%s,%s,%s,%s,%s,%s) returning id""",
+            (customer, amb, dt, body.get("hora_medicao"), body.get("semana"), origem),
+            one=True)["id"]
+    vals = []
+    for it in body["itens"]:
+        vals.append((mid, customer, amb, it.get("empresa"), it.get("nome_empresa"),
+                     it.get("leiaute"), it.get("tipo"), (it.get("tabela") or "").upper(),
+                     it.get("descricao"), it.get("tabela_fisica"), it.get("situacao"),
+                     it.get("sx2"), it.get("filial"), it.get("filial_tipo"),
+                     it.get("nome_filial"), it.get("qtde") or 0,
+                     _consistencia(it, tam.get(it.get("empresa")))))
+    with db() as c, c.cursor() as cur:
+        execute_values(cur, """
+            insert into cockpit.monitemp_itens
+              (medicao_id, customer, ambiente, empresa, nome_empresa, leiaute, tipo, tabela,
+               descricao, tabela_fisica, situacao, sx2, filial, filial_tipo, nome_filial,
+               qtde, consistencia)
+            values %s""", vals, page_size=500)
+    return {"medicoes": 1, "itens": len(vals), "ultima_medicao": dt}
+
+
+def _texto_upload():
+    if (f := request.files.get("arquivo")):
+        bruto = f.read()
+    else:
+        bruto = request.get_data()
+    if not bruto:
+        return None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            return bruto.decode(enc)
+        except UnicodeDecodeError:
+            continue
+    return bruto.decode("utf-8", errors="replace")
+
+
+@app.get("/api/monitemp/<customer>")
+def api_monitemp(customer):
+    """SM0 lida + última medição (itens) + lista de medições da base pedida."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "empresas")):
+        return d
+    amb = _ambiente()
+    sm0 = q("""select empresa, filial, nome_empresa, nome_filial, cnpj, leiaute, sizefil,
+                      sx2, qtd_tabelas, tabelas, lido_em, updated_by, updated_at
+                 from cockpit.monitemp_sm0 where customer=%s and ambiente=%s
+                order by empresa, filial""", (customer, amb))
+    meds = q("""select id, data_medicao, hora_medicao, semana, origem
+                  from cockpit.monitemp_medicoes where customer=%s and ambiente=%s
+                 order by data_medicao""", (customer, amb))
+    data = request.args.get("data")
+    alvo = next((m for m in meds if str(m["data_medicao"]) == data), meds[-1] if meds else None)
+    itens = []
+    if alvo:
+        itens = q("""select empresa, nome_empresa, leiaute, tipo, tabela, descricao, tabela_fisica,
+                            situacao, sx2, filial, filial_tipo, nome_filial, qtde, consistencia
+                       from cockpit.monitemp_itens where medicao_id=%s
+                      order by empresa, tipo, tabela, filial nulls first""", (alvo["id"],))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "sm0": sm0,
+                  "medicoes": meds, "medicao": alvo, "itens": itens})
+
+
+@app.post("/api/monitemp/<customer>/sm0")
+def api_monitemp_sm0(customer):
+    """Sobe o CSV do P0 (leitura da SM0) daquela base."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de subir a SM0.")
+    texto = _texto_upload()
+    if not texto:
+        return _err(400, "Arquivo vazio.")
+    try:
+        linhas = _csv_sm0(texto)
+    except Exception as e:
+        return _err(400, f"CSV da SM0 inválido: {e}")
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+    amb = _ambiente()
+    return _json({"ok": True, "customer": customer, "ambiente": amb,
+                  **_gravar_sm0(customer, amb, linhas)})
+
+
+@app.post("/api/monitemp/<customer>/upload")
+def api_monitemp_upload(customer):
+    """Sobe o CSV da medição de Empresas (script P1). Regrava a data."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de subir medições.")
+    texto = _texto_upload()
+    if not texto:
+        return _err(400, "Arquivo vazio.")
+    try:
+        body = _csv_empresas(texto)
+    except Exception as e:
+        return _err(400, f"CSV inválido: {e}")
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+    amb = _ambiente()
+    return _json({"ok": True, "customer": customer, "ambiente": amb,
+                  **_gravar_empresas(customer, amb, body)})
+
+
+@app.delete("/api/monitemp/<customer>/medicao")
+def api_monitemp_medicao_remover(customer):
+    """Apaga a medição de uma data — só admin, como em Cadastros."""
+    if (r := require_admin()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de apagar medições.")
+    if (d := deny_customer(customer)):
+        return d
+    data = _data_iso(request.args.get("data"))
+    if not data:
+        return _err(400, "Informe a data da medição (AAAA-MM-DD).")
+    ids = q("""select id from cockpit.monitemp_medicoes
+                where customer=%s and ambiente=%s and data_medicao=%s""",
+            (customer, _ambiente(), data))
+    for a in ids:
+        execute("delete from cockpit.monitemp_medicoes where id=%s", (a["id"],))
+    return _json({"ok": True, "removidas": len(ids)})
 
 
 # ── MOVIMENTOS — cobertura de cenários, não volume por tabela ───────────────
@@ -2426,7 +2727,14 @@ def api_protheus_coletar(customer, ambiente):
         return _err(409, msg)
 
     try:
-        body = _csv_movimentos(csv_txt) if tipo == "movimentos" else _csv_para_body(csv_txt)
+        if tipo == "sm0":
+            body = _csv_sm0(csv_txt)
+        elif tipo == "empresas":
+            body = _csv_empresas(csv_txt)
+        elif tipo == "movimentos":
+            body = _csv_movimentos(csv_txt)
+        else:
+            body = _csv_para_body(csv_txt)
     except Exception as e:
         msg = f"CSV devolvido pela base é inválido: {e}"
         _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code,
@@ -2436,7 +2744,14 @@ def api_protheus_coletar(customer, ambiente):
     if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
         return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
 
-    if tipo == "movimentos":
+    if tipo == "sm0":
+        res = _gravar_sm0(customer, amb, body)
+        res["ultima_medicao"] = None
+        itens = res.get("filiais")
+    elif tipo == "empresas":
+        res = _gravar_empresas(customer, amb, body, origem="coleta")
+        itens = res.get("itens")
+    elif tipo == "movimentos":
         res = _gravar_movimentos(customer, amb, body, origem="coleta")
         itens = res.get("dimensoes")
     else:
