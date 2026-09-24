@@ -16,6 +16,11 @@
  *   - Somente SELECT, uma consulta, SEM ';' no fim (TSCMONITREST e console).
  *   - Texto do SQL em ASCII puro (nome de filial com acento vira sem acento).
  *   - Mesmas colunas de saida nas duas versoes: o importador aceita qualquer uma.
+ *   - Nome de CTE com prefixo Q_: o release Oracle do cliente recusou com
+ *     ORA-32031 ("illegal reference of a query name in WITH clause") o script
+ *     cujo CTE se chamava SX2 enquanto a saida tinha a coluna SX2. Prefixo em
+ *     TODOS os blocos tira a chance de um nome de bloco esbarrar em nome de
+ *     coluna, alias ou literal.
  *   - Oracle: nenhuma tabela e referenciada direto - dono e existencia vem do
  *     ALL_TABLES e a leitura e dinamica (DBMS_XMLGEN). Metadado resolvido num
  *     nivel (META) e SQL montado em outro (SQLS): agregado misturado com
@@ -120,33 +125,33 @@
 
     if (d === 'oracle') {
       return `${cab}
-WITH LISTA AS (
+WITH Q_LISTA AS (
 ${listaDual(lista, d)}
-), DONO AS (
+), Q_DONO AS (
     SELECT MIN(OWNER) AS OWNER FROM ALL_TABLES WHERE TABLE_NAME = 'SYS_COMPANY'
-), COLS AS (
+), Q_COLS AS (
     SELECT MAX(CASE WHEN C.COLUMN_NAME = 'M0_CGC'     THEN 'S' ELSE 'N' END) AS TEM_CGC,
            MAX(CASE WHEN C.COLUMN_NAME = 'M0_LEIAUTE' THEN 'S' ELSE 'N' END) AS TEM_LEIAUTE,
            MAX(CASE WHEN C.COLUMN_NAME = 'M0_SIZEFIL' THEN 'S' ELSE 'N' END) AS TEM_SIZEFIL,
            MAX(CASE WHEN C.COLUMN_NAME = 'D_E_L_E_T_' THEN 'S' ELSE 'N' END) AS TEM_DEL
-      FROM DONO D
+      FROM Q_DONO D
       JOIN ALL_TAB_COLUMNS C ON C.OWNER = D.OWNER AND C.TABLE_NAME = 'SYS_COMPANY'
-), META AS (
+), Q_META AS (
     SELECT D.OWNER,
            CASE WHEN C.TEM_CGC     = 'S' THEN 'TRIM(M0_CGC)'           ELSE 'NULL' END AS X_CGC,
            CASE WHEN C.TEM_LEIAUTE = 'S' THEN 'TRIM(M0_LEIAUTE)'       ELSE 'NULL' END AS X_LEIAUTE,
            CASE WHEN C.TEM_SIZEFIL = 'S' THEN 'M0_SIZEFIL'             ELSE 'NULL' END AS X_SIZEFIL,
            CASE WHEN C.TEM_DEL     = 'S' THEN ' WHERE D_E_L_E_T_ = '' ''' ELSE ' ' END AS X_WHERE
-      FROM DONO D CROSS JOIN COLS C
+      FROM Q_DONO D CROSS JOIN Q_COLS C
      WHERE D.OWNER IS NOT NULL
-), SQLS AS (
+), Q_SQLS AS (
     SELECT 'SELECT TRIM(M0_CODIGO) E, TRIM(M0_CODFIL) F, TRIM(M0_NOME) NE, TRIM(M0_FILIAL) NF, ' ||
            M.X_CGC || ' CN, ' || M.X_LEIAUTE || ' LA, ' || M.X_SIZEFIL || ' SZ FROM "' ||
            M.OWNER || '"."SYS_COMPANY"' || M.X_WHERE AS SQL_SM0
-      FROM META M
-), SM0 AS (
+      FROM Q_META M
+), Q_SM0 AS (
     SELECT X.EMPRESA, X.FILIAL, X.NOME_EMPRESA, X.NOME_FILIAL, X.CNPJ, X.LEIAUTE, X.SIZEFIL
-      FROM SQLS S,
+      FROM Q_SQLS S,
            XMLTABLE('/ROWSET/ROW' PASSING DBMS_XMLGEN.GETXMLTYPE(S.SQL_SM0)
                     COLUMNS EMPRESA      VARCHAR2(12)  PATH 'E',
                             FILIAL       VARCHAR2(12)  PATH 'F',
@@ -155,21 +160,21 @@ ${listaDual(lista, d)}
                             CNPJ         VARCHAR2(20)  PATH 'CN',
                             LEIAUTE      VARCHAR2(20)  PATH 'LA',
                             SIZEFIL      NUMBER        PATH 'SZ') X
-), EMP AS (
-    SELECT DISTINCT EMPRESA FROM SM0
-), TABS AS (
+), Q_EMP AS (
+    SELECT DISTINCT EMPRESA FROM Q_SM0
+), Q_TABS AS (
     SELECT DISTINCT TABLE_NAME FROM ALL_TABLES
-), EXISTE AS (
+), Q_EXISTE AS (
     SELECT E.EMPRESA, COUNT(*) AS QTD,
            LISTAGG(L.TAB, ' ') WITHIN GROUP (ORDER BY L.TAB) AS TABELAS
-      FROM EMP E
-      JOIN LISTA L ON 1 = 1
-      JOIN TABS T ON T.TABLE_NAME = L.TAB || E.EMPRESA || '0'
+      FROM Q_EMP E
+      JOIN Q_LISTA L ON 1 = 1
+      JOIN Q_TABS T ON T.TABLE_NAME = L.TAB || E.EMPRESA || '0'
      GROUP BY E.EMPRESA
-), SX2 AS (
+), Q_SX2 AS (
     SELECT E.EMPRESA
-      FROM EMP E
-      JOIN TABS T ON T.TABLE_NAME = 'SX2' || E.EMPRESA || '0'
+      FROM Q_EMP E
+      JOIN Q_TABS T ON T.TABLE_NAME = 'SX2' || E.EMPRESA || '0'
 )
 SELECT S.EMPRESA                                      AS EMPRESA,
        S.FILIAL                                       AS FILIAL,
@@ -183,18 +188,18 @@ SELECT S.EMPRESA                                      AS EMPRESA,
        T.TABELAS                                      AS TABELAS_EXISTENTES,
        ${DT.oracle} AS DT_LEITURA,
        ${SEMANA.oracle} AS SEMANA
-  FROM SM0 S
-  LEFT JOIN EXISTE T ON T.EMPRESA = S.EMPRESA
-  LEFT JOIN SX2 X    ON X.EMPRESA = S.EMPRESA
+  FROM Q_SM0 S
+  LEFT JOIN Q_EXISTE T ON T.EMPRESA = S.EMPRESA
+  LEFT JOIN Q_SX2 X    ON X.EMPRESA = S.EMPRESA
  ORDER BY 1, 2`;
     }
 
     return `${cab}
 -- SQL Server: SYS_COMPANY referenciada direto. Se M0_LEIAUTE ou M0_SIZEFIL nao
 -- existirem na release, troque a coluna por NULL nesta consulta.
-WITH LISTA AS (
+WITH Q_LISTA AS (
 ${listaDual(lista, d)}
-), SM0 AS (
+), Q_SM0 AS (
     SELECT RTRIM(M0_CODIGO)  AS EMPRESA,
            RTRIM(M0_CODFIL)  AS FILIAL,
            RTRIM(M0_NOME)    AS NOME_EMPRESA,
@@ -208,14 +213,14 @@ ${listaDual(lista, d)}
 SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.SIZEFIL,
        CASE WHEN EXISTS (SELECT 1 FROM sys.tables T WHERE T.name = 'SX2' + S.EMPRESA + '0')
             THEN 'S' ELSE 'N' END AS SX2,
-       (SELECT COUNT(*) FROM LISTA L JOIN sys.tables T ON T.name = L.TAB + S.EMPRESA + '0') AS QTD_TABELAS,
+       (SELECT COUNT(*) FROM Q_LISTA L JOIN sys.tables T ON T.name = L.TAB + S.EMPRESA + '0') AS QTD_TABELAS,
        STUFF((SELECT ' ' + L.TAB
-                FROM LISTA L JOIN sys.tables T ON T.name = L.TAB + S.EMPRESA + '0'
+                FROM Q_LISTA L JOIN sys.tables T ON T.name = L.TAB + S.EMPRESA + '0'
                ORDER BY L.TAB
                  FOR XML PATH('')), 1, 1, '') AS TABELAS_EXISTENTES,
        ${DT.mssql} AS DT_LEITURA,
        ${SEMANA.mssql} AS SEMANA
-  FROM SM0 S
+  FROM Q_SM0 S
  ORDER BY 1, 2`;
   }
 
@@ -265,14 +270,14 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
     return `       CASE WHEN ${alias}.FILIAL_BRUTA IS NULL THEN NULL
             WHEN ${alias}.FILIAL_BRUTA = '#' THEN 'BRANCO'
             WHEN ${alias}.FILIAL_BRUTA = '*' THEN 'SEM CAMPO FILIAL'
-            WHEN EXISTS (SELECT 1 FROM FIL F WHERE F.EMPRESA = ${alias}.EMPRESA AND F.FILIAL = ${alias}.FILIAL_BRUTA)
+            WHEN EXISTS (SELECT 1 FROM Q_FIL F WHERE F.EMPRESA = ${alias}.EMPRESA AND F.FILIAL = ${alias}.FILIAL_BRUTA)
                  THEN 'FILIAL'
-            WHEN EXISTS (SELECT 1 FROM FIL F WHERE F.EMPRESA = ${alias}.EMPRESA AND F.FILIAL LIKE ${alias}.FILIAL_BRUTA${cc}'%')
+            WHEN EXISTS (SELECT 1 FROM Q_FIL F WHERE F.EMPRESA = ${alias}.EMPRESA AND F.FILIAL LIKE ${alias}.FILIAL_BRUTA${cc}'%')
                  THEN 'PARCIAL'
-            WHEN EXISTS (SELECT 1 FROM FIL F WHERE F.FILIAL = ${alias}.FILIAL_BRUTA)
+            WHEN EXISTS (SELECT 1 FROM Q_FIL F WHERE F.FILIAL = ${alias}.FILIAL_BRUTA)
                  THEN 'FILIAL DE OUTRA EMPRESA'
             ELSE 'NAO CADASTRADA NA SM0' END AS FILIAL_TIPO,
-       (SELECT MIN(F.NOME_FILIAL) FROM FIL F
+       (SELECT MIN(F.NOME_FILIAL) FROM Q_FIL F
          WHERE F.EMPRESA = ${alias}.EMPRESA AND F.FILIAL = ${alias}.FILIAL_BRUTA) AS NOME_FILIAL`;
   }
 
@@ -305,45 +310,45 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
 
     if (d === 'oracle') {
       return `${cab}
-WITH EMP AS (
+WITH Q_EMP AS (
 ${litE}
-), FIL AS (
+), Q_FIL AS (
 ${litF}
-), LISTA AS (
+), Q_LISTA AS (
 ${listaDual(lista, d)}
-), ALVO AS (
+), Q_ALVO AS (
     SELECT E.EMPRESA, E.NOME_EMPRESA, E.LEIAUTE, L.TIPO, L.TAB, L.DESCR,
            L.TAB || E.EMPRESA || '0'   AS FISICA,
            'SX2' || E.EMPRESA || '0'   AS FISICA_SX2,
            CASE WHEN SUBSTR(L.TAB, 1, 1) = 'S' THEN SUBSTR(L.TAB, 2, 2) ELSE L.TAB END || '_FILIAL' AS CAMPO
-      FROM EMP E CROSS JOIN LISTA L
-), NOMES AS (
-    SELECT FISICA AS NOME FROM ALVO
+      FROM Q_EMP E CROSS JOIN Q_LISTA L
+), Q_NOMES AS (
+    SELECT FISICA AS NOME FROM Q_ALVO
     UNION
-    SELECT FISICA_SX2 FROM ALVO
-), TABS AS (
+    SELECT FISICA_SX2 FROM Q_ALVO
+), Q_TABS AS (
     SELECT T.TABLE_NAME, MIN(T.OWNER) AS OWNER
       FROM ALL_TABLES T
-      JOIN NOMES N ON N.NOME = T.TABLE_NAME
+      JOIN Q_NOMES N ON N.NOME = T.TABLE_NAME
      GROUP BY T.TABLE_NAME
-), COLS AS (
+), Q_COLS AS (
     SELECT C.OWNER, C.TABLE_NAME, C.COLUMN_NAME
       FROM ALL_TAB_COLUMNS C
-      JOIN NOMES N ON N.NOME = C.TABLE_NAME
+      JOIN Q_NOMES N ON N.NOME = C.TABLE_NAME
      WHERE C.COLUMN_NAME LIKE '%FILIAL' OR C.COLUMN_NAME IN ('X2_MODOEMP', 'X2_MODOUN')
-), META AS (
+), Q_META AS (
     SELECT A.EMPRESA, A.NOME_EMPRESA, A.LEIAUTE, A.TIPO, A.TAB, A.DESCR, A.FISICA,
            A.FISICA_SX2, A.CAMPO, T.OWNER, X.OWNER AS OWNER_SX2,
            CASE WHEN C.COLUMN_NAME  IS NULL THEN 'N' ELSE 'S' END            AS TEM_CAMPO,
            CASE WHEN CE.COLUMN_NAME IS NULL THEN 'NULL' ELSE 'X2_MODOEMP' END AS COL_EMP,
            CASE WHEN CU.COLUMN_NAME IS NULL THEN 'NULL' ELSE 'X2_MODOUN' END  AS COL_UN
-      FROM ALVO A
-      LEFT JOIN TABS T  ON T.TABLE_NAME = A.FISICA
-      LEFT JOIN TABS X  ON X.TABLE_NAME = A.FISICA_SX2
-      LEFT JOIN COLS C  ON C.OWNER = T.OWNER  AND C.TABLE_NAME  = A.FISICA     AND C.COLUMN_NAME  = A.CAMPO
-      LEFT JOIN COLS CE ON CE.OWNER = X.OWNER AND CE.TABLE_NAME = A.FISICA_SX2 AND CE.COLUMN_NAME = 'X2_MODOEMP'
-      LEFT JOIN COLS CU ON CU.OWNER = X.OWNER AND CU.TABLE_NAME = A.FISICA_SX2 AND CU.COLUMN_NAME = 'X2_MODOUN'
-), SQLS AS (
+      FROM Q_ALVO A
+      LEFT JOIN Q_TABS T  ON T.TABLE_NAME = A.FISICA
+      LEFT JOIN Q_TABS X  ON X.TABLE_NAME = A.FISICA_SX2
+      LEFT JOIN Q_COLS C  ON C.OWNER = T.OWNER  AND C.TABLE_NAME  = A.FISICA     AND C.COLUMN_NAME  = A.CAMPO
+      LEFT JOIN Q_COLS CE ON CE.OWNER = X.OWNER AND CE.TABLE_NAME = A.FISICA_SX2 AND CE.COLUMN_NAME = 'X2_MODOEMP'
+      LEFT JOIN Q_COLS CU ON CU.OWNER = X.OWNER AND CU.TABLE_NAME = A.FISICA_SX2 AND CU.COLUMN_NAME = 'X2_MODOUN'
+), Q_SQLS AS (
     SELECT M.EMPRESA, M.TAB,
            CASE WHEN M.OWNER IS NULL
                 THEN 'SELECT ''#'' F, 0 C FROM DUAL WHERE 1 = 0'
@@ -361,20 +366,20 @@ ${listaDual(lista, d)}
                      M.OWNER_SX2 || '"."' || M.FISICA_SX2 || '" WHERE X2_CHAVE = ''' || M.TAB ||
                      ''' AND D_E_L_E_T_ = '' '''
            END AS SQL_SX2
-      FROM META M
-), MODO AS (
+      FROM Q_META M
+), Q_MODO AS (
     SELECT S.EMPRESA, S.TAB,
            XMLCAST(XMLQUERY('/ROWSET/ROW[1]/M/text()'
                             PASSING DBMS_XMLGEN.GETXMLTYPE(S.SQL_SX2)
                             RETURNING CONTENT) AS VARCHAR2(20)) AS SX2_MODO
-      FROM SQLS S
-), DIST AS (
+      FROM Q_SQLS S
+), Q_DIST AS (
     SELECT S.EMPRESA, S.TAB, X.F AS FILIAL_BRUTA, X.C AS QTDE
-      FROM SQLS S,
+      FROM Q_SQLS S,
            XMLTABLE('/ROWSET/ROW' PASSING DBMS_XMLGEN.GETXMLTYPE(S.SQL_DIST)
                     COLUMNS F VARCHAR2(40) PATH 'F',
                             C NUMBER       PATH 'C') X
-), BASE AS (
+), Q_BASE AS (
     SELECT M.EMPRESA, M.NOME_EMPRESA, M.LEIAUTE, M.TIPO, M.TAB AS TABELA, M.DESCR AS DESCRICAO,
            M.FISICA AS TABELA_FISICA,
            CASE WHEN M.OWNER IS NULL      THEN 'NAO EXISTE'
@@ -385,9 +390,9 @@ ${listaDual(lista, d)}
                 WHEN O.SX2_MODO IS NULL   THEN 'SEM REGISTRO NA SX2'
                 ELSE O.SX2_MODO END AS SX2,
            D.FILIAL_BRUTA, NVL(D.QTDE, 0) AS QTDE
-      FROM META M
-      LEFT JOIN MODO O ON O.EMPRESA = M.EMPRESA AND O.TAB = M.TAB
-      LEFT JOIN DIST D ON D.EMPRESA = M.EMPRESA AND D.TAB = M.TAB
+      FROM Q_META M
+      LEFT JOIN Q_MODO O ON O.EMPRESA = M.EMPRESA AND O.TAB = M.TAB
+      LEFT JOIN Q_DIST D ON D.EMPRESA = M.EMPRESA AND D.TAB = M.TAB
 )
 SELECT B.EMPRESA, B.NOME_EMPRESA, B.LEIAUTE, B.TIPO, B.TABELA, B.DESCRICAO, B.TABELA_FISICA,
        B.SITUACAO, B.SX2,
@@ -398,7 +403,7 @@ ${classifica(d, 'B')},
        B.QTDE,
        ${DT.oracle} AS DT_LEITURA,
        ${SEMANA.oracle} AS SEMANA
-  FROM BASE B
+  FROM Q_BASE B
  ORDER BY 1, 4, 5, 10`;
     }
 
@@ -437,9 +442,9 @@ ${classifica(d, 'B')},
     }));
 
     return `${cab}
-WITH FIL AS (
+WITH Q_FIL AS (
 ${litF}
-), BASE AS (
+), Q_BASE AS (
 ${blocos.join('\n    UNION ALL\n')}
 )
 SELECT B.EMPRESA, B.NOME_EMPRESA, B.LEIAUTE, B.TIPO, B.TABELA, B.DESCRICAO, B.TABELA_FISICA,
@@ -449,7 +454,7 @@ ${classifica(d, 'B')},
        B.QTDE,
        ${DT.mssql} AS DT_LEITURA,
        ${SEMANA.mssql} AS SEMANA
-  FROM BASE B
+  FROM Q_BASE B
  ORDER BY 1, 4, 5, 10`;
   }
 

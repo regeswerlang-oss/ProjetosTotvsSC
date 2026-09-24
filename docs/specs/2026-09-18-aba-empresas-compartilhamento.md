@@ -85,6 +85,16 @@ Dois bugs pegos só executando: `ISNULL` do SQL Server truncava
 `sx2=false` vindo do JSON do painel era lido como "tem SX2", gerando leitura de
 `SX2020` inexistente.
 
+## ORA-32031 no release do cliente (22/09/2026)
+
+O P0 rodou aqui em Oracle Free 23 e falhou na base da Açosul com **ORA-32031 —
+*illegal reference of a query name in WITH clause***. O suspeito é o bloco `WITH`
+chamado `SX2` convivendo com a coluna `SX2` da saída: alguns releases recusam,
+o 23 aceita. Correção: **todo bloco do `WITH` passou a ter prefixo `Q_`**
+(`Q_LISTA`, `Q_SM0`, `Q_SX2`…), nos dois scripts e nos dois dialetos. Nenhum nome
+de bloco pode mais esbarrar em nome de coluna, alias ou literal. Saída e layout
+inalterados — conferido rodando P0 e P1 de novo em Oracle e SQL Server.
+
 **Não testado:** a base real da Açosul (nome das colunas da SYS_COMPANY na release
 do cliente, owner, volume da SRD dentro dos 50s da coleta REST) e o console TCloud
 com `XMLTABLE`.

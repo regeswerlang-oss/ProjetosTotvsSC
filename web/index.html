@@ -5223,6 +5223,13 @@ async function abreModalAmbiente(ambiente) {
            <option value="1">Ativo</option><option value="0">Inativo</option>
          </select></label>
      </div>
+     <label class="flex items-start gap-2 text-xs text-slate-600">
+       <input id="am-ssl" type="checkbox" class="mt-0.5 accent-totvs-blue">
+       <span><b>Não validar o certificado (TLS)</b> — marque quando a URL for por <b>IP</b>:
+         o certificado do TCloud é emitido para o hostname
+         (<code>*.protheus.cloudtotvs.com.br</code>) e nunca casa com um IP, então a chamada
+         morre em SSLError antes de chegar no Protheus. Vale só para esta base; o certo,
+         quando dá, é cadastrar a URL pelo hostname.</span></label>
      ${chaveOk ? '' : `<p class="text-xs text-rose-600">A variável PROTHEUS_CRED_KEY não está
         configurada no servidor — sem ela a senha e o token não podem ser gravados.</p>`}
      <div class="flex items-center gap-2 pt-1">
@@ -5240,6 +5247,7 @@ async function abreModalAmbiente(ambiente) {
     'Salvar');
   if (atual && atual.banco) m.campo('am-banco').value = atual.banco;
   if (atual) m.campo('am-ativo').value = atual.ativo ? '1' : '0';
+  m.campo('am-ssl').checked = !!(atual && atual.ssl_verificar === false);
 
   const corpo = () => ({
     url_rest: m.campo('am-url').value.trim(),
@@ -5254,6 +5262,7 @@ async function abreModalAmbiente(ambiente) {
     timeout_s: Number(m.campo('am-timeout').value || 45),
     limite_linhas: Number(m.campo('am-limite').value || 50000),
     ativo: m.campo('am-ativo').value === '1',
+    ssl_verificar: !m.campo('am-ssl').checked,
   });
   const salva = async () => {
     const d = corpo();

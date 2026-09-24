@@ -146,3 +146,36 @@ environment divergente, coleta completa (SX5 filtrada, SD2 gravada como
 `painel=movimento`) e token errado devolvendo mensagem clara. A tela foi aberta
 no Chromium com as rotas `/api/*` interceptadas, conferindo o preenchimento dos
 campos e os dois modais.
+
+## TLS: base publicada por IP (24/09/2026 — Açosul)
+
+O ⚙ Ambiente da Açosul (`https://189.89.32.250:10908/rest/tscmonit`) devolvia
+`SSLError` antes de tocar no Protheus. O servidor está no ar e o certificado é
+**válido** — emitido pela ZeroSSL para `*.protheus.cloudtotvs.com.br`. Só que a URL
+é um **IP**, e nenhum nome do certificado casa com ele
+(`subjectAltName does not match 189.89.32.250`). O navegador abre porque já tem a
+exceção guardada; o `requests` recusa, como deve.
+
+Duas saídas, nesta ordem: cadastrar a URL pelo **hostname** do ambiente (o
+certificado passa a casar), ou, quando só há o IP, marcar
+**"Não validar o certificado (TLS)"** — coluna `ssl_verificar` em
+`cockpit.protheus_ambientes`, **por ambiente**, padrão validar. O `verify` do
+`requests` passa a ler essa coluna no `/ping` e no `/query`.
+
+O erro também virou útil: `_motivo_rede()` separa certificado recusado de timeout
+de conexão e inclui o detalhe do `requests`; e **404 na rota** ganhou texto
+próprio — servidor respondeu, rota não existe nele: fonte não compilado naquele
+RPO, ou AppServer do REST não reiniciado depois de compilar (as rotas anotadas só
+são registradas na subida do serviço).
+
+Foi o caso seguinte da Açosul: com a validação desligada, `/rest/tscmonit/ping`
+responde **404**, enquanto `/rest` lista 2.235 serviços — o TSCMONITREST ainda não
+está publicado naquele AppServer.
+
+### Como foi testado
+
+Stub HTTPS com certificado de outro nome (o mesmo desencontro da Açosul): com a
+validação ligada o painel devolve o texto novo do SSLError; desligada, conecta;
+e uma rota inexistente devolve o texto do 404. A migração
+`alter table ... add column ssl_verificar` foi aplicada no Supabase e no Postgres
+do laboratório.

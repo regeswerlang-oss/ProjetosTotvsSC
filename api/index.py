@@ -2328,6 +2328,14 @@ def api_monitmov_upload(customer):
 # chega bonito, plausível, e vem do lugar errado.
 
 BANCOS = ("oracle", "mssql", "postgres")
+# Com ssl_verificar=false o urllib3 imprime um InsecureRequestWarning por
+# chamada. A escolha e do consultor, por ambiente, e ja aparece na tela — o
+# aviso so polui o log da Vercel.
+try:
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+except Exception:
+    pass
 TIMEOUT_TETO = 50          # a função da Vercel morre em 60s (vercel.json)
 
 
@@ -2414,6 +2422,7 @@ def api_protheus_listar(customer):
         return d
     rows = q("""select customer, ambiente, url_rest, environment, empresa, filial,
                        usuario, banco, sufixo, timeout_s, limite_linhas, ativo,
+                       coalesce(ssl_verificar, true) as ssl_verificar,
                        (senha_enc is not null) as tem_senha,
                        (token_enc is not null) as tem_token,
                        ultimo_teste_em, ultimo_teste_ok, ultimo_teste_msg,
@@ -2458,8 +2467,8 @@ def api_protheus_salvar(customer, ambiente):
     execute("""insert into cockpit.protheus_ambientes
                  (customer, ambiente, url_rest, environment, empresa, filial, usuario,
                   senha_enc, token_enc, banco, sufixo, timeout_s, limite_linhas,
-                  ativo, observacao, updated_by, updated_at)
-               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
+                  ativo, ssl_verificar, observacao, updated_by, updated_at)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
                on conflict (customer, ambiente) do update set
                  url_rest=excluded.url_rest, environment=excluded.environment,
                  empresa=excluded.empresa, filial=excluded.filial,
@@ -2468,14 +2477,16 @@ def api_protheus_salvar(customer, ambiente):
                  token_enc=coalesce(excluded.token_enc, cockpit.protheus_ambientes.token_enc),
                  banco=excluded.banco, sufixo=excluded.sufixo,
                  timeout_s=excluded.timeout_s, limite_linhas=excluded.limite_linhas,
-                 ativo=excluded.ativo, observacao=excluded.observacao,
+                 ativo=excluded.ativo, ssl_verificar=excluded.ssl_verificar,
+                 observacao=excluded.observacao,
                  updated_by=excluded.updated_by, updated_at=now()""",
             (customer, amb, url, (b.get("environment") or "").strip() or None,
              (b.get("empresa") or "01").strip(), (b.get("filial") or "01").strip(),
              (b.get("usuario") or "").strip() or None, senha_enc, token_enc, banco,
              (b.get("sufixo") or "").strip()[:10] or None,
              int(b.get("timeout_s") or 45), int(b.get("limite_linhas") or 50000),
-             bool(b.get("ativo", True)), (b.get("observacao") or "").strip() or None,
+             bool(b.get("ativo", True)), bool(b.get("ssl_verificar", True)),
+             (b.get("observacao") or "").strip() or None,
              current_user()))
     return _json({"ok": True, "customer": customer, "ambiente": amb})
 
@@ -2505,6 +2516,36 @@ def _trecho(r):
     a base respondeu, e o diagnostico vira adivinhacao."""
     txt = " ".join((r.text or "").split())
     return (txt[:160] + "...") if len(txt) > 160 else (txt or "(corpo vazio)")
+
+
+def _verifica_tls(cfg):
+    """Valida o certificado do servidor? Padrao SIM.
+
+    Base TCloud publicada por IP tem certificado emitido para
+    *.protheus.cloudtotvs.com.br: o nome nao bate com o IP e o `requests`
+    recusa com SSLError antes de qualquer coisa do Protheus (o navegador
+    tambem recusaria; ele so ja tem a excecao guardada). O certo e cadastrar
+    a URL pelo HOSTNAME; quando o cliente so fornece o IP, esta chave desliga
+    a validacao para aquele ambiente — e so para ele."""
+    return cfg.get("ssl_verificar") is not False
+
+
+def _motivo_rede(e):
+    """Uma frase que diz o que fazer. 'SSLError' sozinho nao separa
+    certificado invalido de porta errada, e foi isso que custou tempo na
+    Acosul em 22/09/2026."""
+    nome = type(e).__name__
+    txt = " ".join(str(e).split())[:200]
+    if isinstance(e, requests.exceptions.SSLError):
+        dica = ("Certificado recusado. Se a URL usa IP, o certificado do TCloud e "
+                "emitido para o hostname (*.protheus.cloudtotvs.com.br) e nunca vai "
+                "casar: use o hostname, ou marque 'Nao validar certificado' aqui. "
+                "Se o servico for HTTP puro, troque https:// por http://.")
+    elif isinstance(e, requests.exceptions.ConnectTimeout):
+        dica = "Conectou em nada dentro do tempo: confira porta, firewall e VPN."
+    else:
+        dica = "Confira URL, porta, VPN e o [HTTPURI] do appserver.ini."
+    return f"Sem resposta: {nome}. {dica} Detalhe: {txt}"
 
 
 def _sessao_protheus(cfg, customer, amb, tenant=True):
@@ -2541,7 +2582,7 @@ def _ping_protheus(cfg, customer, amb, tenant=True):
     params = ({"empresa": cfg.get("empresa") or "01",
                "filial": cfg.get("filial") or "01"} if tenant else None)
     r = requests.get(f"{cfg['url_rest']}/ping", headers=heads, auth=auth,
-                     params=params, timeout=min(tmo, 30))
+                     params=params, timeout=min(tmo, 30), verify=_verifica_tls(cfg))
     return r, _json_da_resposta(r)
 
 
@@ -2573,9 +2614,7 @@ def api_protheus_testar(customer, ambiente):
     try:
         r, dados = _ping_protheus(cfg, customer, amb)
     except requests.RequestException as e:
-        return _fecha_teste(customer, amb, ini, False, None,
-                            f"Sem resposta: {type(e).__name__}. Confira URL, porta, VPN e o "
-                            f"[HTTPURI] do appserver.ini.")
+        return _fecha_teste(customer, amb, ini, False, None, _motivo_rede(e))
 
     if r.status_code >= 400 or not dados.get("ok"):
         # Segunda tentativa SEM tenantId: se a base responder assim, ela mesma
@@ -2592,6 +2631,14 @@ def api_protheus_testar(customer, ambiente):
         msg = (dados.get("erro") or
                f"HTTP {r.status_code} na rota /ping, mas a resposta nao é o JSON do "
                f"TSCMONITREST. A base devolveu: {_trecho(r)}")
+        if r.status_code == 404:
+            # 404 = o AppServer respondeu, mas a rota nao existe nele. Quase
+            # sempre e fonte nao compilado naquele RPO ou AppServer nao
+            # reiniciado (as anotacoes so entram na subida do servico).
+            msg = (f"HTTP 404: o servidor respondeu, mas a rota /tscmonit/ping nao existe "
+                   f"nele. Confira se o TSCMONITREST.tlpp esta compilado NESTE RPO e se o "
+                   f"AppServer do REST foi reiniciado depois (as rotas anotadas so entram na "
+                   f"subida do servico); e se o prefixo do [HTTPURI] e o mesmo da URL.")
         if sug:
             msg = (f"HTTP {r.status_code} com empresa/filial "
                    f"{cfg.get('empresa')}/{cfg.get('filial')}. Sem o tenantId a base "
@@ -2694,10 +2741,11 @@ def api_protheus_coletar(customer, ambiente):
     try:
         r = requests.post(f"{cfg['url_rest']}/query", json=corpo, headers=heads, auth=auth,
                           params={"empresa": cfg.get("empresa") or "01",
-                                  "filial": cfg.get("filial") or "01"}, timeout=tmo)
+                                  "filial": cfg.get("filial") or "01"}, timeout=tmo,
+                          verify=_verifica_tls(cfg))
         dados = _json_da_resposta(r)
     except requests.RequestException as e:
-        msg = (f"Falha ao chamar a base: {type(e).__name__}. "
+        msg = (f"Falha ao chamar a base: {_motivo_rede(e)} "
                f"Timeout do ambiente = {tmo}s (a função da Vercel morre em 60s).")
         _log_coleta(customer, amb, tipo, ini, False, erro=msg)
         return _err(502, msg)
