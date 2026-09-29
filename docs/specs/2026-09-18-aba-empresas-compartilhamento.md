@@ -249,6 +249,19 @@ Conferido gerando P0 e P1 com um escopo de quatro tabelas — uma delas manual
 (`ZZ1`) e uma de movimento (`SE1`) — e checando que só elas entram no SQL, que o
 `TIPO` sai certo nas duas, e que escopo vazio cai nas 34.
 
+### Leitura velha contra escopo novo
+
+"Tabelas do escopo" é **congelada no P0**: ela diz o que aquela leitura procurou e
+achou. Com o escopo agora vindo da aba Estrutura, mudar a definição depois deixa o
+numerador contando de uma lista e o denominador de outra — `25/131`, como se 106
+tabelas não existissem na base, quando o P0 daquele dia só procurou 34.
+
+A rota devolve `escopo_mudou` (o `max(definido_em, created_at)` das tabelas ativas
+contra o `updated_at` da SM0 gravada) e a tela avisa em cima da estrutura, com o
+caminho: **Coletar SM0** → salvar o **Script Empresas** → **Coletar agora**.
+Recalcular o numerador aqui seria pior: daria um número que nenhuma leitura
+produziu.
+
 ## Migração
 
 `docs/sql/2026-09-18-monitemp.sql` (aplicada no Supabase em 18/09/2026): três

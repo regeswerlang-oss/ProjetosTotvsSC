@@ -5486,12 +5486,20 @@ function empSM0Html(sm0) {
     </tr>`;
   }).join('');
   const r0 = sm0[0];
+  // "Tabelas do escopo" e congelada no P0. Escopo alterado depois deixa o
+  // numerador contando de uma lista e o denominador de outra - avisar e mais
+  // honesto que mostrar 25/131 como se 106 nao existissem na base.
+  const velha = emp.dados?.escopo_mudou ? `<div class="px-4 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-900">
+      A aba <b>Estrutura de Empresas</b> mudou depois desta leitura: a coluna <b>Tabelas do escopo</b> abaixo
+      ainda mostra o que o P0 antigo procurou, contra o total de hoje (${LISTA_EMP_ESCOPO()}).
+      Rode <b>⚡ Coletar SM0</b> de novo, salve o <b>🗄 Script Empresas</b> e colete — aí os dois números falam da mesma lista.</div>` : '';
   return `<div class="bg-white rounded-lg border border-slate-200 overflow-x-auto">
     <div class="px-4 py-2 border-b border-slate-200 flex items-center gap-2 text-sm">
       <h3 class="font-semibold text-slate-700">Estrutura da SM0</h3>
       <span class="text-xs text-slate-500">${porEmp.size} empresa(s) · ${sm0.length} filial(is) ·
         lida em ${escapeHtml(r0.lido_em || fmtDataHora(r0.updated_at))} por ${escapeHtml(r0.updated_by || '—')}</span>
     </div>
+    ${velha}
     <table class="w-full text-sm"><thead class="bg-slate-50 text-xs text-slate-500 text-left">
       <tr><th class="px-3 py-2">Emp.</th><th class="px-3 py-2">Nome</th><th class="px-3 py-2">Leiaute</th>
       <th class="px-3 py-2">Filiais</th><th class="px-3 py-2">Dicionário</th><th class="px-3 py-2">Tabelas do escopo</th></tr></thead>

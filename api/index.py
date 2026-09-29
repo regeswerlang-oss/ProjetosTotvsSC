@@ -1776,9 +1776,18 @@ def api_monitemp(customer):
     escopo = q("""select modulo, tabela, descricao, tipo
                     from cockpit.estrut_tabelas where customer=%s and ativo
                    order by modulo, tabela""", (customer,))
+    # A coluna "Tabelas do escopo" da SM0 e CONGELADA no P0: ela diz o que aquela
+    # leitura procurou e achou. Se o escopo mudou depois, o numerador vira uma
+    # mentira silenciosa ("25 de 131" quando so procurou 34), entao a tela precisa
+    # saber que a leitura ficou para tras.
+    lim = q("""select max(greatest(coalesce(definido_em, created_at), created_at)) em
+                 from cockpit.estrut_tabelas where customer=%s and ativo""",
+            (customer,), one=True)
+    sm0_em = max([r["updated_at"] for r in sm0 if r.get("updated_at")], default=None)
+    escopo_mudou = bool(lim and lim.get("em") and sm0_em and lim["em"] > sm0_em)
     return _json({"ok": True, "customer": customer, "ambiente": amb, "sm0": sm0,
                   "medicoes": meds, "medicao": alvo, "itens": itens,
-                  "escopo": escopo})
+                  "escopo": escopo, "escopo_mudou": escopo_mudou})
 
 
 @app.post("/api/monitemp/<customer>/sm0")
