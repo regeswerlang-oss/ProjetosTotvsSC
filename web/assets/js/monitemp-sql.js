@@ -21,45 +21,64 @@
  *     cujo CTE se chamava SX2 enquanto a saida tinha a coluna SX2. Prefixo em
  *     TODOS os blocos tira a chance de um nome de bloco esbarrar em nome de
  *     coluna, alias ou literal.
- *   - Oracle: nenhuma tabela e referenciada direto - dono e existencia vem do
- *     ALL_TABLES e a leitura e dinamica (DBMS_XMLGEN). Metadado resolvido num
- *     nivel (META) e SQL montado em outro (SQLS): agregado misturado com
- *     subconsulta escalar na mesma expressao ja derrubou o console TCloud.
- *   - SQL Server nao tem SQL dinamico dentro de um SELECT: o script sai com a
- *     existencia congelada na leitura da SM0 (P0). Tabela criada depois so
- *     entra gerando o script de novo - e o P0 precisa ser refeito.
+ *   - Sem SQL dinamico em nenhum dos dois dialetos: o release Oracle do cliente
+ *     recusou DBMS_XMLGEN/XMLTABLE (ORA-32031 e, na tentativa seguinte,
+ *     ORA-00923). O P0 le a SYS_COMPANY direto e o P1 sai com a existencia
+ *     congelada pelo P0 - tabela criada depois so entra gerando o script de
+ *     novo, o que exige refazer o P0.
+ *   - Tabela que existe sem o campo de filial vem marcada com '*' no P0: citar
+ *     coluna inexistente derruba a consulta inteira (ORA-00904), nao so o bloco.
  * ==========================================================================*/
 (function (raiz) {
   'use strict';
 
-  // Escopo RH - carga inicial vinda de sistema legado. TIPO separa o que e
-  // cadastro (carregado) do que e movimento/historico (importado do legado).
-  const LISTA_RH = [
-    { tipo: 'CADASTRO', tab: 'SRA', descr: 'Funcionarios' },
-    { tipo: 'CADASTRO', tab: 'SRB', descr: 'Dependentes' },
-    { tipo: 'CADASTRO', tab: 'SRJ', descr: 'Funcoes' },
-    { tipo: 'CADASTRO', tab: 'SQ3', descr: 'Cargos' },
-    { tipo: 'CADASTRO', tab: 'SQB', descr: 'Departamentos' },
-    { tipo: 'CADASTRO', tab: 'CTT', descr: 'Centro de Custo' },
-    { tipo: 'CADASTRO', tab: 'SR6', descr: 'Turnos de Trabalho' },
-    { tipo: 'CADASTRO', tab: 'RCE', descr: 'Sindicatos' },
-    { tipo: 'CADASTRO', tab: 'SRV', descr: 'Verbas' },
-    { tipo: 'CADASTRO', tab: 'SRY', descr: 'Roteiros de Calculo' },
-    { tipo: 'CADASTRO', tab: 'RCJ', descr: 'Processos' },
-    { tipo: 'CADASTRO', tab: 'RCH', descr: 'Periodos' },
-    { tipo: 'CADASTRO', tab: 'SRQ', descr: 'Beneficiarios (Pensao)' },
-    { tipo: 'MOVIMENTO', tab: 'SRD', descr: 'Historico de Movimentos (Acumulados)' },
-    { tipo: 'MOVIMENTO', tab: 'SRC', descr: 'Movimento do Periodo' },
-    { tipo: 'MOVIMENTO', tab: 'RGB', descr: 'Lancamentos por Periodo' },
-    { tipo: 'MOVIMENTO', tab: 'SRK', descr: 'Valores Futuros' },
-    { tipo: 'MOVIMENTO', tab: 'SR3', descr: 'Historico de Valores Salariais' },
-    { tipo: 'MOVIMENTO', tab: 'SR7', descr: 'Historico de Alteracoes Salariais' },
-    { tipo: 'MOVIMENTO', tab: 'SRE', descr: 'Transferencias' },
-    { tipo: 'MOVIMENTO', tab: 'SR8', descr: 'Controle de Ausencias' },
-    { tipo: 'MOVIMENTO', tab: 'SRF', descr: 'Controle de Dias de Direito (Ferias)' },
-    { tipo: 'MOVIMENTO', tab: 'SRH', descr: 'Cabecalho de Ferias' },
-    { tipo: 'MOVIMENTO', tab: 'SRG', descr: 'Cabecalho de Rescisoes' },
-    { tipo: 'MOVIMENTO', tab: 'SRR', descr: 'Itens de Ferias e Rescisoes' },
+  // Escopo medido pela aba. GRUPO e o modulo de onde a tabela veio: e rotulo de
+  // apresentacao - o painel agrupa a matriz por ele - e NAO entra no layout do
+  // CSV nem no banco, para nao invalidar medicao ja gravada. TIPO separa o que e
+  // cadastro do que e movimento/historico: na carga do legado os dois vem por
+  // caminhos diferentes. A CTT fica em RH porque entrou pelo escopo do RH
+  // (centro de custo do funcionario), ainda que a tabela seja da Contabilidade.
+  const GRUPOS = ['RH', 'Cadastros Gerais', 'Financeiro', 'Contabilidade'];
+  const LISTA_ESCOPO = [
+    // --- RH: cadastros ---
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SRA', descr: 'Funcionarios' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SRB', descr: 'Dependentes' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SRJ', descr: 'Funcoes' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SQ3', descr: 'Cargos' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SQB', descr: 'Departamentos' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'CTT', descr: 'Centro de Custo' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SR6', descr: 'Turnos de Trabalho' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'RCE', descr: 'Sindicatos' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SRV', descr: 'Verbas' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SRY', descr: 'Roteiros de Calculo' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'RCJ', descr: 'Processos' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'RCH', descr: 'Periodos' },
+    { grupo: 'RH', tipo: 'CADASTRO', tab: 'SRQ', descr: 'Beneficiarios (Pensao)' },
+    // --- RH: movimentos e historicos ---
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRD', descr: 'Historico de Movimentos (Acumulados)' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRC', descr: 'Movimento do Periodo' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'RGB', descr: 'Lancamentos por Periodo' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRK', descr: 'Valores Futuros' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SR3', descr: 'Historico de Valores Salariais' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SR7', descr: 'Historico de Alteracoes Salariais' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRE', descr: 'Transferencias' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SR8', descr: 'Controle de Ausencias' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRF', descr: 'Controle de Dias de Direito (Ferias)' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRH', descr: 'Cabecalho de Ferias' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRG', descr: 'Cabecalho de Rescisoes' },
+    { grupo: 'RH', tipo: 'MOVIMENTO', tab: 'SRR', descr: 'Itens de Ferias e Rescisoes' },
+    // --- Cadastros Gerais: as tres bases que quase toda implantacao carrega ---
+    { grupo: 'Cadastros Gerais', tipo: 'CADASTRO', tab: 'SA1', descr: 'Clientes' },
+    { grupo: 'Cadastros Gerais', tipo: 'CADASTRO', tab: 'SA2', descr: 'Fornecedores' },
+    { grupo: 'Cadastros Gerais', tipo: 'CADASTRO', tab: 'SB1', descr: 'Produtos' },
+    // --- Financeiro: parametrizacao do CNAB (TDN FIN0037) ---
+    { grupo: 'Financeiro', tipo: 'CADASTRO', tab: 'SEB', descr: 'Ocorrencias CNAB' },
+    { grupo: 'Financeiro', tipo: 'CADASTRO', tab: 'SEJ', descr: 'Ocorrencias de Extrato' },
+    // --- Contabilidade: as quatro entidades do plano ---
+    { grupo: 'Contabilidade', tipo: 'CADASTRO', tab: 'CT1', descr: 'Plano de Contas' },
+    { grupo: 'Contabilidade', tipo: 'CADASTRO', tab: 'CTD', descr: 'Itens Contabeis' },
+    { grupo: 'Contabilidade', tipo: 'CADASTRO', tab: 'CTH', descr: 'Classes de Valor' },
+    { grupo: 'Contabilidade', tipo: 'CADASTRO', tab: 'CT5', descr: 'Lancamentos Padrao' },
   ];
 
   // Colunas de saida - identicas nos dois dialetos, na mesma ordem.
@@ -112,7 +131,7 @@
   // ------------------------------------------------------------------------
   function scriptSM0(o = {}) {
     const d = o.dialeto === 'oracle' ? 'oracle' : 'mssql';
-    const lista = o.lista || LISTA_RH;
+    const lista = o.lista || LISTA_ESCOPO;
     const cab = cabecalho({ ...o, dialeto: d,
       titulo: 'MONITEMP P0 - Leitura da SM0 (empresas, filiais, leiaute e tabelas existentes)',
       linhas: [
@@ -124,52 +143,50 @@
       ] });
 
     if (d === 'oracle') {
+      // LEITURA DIRETA da SYS_COMPANY. A versao anterior montava a consulta em
+      // tempo de execucao (DBMS_XMLGEN + XMLTABLE) para nao depender de owner
+      // nem de coluna opcional. A base da Acosul recusou as duas formas dessa
+      // tecnica: ORA-32031 quando o PASSING recebia coluna de CTE e ORA-00923
+      // quando recebia subconsulta escalar. Em vez de insistir, referencia
+      // direta: se o owner nao for o do usuario conectado o erro e ORA-00942 e
+      // basta qualificar; se faltar M0_LEIAUTE ou M0_SIZEFIL e ORA-00904 e
+      // basta trocar por NULL. Erros claros, correcao de uma linha.
       return `${cab}
+-- Se der ORA-00942 (tabela nao existe), qualifique: "OWNER"."SYS_COMPANY".
+-- Se der ORA-00904 em M0_LEIAUTE ou M0_SIZEFIL, troque a coluna por NULL.
 WITH Q_LISTA AS (
 ${listaDual(lista, d)}
-), Q_DONO AS (
-    SELECT MIN(OWNER) AS OWNER FROM ALL_TABLES WHERE TABLE_NAME = 'SYS_COMPANY'
-), Q_COLS AS (
-    SELECT MAX(CASE WHEN C.COLUMN_NAME = 'M0_CGC'     THEN 'S' ELSE 'N' END) AS TEM_CGC,
-           MAX(CASE WHEN C.COLUMN_NAME = 'M0_LEIAUTE' THEN 'S' ELSE 'N' END) AS TEM_LEIAUTE,
-           MAX(CASE WHEN C.COLUMN_NAME = 'M0_SIZEFIL' THEN 'S' ELSE 'N' END) AS TEM_SIZEFIL,
-           MAX(CASE WHEN C.COLUMN_NAME = 'D_E_L_E_T_' THEN 'S' ELSE 'N' END) AS TEM_DEL
-      FROM Q_DONO D
-      JOIN ALL_TAB_COLUMNS C ON C.OWNER = D.OWNER AND C.TABLE_NAME = 'SYS_COMPANY'
-), Q_META AS (
-    SELECT D.OWNER,
-           CASE WHEN C.TEM_CGC     = 'S' THEN 'TRIM(M0_CGC)'           ELSE 'NULL' END AS X_CGC,
-           CASE WHEN C.TEM_LEIAUTE = 'S' THEN 'TRIM(M0_LEIAUTE)'       ELSE 'NULL' END AS X_LEIAUTE,
-           CASE WHEN C.TEM_SIZEFIL = 'S' THEN 'M0_SIZEFIL'             ELSE 'NULL' END AS X_SIZEFIL,
-           CASE WHEN C.TEM_DEL     = 'S' THEN ' WHERE D_E_L_E_T_ = '' ''' ELSE ' ' END AS X_WHERE
-      FROM Q_DONO D CROSS JOIN Q_COLS C
-     WHERE D.OWNER IS NOT NULL
-), Q_SQLS AS (
-    SELECT 'SELECT TRIM(M0_CODIGO) E, TRIM(M0_CODFIL) F, TRIM(M0_NOME) NE, TRIM(M0_FILIAL) NF, ' ||
-           M.X_CGC || ' CN, ' || M.X_LEIAUTE || ' LA, ' || M.X_SIZEFIL || ' SZ FROM "' ||
-           M.OWNER || '"."SYS_COMPANY"' || M.X_WHERE AS SQL_SM0
-      FROM Q_META M
 ), Q_SM0 AS (
-    SELECT X.EMPRESA, X.FILIAL, X.NOME_EMPRESA, X.NOME_FILIAL, X.CNPJ, X.LEIAUTE, X.SIZEFIL
-      FROM Q_SQLS S,
-           XMLTABLE('/ROWSET/ROW' PASSING DBMS_XMLGEN.GETXMLTYPE(S.SQL_SM0)
-                    COLUMNS EMPRESA      VARCHAR2(12)  PATH 'E',
-                            FILIAL       VARCHAR2(12)  PATH 'F',
-                            NOME_EMPRESA VARCHAR2(100) PATH 'NE',
-                            NOME_FILIAL  VARCHAR2(100) PATH 'NF',
-                            CNPJ         VARCHAR2(20)  PATH 'CN',
-                            LEIAUTE      VARCHAR2(20)  PATH 'LA',
-                            SIZEFIL      NUMBER        PATH 'SZ') X
+    SELECT TRIM(M0_CODIGO)  AS EMPRESA,
+           TRIM(M0_CODFIL)  AS FILIAL,
+           TRIM(M0_NOME)    AS NOME_EMPRESA,
+           TRIM(M0_FILIAL)  AS NOME_FILIAL,
+           TRIM(M0_CGC)     AS CNPJ,
+           TRIM(M0_LEIAUTE) AS LEIAUTE,
+           M0_SIZEFIL       AS SIZEFIL
+      FROM SYS_COMPANY
+     WHERE D_E_L_E_T_ = ' '
 ), Q_EMP AS (
     SELECT DISTINCT EMPRESA FROM Q_SM0
 ), Q_TABS AS (
     SELECT DISTINCT TABLE_NAME FROM ALL_TABLES
+), Q_COLS AS (
+    SELECT DISTINCT TABLE_NAME, COLUMN_NAME FROM ALL_TAB_COLUMNS
+     WHERE COLUMN_NAME LIKE '%FILIAL'
 ), Q_EXISTE AS (
+    -- O '*' depois do nome marca: a tabela existe mas NAO tem o campo filial.
+    -- O script de Empresas le essa marca e conta so o total naquela tabela -
+    -- referenciar um campo que nao existe derruba a consulta inteira
+    -- (ORA-00904 / Invalid column name), e uma tabela boba levaria as 25 junto.
     SELECT E.EMPRESA, COUNT(*) AS QTD,
-           LISTAGG(L.TAB, ' ') WITHIN GROUP (ORDER BY L.TAB) AS TABELAS
+           LISTAGG(L.TAB || CASE WHEN C.COLUMN_NAME IS NULL THEN '*' ELSE '' END, ' ')
+             WITHIN GROUP (ORDER BY L.TAB) AS TABELAS
       FROM Q_EMP E
       JOIN Q_LISTA L ON 1 = 1
       JOIN Q_TABS T ON T.TABLE_NAME = L.TAB || E.EMPRESA || '0'
+      LEFT JOIN Q_COLS C ON C.TABLE_NAME = L.TAB || E.EMPRESA || '0'
+                        AND C.COLUMN_NAME = CASE WHEN SUBSTR(L.TAB, 1, 1) = 'S'
+                                                 THEN SUBSTR(L.TAB, 2, 2) ELSE L.TAB END || '_FILIAL'
      GROUP BY E.EMPRESA
 ), Q_SX2 AS (
     SELECT E.EMPRESA
@@ -214,8 +231,13 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
        CASE WHEN EXISTS (SELECT 1 FROM sys.tables T WHERE T.name = 'SX2' + S.EMPRESA + '0')
             THEN 'S' ELSE 'N' END AS SX2,
        (SELECT COUNT(*) FROM Q_LISTA L JOIN sys.tables T ON T.name = L.TAB + S.EMPRESA + '0') AS QTD_TABELAS,
-       STUFF((SELECT ' ' + L.TAB
-                FROM Q_LISTA L JOIN sys.tables T ON T.name = L.TAB + S.EMPRESA + '0'
+       -- O '*' depois do nome marca: existe, mas sem o campo filial (ver Oracle).
+       STUFF((SELECT ' ' + L.TAB + CASE WHEN CL.name IS NULL THEN '*' ELSE '' END
+                FROM Q_LISTA L
+                JOIN sys.tables T ON T.name = L.TAB + S.EMPRESA + '0'
+                LEFT JOIN sys.columns CL ON CL.object_id = T.object_id
+                     AND CL.name = CASE WHEN LEFT(L.TAB, 1) = 'S'
+                                        THEN SUBSTRING(L.TAB, 2, 2) ELSE L.TAB END + '_FILIAL'
                ORDER BY L.TAB
                  FOR XML PATH('')), 1, 1, '') AS TABELAS_EXISTENTES,
        ${DT.mssql} AS DT_LEITURA,
@@ -240,8 +262,13 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
           // 'N' no CSV do P0, false no JSON do painel: os dois dizem "sem SX2".
           // Tratar so o 'N' fazia o SQL Server ler SX2020 inexistente (pego no lab).
           sx2: !(r.sx2 === false || ['N', 'FALSE', '0'].includes(String(r.sx2 ?? '').trim().toUpperCase())),
-          tabelas: new Set(String(r.tabelas_existentes || r.tabelas || '').toUpperCase()
-            .split(/[\s,;]+/).filter(Boolean)), filiais: [] });
+          tabelas: new Set(), semFilial: new Set(), filiais: [] });
+        String(r.tabelas_existentes || r.tabelas || '').toUpperCase()
+          .split(/[\s,;]+/).filter(Boolean).forEach(t => {
+            const nome = t.replace('*', '');
+            mapa.get(e).tabelas.add(nome);
+            if (t.includes('*')) mapa.get(e).semFilial.add(nome);   // existe, sem campo filial
+          });
       }
       const f = cod(r.filial);
       if (f) mapa.get(e).filiais.push({ filial: f, nome: r.nome_filial || '' });
@@ -286,7 +313,7 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
   // ------------------------------------------------------------------------
   function scriptEmpresas(o = {}) {
     const d = o.dialeto === 'oracle' ? 'oracle' : 'mssql';
-    const lista = o.lista || LISTA_RH;
+    const lista = o.lista || LISTA_ESCOPO;
     const emps = estruturaSM0(o.sm0, o.empresas);
     if (!emps.length) throw new Error('Sem empresas da SM0: rode e suba o P0 (Script SM0) antes de gerar este script.');
     const { e: litE, f: litF } = literaisEmpFil(emps, d);
@@ -302,142 +329,69 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
         'unidade) | FILIAL DE OUTRA EMPRESA | NAO CADASTRADA NA SM0.',
         'Exporte em CSV e suba em "Subir medicao" da aba Empresas, ou use',
         '"Coletar agora" (mesmo script, pela REST TSCMONITREST).',
-      ].concat(d === 'mssql' ? [
-        'SQL SERVER: a existencia das tabelas ficou CONGELADA na leitura da SM0',
-        '(tabela que nao existia sai como NAO EXISTE sem ser lida). Criou tabela',
-        'nova? Refaca o P0 e gere este script de novo.',
-      ] : []) });
+        'A existencia das tabelas fica CONGELADA na leitura da SM0: tabela que',
+        'nao existia sai como NAO EXISTE sem ser lida. Criou tabela nova? Refaca',
+        'o P0 e gere este script de novo.',
+      ] });
 
-    if (d === 'oracle') {
-      return `${cab}
-WITH Q_EMP AS (
-${litE}
-), Q_FIL AS (
-${litF}
-), Q_LISTA AS (
-${listaDual(lista, d)}
-), Q_ALVO AS (
-    SELECT E.EMPRESA, E.NOME_EMPRESA, E.LEIAUTE, L.TIPO, L.TAB, L.DESCR,
-           L.TAB || E.EMPRESA || '0'   AS FISICA,
-           'SX2' || E.EMPRESA || '0'   AS FISICA_SX2,
-           CASE WHEN SUBSTR(L.TAB, 1, 1) = 'S' THEN SUBSTR(L.TAB, 2, 2) ELSE L.TAB END || '_FILIAL' AS CAMPO
-      FROM Q_EMP E CROSS JOIN Q_LISTA L
-), Q_NOMES AS (
-    SELECT FISICA AS NOME FROM Q_ALVO
-    UNION
-    SELECT FISICA_SX2 FROM Q_ALVO
-), Q_TABS AS (
-    SELECT T.TABLE_NAME, MIN(T.OWNER) AS OWNER
-      FROM ALL_TABLES T
-      JOIN Q_NOMES N ON N.NOME = T.TABLE_NAME
-     GROUP BY T.TABLE_NAME
-), Q_COLS AS (
-    SELECT C.OWNER, C.TABLE_NAME, C.COLUMN_NAME
-      FROM ALL_TAB_COLUMNS C
-      JOIN Q_NOMES N ON N.NOME = C.TABLE_NAME
-     WHERE C.COLUMN_NAME LIKE '%FILIAL' OR C.COLUMN_NAME IN ('X2_MODOEMP', 'X2_MODOUN')
-), Q_META AS (
-    SELECT A.EMPRESA, A.NOME_EMPRESA, A.LEIAUTE, A.TIPO, A.TAB, A.DESCR, A.FISICA,
-           A.FISICA_SX2, A.CAMPO, T.OWNER, X.OWNER AS OWNER_SX2,
-           CASE WHEN C.COLUMN_NAME  IS NULL THEN 'N' ELSE 'S' END            AS TEM_CAMPO,
-           CASE WHEN CE.COLUMN_NAME IS NULL THEN 'NULL' ELSE 'X2_MODOEMP' END AS COL_EMP,
-           CASE WHEN CU.COLUMN_NAME IS NULL THEN 'NULL' ELSE 'X2_MODOUN' END  AS COL_UN
-      FROM Q_ALVO A
-      LEFT JOIN Q_TABS T  ON T.TABLE_NAME = A.FISICA
-      LEFT JOIN Q_TABS X  ON X.TABLE_NAME = A.FISICA_SX2
-      LEFT JOIN Q_COLS C  ON C.OWNER = T.OWNER  AND C.TABLE_NAME  = A.FISICA     AND C.COLUMN_NAME  = A.CAMPO
-      LEFT JOIN Q_COLS CE ON CE.OWNER = X.OWNER AND CE.TABLE_NAME = A.FISICA_SX2 AND CE.COLUMN_NAME = 'X2_MODOEMP'
-      LEFT JOIN Q_COLS CU ON CU.OWNER = X.OWNER AND CU.TABLE_NAME = A.FISICA_SX2 AND CU.COLUMN_NAME = 'X2_MODOUN'
-), Q_SQLS AS (
-    SELECT M.EMPRESA, M.TAB,
-           CASE WHEN M.OWNER IS NULL
-                THEN 'SELECT ''#'' F, 0 C FROM DUAL WHERE 1 = 0'
-                WHEN M.TEM_CAMPO = 'N'
-                THEN 'SELECT ''*'' F, COUNT(*) C FROM "' || M.OWNER || '"."' || M.FISICA ||
-                     '" WHERE D_E_L_E_T_ = '' '' HAVING COUNT(*) > 0'
-                ELSE 'SELECT NVL(TRIM(' || M.CAMPO || '), ''#'') F, COUNT(*) C FROM "' ||
-                     M.OWNER || '"."' || M.FISICA || '" WHERE D_E_L_E_T_ = '' '' GROUP BY NVL(TRIM(' ||
-                     M.CAMPO || '), ''#'')'
-           END AS SQL_DIST,
-           CASE WHEN M.OWNER_SX2 IS NULL
-                THEN 'SELECT ''x'' M FROM DUAL WHERE 1 = 0'
-                ELSE 'SELECT NVL(TRIM(' || M.COL_EMP || '), ''-'') || ''|'' || NVL(TRIM(' ||
-                     M.COL_UN || '), ''-'') || ''|'' || NVL(TRIM(X2_MODO), ''-'') M FROM "' ||
-                     M.OWNER_SX2 || '"."' || M.FISICA_SX2 || '" WHERE X2_CHAVE = ''' || M.TAB ||
-                     ''' AND D_E_L_E_T_ = '' '''
-           END AS SQL_SX2
-      FROM Q_META M
-), Q_MODO AS (
-    SELECT S.EMPRESA, S.TAB,
-           XMLCAST(XMLQUERY('/ROWSET/ROW[1]/M/text()'
-                            PASSING DBMS_XMLGEN.GETXMLTYPE(S.SQL_SX2)
-                            RETURNING CONTENT) AS VARCHAR2(20)) AS SX2_MODO
-      FROM Q_SQLS S
-), Q_DIST AS (
-    SELECT S.EMPRESA, S.TAB, X.F AS FILIAL_BRUTA, X.C AS QTDE
-      FROM Q_SQLS S,
-           XMLTABLE('/ROWSET/ROW' PASSING DBMS_XMLGEN.GETXMLTYPE(S.SQL_DIST)
-                    COLUMNS F VARCHAR2(40) PATH 'F',
-                            C NUMBER       PATH 'C') X
-), Q_BASE AS (
-    SELECT M.EMPRESA, M.NOME_EMPRESA, M.LEIAUTE, M.TIPO, M.TAB AS TABELA, M.DESCR AS DESCRICAO,
-           M.FISICA AS TABELA_FISICA,
-           CASE WHEN M.OWNER IS NULL      THEN 'NAO EXISTE'
-                WHEN D.TAB IS NULL        THEN 'VAZIA'
-                WHEN M.TEM_CAMPO = 'N'    THEN 'SEM CAMPO FILIAL'
-                ELSE 'COM DADOS' END AS SITUACAO,
-           CASE WHEN M.OWNER_SX2 IS NULL  THEN 'SEM SX2'
-                WHEN O.SX2_MODO IS NULL   THEN 'SEM REGISTRO NA SX2'
-                ELSE O.SX2_MODO END AS SX2,
-           D.FILIAL_BRUTA, NVL(D.QTDE, 0) AS QTDE
-      FROM Q_META M
-      LEFT JOIN Q_MODO O ON O.EMPRESA = M.EMPRESA AND O.TAB = M.TAB
-      LEFT JOIN Q_DIST D ON D.EMPRESA = M.EMPRESA AND D.TAB = M.TAB
-)
-SELECT B.EMPRESA, B.NOME_EMPRESA, B.LEIAUTE, B.TIPO, B.TABELA, B.DESCRICAO, B.TABELA_FISICA,
-       B.SITUACAO, B.SX2,
-       CASE WHEN B.FILIAL_BRUTA = '#' THEN '(branco)'
-            WHEN B.FILIAL_BRUTA = '*' THEN '(sem campo)'
-            ELSE B.FILIAL_BRUTA END AS FILIAL,
-${classifica(d, 'B')},
-       B.QTDE,
-       ${DT.oracle} AS DT_LEITURA,
-       ${SEMANA.oracle} AS SEMANA
-  FROM Q_BASE B
- ORDER BY 1, 4, 5, 10`;
-    }
-
-    // SQL Server - um bloco por empresa x tabela, com a existencia do P0.
+    // UM BLOCO POR EMPRESA x TABELA, nos dois dialetos, com a existencia das
+    // tabelas congelada na leitura da SM0 (P0).
+    //
+    // O Oracle tinha uma versao propria, dinamica (ALL_TABLES + DBMS_XMLGEN),
+    // que dispensava o P0 para saber o que existe. A base da Acosul recusou
+    // essa tecnica em duas formas diferentes (ORA-32031 e ORA-00923), entao os
+    // dois bancos passaram a usar o mesmo desenho simples: SQL estatico, tabela
+    // referenciada direto, e o que existe vem do P0. Um caminho so para manter.
+    const O = d === 'oracle';
+    const cc   = O ? ' || ' : ' + ';                       // concatenacao
+    const nulo = (x, alt) => O ? `NVL(TRIM(${x}), ${alt})` // vazio vira marcador
+                               : `ISNULL(NULLIF(RTRIM(${x}), ''), ${alt})`;
+    const zero = (x) => O ? `NVL(${x}, 0)` : `ISNULL(${x}, 0)`;
+    const nuloTexto = O ? 'CAST(NULL AS VARCHAR2(40))' : 'CAST(NULL AS varchar(40))';
+    const umaLinha  = O ? 'FROM DUAL U' : 'FROM (SELECT 1 AS UM) U';
     const blocos = [];
     emps.forEach(x => lista.forEach(l => {
       const fis = l.tab + x.empresa + '0';
       const sx2 = 'SX2' + x.empresa + '0';
       const campo = campoFilial(l.tab);
       const existe = x.tabelas.has(l.tab);
+      const semCampo = x.semFilial.has(l.tab);
+      // COALESCE e nao ISNULL no SQL Server: ISNULL herda o tamanho do 1o
+      // argumento (5) e cortava 'SEM REGISTRO NA SX2' em 'SEM R'.
       const modo = x.sx2
-        ? `COALESCE((SELECT MAX(ISNULL(NULLIF(RTRIM(X2_MODOEMP), ''), '-') + '|' +
-                          ISNULL(NULLIF(RTRIM(X2_MODOUN), ''), '-') + '|' +
-                          ISNULL(NULLIF(RTRIM(X2_MODO), ''), '-'))
+        ? `COALESCE((SELECT MAX(${nulo('X2_MODOEMP', "'-'")}${cc}'|'${cc}
+                          ${nulo('X2_MODOUN', "'-'")}${cc}'|'${cc}
+                          ${nulo('X2_MODO', "'-'")})
                    FROM ${sx2} WHERE X2_CHAVE = ${lit(l.tab)} AND D_E_L_E_T_ = ' '), 'SEM REGISTRO NA SX2')`
         : "'SEM SX2'";
-      // COALESCE e nao ISNULL: ISNULL herda o tamanho do 1o argumento (5) e
-      // cortava 'SEM REGISTRO NA SX2' em 'SEM R' - pego no teste em SQL Server.
       const fixo = `SELECT ${lit(x.empresa)} AS EMPRESA, ${lit(x.nome)} AS NOME_EMPRESA, ${lit(x.leiaute)} AS LEIAUTE,
            ${lit(l.tipo)} AS TIPO, ${lit(l.tab)} AS TABELA, ${lit(l.descr)} AS DESCRICAO, ${lit(fis)} AS TABELA_FISICA,`;
       if (!existe) {
         blocos.push(`    ${fixo}
            'NAO EXISTE' AS SITUACAO,
            ${modo} AS SX2,
-           CAST(NULL AS varchar(40)) AS FILIAL_BRUTA, 0 AS QTDE`);
+           ${nuloTexto} AS FILIAL_BRUTA, 0 AS QTDE${O ? '\n      FROM DUAL' : ''}`);
+      } else if (semCampo) {
+        // Existe, mas sem <PFX>_FILIAL: conta o total e marca com '*', que a
+        // classificacao le como SEM CAMPO FILIAL. HAVING sem GROUP BY vale nos
+        // dois bancos e faz a tabela vazia devolver nenhuma linha (= VAZIA).
+        blocos.push(`    ${fixo}
+           CASE WHEN G.F IS NULL THEN 'VAZIA' ELSE 'SEM CAMPO FILIAL' END AS SITUACAO,
+           ${modo} AS SX2,
+           G.F AS FILIAL_BRUTA, ${zero('G.C')} AS QTDE
+      ${umaLinha}
+      LEFT JOIN (SELECT '*' AS F, COUNT(*) AS C
+                   FROM ${fis} WHERE D_E_L_E_T_ = ' '
+                 HAVING COUNT(*) > 0) G ON 1 = 1`);
       } else {
         blocos.push(`    ${fixo}
            CASE WHEN G.F IS NULL THEN 'VAZIA' ELSE 'COM DADOS' END AS SITUACAO,
            ${modo} AS SX2,
-           G.F AS FILIAL_BRUTA, ISNULL(G.C, 0) AS QTDE
-      FROM (SELECT 1 AS UM) U
-      LEFT JOIN (SELECT ISNULL(NULLIF(RTRIM(${campo}), ''), '#') AS F, COUNT(*) AS C
+           G.F AS FILIAL_BRUTA, ${zero('G.C')} AS QTDE
+      ${umaLinha}
+      LEFT JOIN (SELECT ${nulo(campo, "'#'")} AS F, COUNT(*) AS C
                    FROM ${fis} WHERE D_E_L_E_T_ = ' '
-                  GROUP BY ISNULL(NULLIF(RTRIM(${campo}), ''), '#')) G ON 1 = 1`);
+                  GROUP BY ${nulo(campo, "'#'")}) G ON 1 = 1`);
       }
     }));
 
@@ -449,16 +403,26 @@ ${blocos.join('\n    UNION ALL\n')}
 )
 SELECT B.EMPRESA, B.NOME_EMPRESA, B.LEIAUTE, B.TIPO, B.TABELA, B.DESCRICAO, B.TABELA_FISICA,
        B.SITUACAO, B.SX2,
-       CASE WHEN B.FILIAL_BRUTA = '#' THEN '(branco)' ELSE B.FILIAL_BRUTA END AS FILIAL,
+       CASE WHEN B.FILIAL_BRUTA = '#' THEN '(branco)'
+            WHEN B.FILIAL_BRUTA = '*' THEN '(sem campo)'
+            ELSE B.FILIAL_BRUTA END AS FILIAL,
 ${classifica(d, 'B')},
        B.QTDE,
-       ${DT.mssql} AS DT_LEITURA,
-       ${SEMANA.mssql} AS SEMANA
+       ${DT[d]} AS DT_LEITURA,
+       ${SEMANA[d]} AS SEMANA
   FROM Q_BASE B
  ORDER BY 1, 4, 5, 10`;
   }
 
-  const api = { LISTA_RH, COLS_SM0, COLS_EMP, scriptSM0, scriptEmpresas, estruturaSM0, campoFilial };
+  // Grupo de uma tabela medida. Medicao antiga (ou tabela tirada do escopo) cai
+  // em 'Outros' em vez de desaparecer da tela.
+  const grupoDaTabela = (tab) => {
+    const achou = LISTA_ESCOPO.find(l => l.tab === cod(tab));
+    return achou ? achou.grupo : 'Outros';
+  };
+
+  const api = { LISTA_ESCOPO, GRUPOS, grupoDaTabela, COLS_SM0, COLS_EMP,
+    scriptSM0, scriptEmpresas, estruturaSM0, campoFilial };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else raiz.MonitEmp = api;
 })(typeof window !== 'undefined' ? window : globalThis);
