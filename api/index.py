@@ -1769,8 +1769,16 @@ def api_monitemp(customer):
                             situacao, sx2, filial, filial_tipo, nome_filial, qtde, consistencia
                        from cockpit.monitemp_itens where medicao_id=%s
                       order by empresa, tipo, tabela, filial nulls first""", (alvo["id"],))
+    # O ESCOPO medido vem da aba Estrutura: o que a consultoria definiu para este
+    # cliente e o que os scripts P0/P1 vao procurar. Vazio (cliente que ainda nao
+    # definiu nada) cai na lista padrao do gerador - senao o painel nao mediria
+    # nada e pareceria quebrado.
+    escopo = q("""select modulo, tabela, descricao, tipo
+                    from cockpit.estrut_tabelas where customer=%s and ativo
+                   order by modulo, tabela""", (customer,))
     return _json({"ok": True, "customer": customer, "ambiente": amb, "sm0": sm0,
-                  "medicoes": meds, "medicao": alvo, "itens": itens})
+                  "medicoes": meds, "medicao": alvo, "itens": itens,
+                  "escopo": escopo})
 
 
 @app.post("/api/monitemp/<customer>/sm0")

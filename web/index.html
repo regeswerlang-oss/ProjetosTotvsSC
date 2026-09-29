@@ -5498,7 +5498,16 @@ function empSM0Html(sm0) {
       <tbody>${linhas}</tbody></table></div>`;
 }
 
-const LISTA_EMP_ESCOPO = () => (window.MonitEmp ? MonitEmp.LISTA_ESCOPO.length : 0);
+// O escopo medido e o que a aba Estrutura definiu para o cliente (estrut_tabelas),
+// traduzido para o formato do gerador. Cliente que ainda nao definiu nada cai na
+// lista padrao do proprio gerador - medir nada pareceria painel quebrado.
+function empEscopo() {
+  const e = emp.dados?.escopo || [];
+  if (!e.length) return null;
+  return e.map(r => ({ grupo: r.modulo, tipo: (r.tipo || 'cadastro').toUpperCase(),
+                       tab: r.tabela, descr: r.descricao || '' }));
+}
+const LISTA_EMP_ESCOPO = () => (empEscopo() || (window.MonitEmp ? MonitEmp.LISTA_ESCOPO : [])).length;
 
 function empCelula(t, e) {
   const c = t.emps[e];
@@ -5656,7 +5665,8 @@ function abreModalSQLEmp(tipo) {
           <div class="flex flex-wrap gap-2 mt-1">${empresas.map(e => `<label class="inline-flex items-center gap-1 text-xs
             px-2 py-1 border border-slate-300 rounded-md"><input type="checkbox" class="se-emp accent-totvs-blue" value="${escapeHtml(e)}" checked>
             <b class="font-mono">${escapeHtml(e)}</b> ${escapeHtml(sm0.find(r => r.empresa === e)?.nome_empresa || '')}</label>`).join('')}</div></div>
-         <p class="text-xs text-slate-500">${MonitEmp.LISTA_ESCOPO.length} tabelas do escopo — ${MonitEmp.GRUPOS.join(', ')}.
+         <p class="text-xs text-slate-500">${LISTA_EMP_ESCOPO()} tabelas ${empEscopo()
+           ? 'definidas na aba <b>Estrutura de Empresas</b>' : '<b>da lista padrão</b> — este cliente ainda não tem tabelas na aba Estrutura'}.
            No SQL Server a existência das tabelas fica congelada na leitura da SM0 — refaça o P0 se criarem tabela nova.</p>`}
      <div id="se-salvo" class="text-xs text-slate-500"></div>
      <textarea id="se-txt" rows="16" spellcheck="false" class="w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs"></textarea>
@@ -5676,9 +5686,10 @@ function abreModalSQLEmp(tipo) {
   const gera = () => {
     const o = { dialeto: m.campo('se-dialeto').value, cliente: `${(state.selected?.projeto?.nome_cliente_projeto || '').trim()} (${cli || ''})`,
                 base: AMB[emp.ambiente].label, quando: new Date().toLocaleString('pt-BR') };
+    const lista = empEscopo() || undefined;   // undefined = lista padrao do gerador
     try {
-      m.campo('se-txt').value = ehSM0 ? MonitEmp.scriptSM0(o)
-        : MonitEmp.scriptEmpresas({ ...o, sm0, empresas: $$('.se-emp', m.el).filter(c => c.checked).map(c => c.value) });
+      m.campo('se-txt').value = ehSM0 ? MonitEmp.scriptSM0({ ...o, lista })
+        : MonitEmp.scriptEmpresas({ ...o, lista, sm0, empresas: $$('.se-emp', m.el).filter(c => c.checked).map(c => c.value) });
     } catch (e) { m.campo('se-txt').value = '-- ' + e.message; }
   };
   gera();
@@ -6925,7 +6936,7 @@ async function salvaAcessos() {
 //
 // Compartilhamento sempre em 3 posições: Empresa · Unidade · Filial, a MESMA
 // ordem de X2_MODOEMP|X2_MODOUN|X2_MODO que a aba de medição mostra.
-const est = { customer: null, dados: null, modulo: null, busca: '', carregando: false };
+const est = { customer: null, dados: null, modulo: null, tipo: 'TODOS', busca: '', carregando: false };
 
 const EST_NIVEL_TIT = ['Empresa', 'Unidade de Negócio', 'Filial'];
 
@@ -7171,7 +7182,14 @@ function estBlocoTabelas(d) {
       <p class="text-slate-400 text-xs mt-1">Use <b>📚 Trazer módulos</b> para semear do catálogo
         ou <b>＋ Tabela</b> para incluir na mão.</p></div>`;
   }
-  const linhas = d.tabelas.filter(t => t.modulo === est.modulo);
+  // Cadastro x movimento e a mesma separacao da aba de medicao - e a que decide
+  // a regra da TDN: movimento nao pode ser mais compartilhado que o cadastro.
+  const doModulo = d.tabelas.filter(t => t.modulo === est.modulo);
+  const ehMov = (x) => x.tipo === 'movimento';
+  const conta = { TODOS: doModulo.length, CADASTRO: doModulo.filter(x => !ehMov(x)).length,
+                  MOVIMENTO: doModulo.filter(ehMov).length };
+  const linhas = doModulo.filter(x => est.tipo === 'TODOS'
+    || (est.tipo === 'MOVIMENTO' ? ehMov(x) : !ehMov(x)));
   const niveis = d.niveis || [0, 2];
   return `<div class="bg-white rounded-lg border border-slate-200">
     <div class="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center gap-2">
@@ -7180,6 +7198,11 @@ function estBlocoTabelas(d) {
         ${mods.map(m => `<option value="${escapeHtml(m)}" ${m === est.modulo ? 'selected' : ''}>
           ${escapeHtml(m)} (${d.tabelas.filter(t => t.modulo === m).length})</option>`).join('')}
       </select>
+      <div class="inline-flex rounded-md border border-slate-300 overflow-hidden">
+        ${['TODOS', 'CADASTRO', 'MOVIMENTO'].map((x, k) => `<button data-est-tipo="${x}"
+            class="cad-visao-btn ${k ? 'border-l border-slate-300' : ''} ${est.tipo === x ? 'is-on' : ''}">${
+            { TODOS: 'Todas', CADASTRO: 'Cadastros', MOVIMENTO: 'Movimentos' }[x]} (${conta[x]})</button>`).join('')}
+      </div>
       <input id="est-busca" value="${escapeHtml(est.busca)}" placeholder="filtrar tabela ou descrição"
         class="px-2 py-1 text-sm border border-slate-300 rounded-md w-56">
       <span class="ml-auto text-xs text-slate-400">
@@ -7199,6 +7222,8 @@ function estBlocoTabelas(d) {
           </tr>
         </thead>
         <tbody>
+        ${linhas.length ? '' : `<tr><td colspan="8" class="px-3 py-4 text-center text-xs text-slate-400">
+          Nenhuma tabela de ${est.tipo === 'MOVIMENTO' ? 'movimento' : 'cadastro'} neste módulo.</td></tr>`}
         ${linhas.map(t => {
           const c = t.compart || '';
           const chave = `${t.tabela} ${t.descricao || ''}`.toUpperCase();
@@ -7241,6 +7266,8 @@ async function estPost(rota, corpo) {
 }
 
 function ligaEstrutura() {
+  $$('#est-conteudo [data-est-tipo]').forEach(b => b.addEventListener('click',
+    () => { est.tipo = b.dataset.estTipo; renderEstrutura(); }));
   const sel = $('#est-modulo');
   if (sel) sel.addEventListener('change', () => { est.modulo = sel.value; est.busca = ''; renderEstrutura(); });
   // Filtra ESCONDENDO linha, não redesenhando o bloco: redesenhar a cada tecla

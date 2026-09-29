@@ -231,6 +231,24 @@ Esta aba faz a outra metade: **mede** o que está no banco, pela conexão. O esc
 continua vindo da `LISTA_ESCOPO` do gerador (34 tabelas), com o campo `grupo`
 preservado — ele só não é mais usado para desenhar a matriz aqui.
 
+## O escopo passa a vir da aba Estrutura (29/09/2026)
+
+As tabelas medidas não são mais a lista fixa do gerador: vêm de
+`cockpit.estrut_tabelas`, ou seja, do que a consultoria definiu na aba
+**Estrutura de Empresas** — sugeridas pelo catálogo ou incluídas na mão, `Z*`
+inclusive. `GET /api/monitemp/<customer>` devolve `escopo`, o painel traduz para
+o formato do gerador (`modulo → grupo`, `tipo` em maiúsculas) e passa em `lista`
+para `scriptSM0` e `scriptEmpresas`.
+
+A `LISTA_ESCOPO` das 34 continua no gerador como **padrão**, para cliente que
+ainda não definiu nada: medir zero tabelas pareceria erro, não escopo vazio. O
+modal do script diz qual das duas origens está valendo, para ninguém rodar um P0
+achando que mede uma coisa e medir outra.
+
+Conferido gerando P0 e P1 com um escopo de quatro tabelas — uma delas manual
+(`ZZ1`) e uma de movimento (`SE1`) — e checando que só elas entram no SQL, que o
+`TIPO` sai certo nas duas, e que escopo vazio cai nas 34.
+
 ## Migração
 
 `docs/sql/2026-09-18-monitemp.sql` (aplicada no Supabase em 18/09/2026): três

@@ -169,3 +169,24 @@ Sem leitura da SM0, o bloco vira uma linha discreta dizendo onde rodar o Script
 SM0. A rota `/api/estrutura/<customer>` passou a devolver `sm0` e
 `sm0_ambiente`: produção na frente, testes como alternativa — em projeto novo,
 que é o caso de uso desta aba, muitas vezes só existe a de testes.
+
+## O escopo sai daqui e a separação cadastro × movimento entra (29/09/2026)
+
+Duas pontas do mesmo laço.
+
+**A aba Empresas passa a medir o que esta aba define.** A rota do monitemp devolve
+`escopo` a partir de `cockpit.estrut_tabelas` (ativas) e o gerador dos scripts P0
+e P1 usa essa lista no lugar da `LISTA_ESCOPO` fixa. Vale para tabela semeada do
+catálogo **e** para tabela incluída na mão: um `Z*` do cliente entra no script
+como qualquer outra. Cliente que ainda não definiu nada cai na lista padrão de 34
+— medir zero tabelas pareceria painel quebrado, não escopo vazio —, e o modal do
+script diz qual das duas está valendo.
+
+**A lista de tabelas ganhou o filtro `Todas · Cadastros · Movimentos`**, com a
+contagem de cada um, igual ao da aba de medição. Não é enfeite: é a separação que
+a regra central da conferência usa — movimento não pode ser mais compartilhado
+que o cadastro. Poder olhar só os movimentos de um módulo é como se confere isso
+sem ler linha por linha.
+
+Módulo sem nenhuma tabela do tipo escolhido diz isso em uma linha, em vez de
+mostrar tabela vazia.
