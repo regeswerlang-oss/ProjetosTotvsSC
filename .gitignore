@@ -9,3 +9,7 @@ __pycache__/
 0*.patch
 Claude outputs/
 api/.probe
+
+0*.patch
+Claude outputs/
+api/.probe
