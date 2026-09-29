@@ -216,6 +216,21 @@ Resultado linha a linha idêntico nos dois bancos (única diferença por desenho
 
 **Não testado:** a base real da Açosul.
 
+## A definição sai desta aba (29/09/2026)
+
+A faixa por módulo e o seletor **Módulo**, que entraram no dia 28, saíram. A aba
+volta a separar só **Cadastros** e **Movimentos / histórico**.
+
+O motivo não é estético: definir *como deveria ser* — quais tabelas, de qual
+módulo, com qual compartilhamento — é trabalho de consultor, feito uma vez, antes
+da carga. Isso agora tem casa própria na aba **Estrutura de Empresas**
+(`cockpit.estrut_*`), onde o compartilhamento é digitado nos mesmos três níveis
+`Empresa · Unidade · Filial` da SX2 e conferido contra as regras da TDN.
+
+Esta aba faz a outra metade: **mede** o que está no banco, pela conexão. O escopo
+continua vindo da `LISTA_ESCOPO` do gerador (34 tabelas), com o campo `grupo`
+preservado — ele só não é mais usado para desenhar a matriz aqui.
+
 ## Migração
 
 `docs/sql/2026-09-18-monitemp.sql` (aplicada no Supabase em 18/09/2026): três

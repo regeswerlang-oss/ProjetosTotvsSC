@@ -251,6 +251,18 @@
           </label>
         </div>
 
+        <!-- Estrutura: aba INTERNA (ABAS cliente=False). Não leva data-interno
+             nos botões porque a aba inteira já é interna — repetir o atributo
+             daria a impressão de que existe uma versão dela para o cliente. -->
+        <div data-rail="est" class="rail-grupo hidden">
+          <button id="est-leiaute"      class="rail-btn">⚙ Leiaute<span class="rail-sub">EEFF · FF · EEUUFF</span></button>
+          <button id="est-grupo-novo"   class="rail-btn">＋ Grupo</button>
+          <button id="est-empresa-nova" class="rail-btn">＋ Empresa</button>
+          <button id="est-filial-nova"  class="rail-btn">＋ Filial</button>
+          <button id="est-semear"       class="rail-btn rail-sep rail-btn-cta">📚 Trazer módulos<span class="rail-sub">catálogo de tabelas</span></button>
+          <button id="est-tabela-nova"  class="rail-btn">＋ Tabela<span class="rail-sub">inclusão manual</span></button>
+        </div>
+
         <div data-rail="cob" class="rail-grupo hidden">
           <button id="cob-cenarios" data-interno class="rail-btn">🎯 Cenários</button>
           <label id="cob-upload-wrap" data-interno class="rail-btn rail-btn-cta">
@@ -300,6 +312,7 @@
             <button data-tab="cadastros" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
             <button data-tab="cobertura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cobertura</button>
             <button data-tab="empresas"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Empresas</button>
+            <button data-tab="estrutura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Estrutura</button>
             <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
             <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
@@ -531,6 +544,19 @@
           </div>
           <div id="cob-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
           <div id="cob-conteudo"></div>
+        </div>
+
+        <!-- Aba Estrutura de Empresas — a DEFINIÇÃO (grupo, empresa, filial,
+             leiaute e compartilhamento por tabela). A aba Empresas ao lado MEDE
+             a base real; esta desenha o que foi combinado, antes de existir base. -->
+        <div id="tab-estrutura" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="est-cliente-nome" class="font-medium"></span>
+            <span id="est-leiaute-selo" class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-600"></span>
+            <button id="est-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="est-conteudo"></div>
         </div>
 
         <!-- Aba Protótipo — roteiro MIT045, ciclos e aproveitamento.
@@ -1691,7 +1717,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -1712,7 +1738,8 @@ const AMB = {
 // Cadastros é a única que depende da SUB-ABA (cadastros × movimentos), então
 // lá quem decide é o setSub() — que roda depois deste mapa e sobrepõe.
 const RAIL_ABA = { crono: 'arvore', modulos: 'arvore', etapas: 'arvore',
-                   cobertura: 'cob', empresas: 'emp', prototipo: 'pro', transicao: 'tr' };
+                   cobertura: 'cob', empresas: 'emp', estrutura: 'est',
+                   prototipo: 'pro', transicao: 'tr' };
 
 function railGrupo(chave) {
   $$('#tab-acoes [data-rail]').forEach(g =>
@@ -1749,6 +1776,7 @@ function setTab(nome) {
   if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
   if (nome === 'cobertura') initCobertura();
   if (nome === 'empresas') initEmpresas(emp.ambiente);
+  if (nome === 'estrutura') initEstrutura();
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
 }
@@ -4668,6 +4696,7 @@ const RELATORIOS = {
   cadastros: { titulo: 'Status dos Cadastros',    alvo: '#tab-cadastros', curado: relatorioCadastrosHTML },
   cobertura: { titulo: 'Cobertura de Cenários',   alvo: '#tab-cobertura', curado: relatorioCoberturaHTML },
   empresas:  { titulo: 'Empresas e Compartilhamento', alvo: '#emp-conteudo' },
+  estrutura: { titulo: 'Estrutura de Empresas',    alvo: '#est-conteudo' },
   prototipo: { titulo: 'Protótipo',               alvo: '#tab-prototipo' },
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
 };
@@ -5367,7 +5396,7 @@ $('#mov-coletar').addEventListener('click', () => coletaAgora('movimentos'));
 //  Spec: docs/specs/2026-09-18-aba-empresas-compartilhamento.md
 // ============================================================================
 const emp = { customer: null, ambiente: 'producao', dados: null, data: null,
-              tipo: 'TODOS', grupo: 'TODOS', soAlerta: false, sel: null };
+              tipo: 'TODOS', soAlerta: false, sel: null };
 
 // Consistências que NÃO são problema — o resto acende o alerta da célula
 const EMP_OK = new Set(['OK', 'VAZIA', 'TABELA NAO EXISTE', 'SEM CAMPO FILIAL']);
@@ -5414,9 +5443,7 @@ function empMatriz(itens) {
   const tabs = new Map();
   itens.forEach(i => {
     if (emp.tipo !== 'TODOS' && i.tipo !== emp.tipo) return;
-    const g = empGrupo(i.tabela);
-    if (emp.grupo !== 'TODOS' && g !== emp.grupo) return;
-    if (!tabs.has(i.tabela)) tabs.set(i.tabela, { tabela: i.tabela, descricao: i.descricao, tipo: i.tipo, grupo: g, emps: {} });
+    if (!tabs.has(i.tabela)) tabs.set(i.tabela, { tabela: i.tabela, descricao: i.descricao, tipo: i.tipo, emps: {} });
     const t = tabs.get(i.tabela);
     const c = t.emps[i.empresa] || (t.emps[i.empresa] = {
       situacao: i.situacao, sx2: i.sx2, fisica: i.tabela_fisica, total: 0, linhas: [], alertas: 0 });
@@ -5427,9 +5454,7 @@ function empMatriz(itens) {
   let lista = [...tabs.values()];
   if (emp.soAlerta) lista = lista.filter(t => Object.values(t.emps).some(c => c.alertas));
   const ordem = { CADASTRO: 0, MOVIMENTO: 1 };
-  const og = (g) => { const i = EMP_GRUPOS().indexOf(g); return i < 0 ? 99 : i; };
-  return lista.sort((a, b) => og(a.grupo) - og(b.grupo)
-    || (ordem[a.tipo] ?? 9) - (ordem[b.tipo] ?? 9) || a.tabela.localeCompare(b.tabela));
+  return lista.sort((a, b) => (ordem[a.tipo] ?? 9) - (ordem[b.tipo] ?? 9) || a.tabela.localeCompare(b.tabela));
 }
 
 function empSM0Html(sm0) {
@@ -5474,10 +5499,6 @@ function empSM0Html(sm0) {
 }
 
 const LISTA_EMP_ESCOPO = () => (window.MonitEmp ? MonitEmp.LISTA_ESCOPO.length : 0);
-// Modulo da tabela (RH, Cadastros Gerais, Financeiro, Contabilidade). Vem da
-// lista do gerador, nao do CSV: medicao antiga continua abrindo, em "Outros".
-const EMP_GRUPOS = () => (window.MonitEmp ? MonitEmp.GRUPOS.concat('Outros') : ['Outros']);
-const empGrupo = (tab) => (window.MonitEmp ? MonitEmp.grupoDaTabela(tab) : 'Outros');
 
 function empCelula(t, e) {
   const c = t.emps[e];
@@ -5523,14 +5544,6 @@ function empDetalhe(itens) {
       <th class="px-3 py-2">Consistência com a SX2</th></tr></thead><tbody>${corpo}</tbody></table></div>`;
 }
 
-/** Titulo da faixa da matriz: o modulo, e o tipo so quando o modulo tem os dois. */
-function empSecao(matriz, t) {
-  const doGrupo = matriz.filter(x => x.grupo === t.grupo);
-  const misto = doGrupo.some(x => x.tipo !== doGrupo[0].tipo);
-  if (!misto) return t.grupo;
-  return t.grupo + ' · ' + (t.tipo === 'MOVIMENTO' ? 'Movimentos / histórico' : 'Cadastros');
-}
-
 function pintaEmpresas() {
   const j = emp.dados, box = $('#emp-conteudo');
   if (!j) return;
@@ -5561,11 +5574,6 @@ function pintaEmpresas() {
             class="cad-visao-btn ${k ? 'border-l border-slate-300' : ''} ${emp.tipo === t ? 'is-on' : ''}">${
             { TODOS: 'Todas', CADASTRO: 'Cadastros', MOVIMENTO: 'Movimentos' }[t]}</button>`).join('')}
       </div>
-      <span class="text-xs text-slate-500">Módulo</span>
-      <select id="emp-grupo" class="px-2 py-1 border border-slate-300 rounded-md text-sm">
-        ${['TODOS'].concat(EMP_GRUPOS()).map(g => `<option value="${escapeHtml(g)}" ${emp.grupo === g ? 'selected' : ''}>${
-          g === 'TODOS' ? 'Todos' : escapeHtml(g)}</option>`).join('')}
-      </select>
       <label class="inline-flex items-center gap-1 text-xs"><input id="emp-so-alerta" type="checkbox"
         ${emp.soAlerta ? 'checked' : ''} class="accent-totvs-blue"> só tabelas com alerta</label>
     </div>`;
@@ -5585,8 +5593,8 @@ function pintaEmpresas() {
           ${empresas.map(e => `<th class="px-2 py-2 text-center"><span class="font-mono font-semibold text-slate-700">${escapeHtml(e)}</span>
             <div class="font-normal text-[10px] truncate max-w-[9rem]">${escapeHtml(nomeEmp[e] || '')}</div></th>`).join('')}</tr>
         </thead>
-        <tbody>${matriz.map((t, k) => `${k === 0 || matriz[k - 1].grupo !== t.grupo || matriz[k - 1].tipo !== t.tipo
-            ? `<tr><td colspan="${empresas.length + 1}" class="px-3 pt-3 pb-1 text-[11px] uppercase tracking-wide text-slate-400">${escapeHtml(empSecao(matriz, t))}</td></tr>` : ''}
+        <tbody>${matriz.map((t, k) => `${k === 0 || matriz[k - 1].tipo !== t.tipo
+            ? `<tr><td colspan="${empresas.length + 1}" class="px-3 pt-3 pb-1 text-[11px] uppercase tracking-wide text-slate-400">${escapeHtml(t.tipo === 'MOVIMENTO' ? 'Movimentos / histórico' : 'Cadastros')}</td></tr>` : ''}
             <tr class="border-t border-slate-100">
               <td class="px-3 py-1.5"><b class="font-mono">${escapeHtml(t.tabela)}</b>
                 <span class="text-xs text-slate-500">${escapeHtml(t.descricao || '')}</span></td>
@@ -5617,7 +5625,6 @@ function pintaEmpresas() {
 
   $('#emp-data')?.addEventListener('change', ev => { emp.sel = null; carregaEmpresas(emp.customer, ev.target.value); });
   $$('[data-emptipo]', box).forEach(b => b.addEventListener('click', () => { emp.tipo = b.dataset.emptipo; pintaEmpresas(); }));
-  $('#emp-grupo')?.addEventListener('change', ev => { emp.grupo = ev.target.value; emp.sel = null; pintaEmpresas(); });
   $('#emp-so-alerta')?.addEventListener('change', ev => { emp.soAlerta = ev.target.checked; pintaEmpresas(); });
   $$('[data-emptab]', box).forEach(td => td.addEventListener('click', () => {
     emp.sel = { tabela: td.dataset.emptab, empresa: td.dataset.empemp };
@@ -6906,6 +6913,563 @@ async function salvaAcessos() {
     if (bb) { bb.disabled = false; bb.textContent = 'Liberar'; }
   }
 }
+
+// ============================================================================
+//  ABA ESTRUTURA DE EMPRESAS — a DEFINIÇÃO (planejado), não a medição
+//  Spec: docs/specs/2026-09-29-aba-estrutura-empresas.md
+// ============================================================================
+// A aba Empresas mede o que EXISTE na base do cliente. Esta desenha o que foi
+// COMBINADO — grupo, empresa, filial, leiaute e o compartilhamento de cada
+// tabela — e é usada antes de existir base. A TDN é dura nisso: a estrutura se
+// define na implantação e mudar depois compromete a integridade dos dados.
+//
+// Compartilhamento sempre em 3 posições: Empresa · Unidade · Filial, a MESMA
+// ordem de X2_MODOEMP|X2_MODOUN|X2_MODO que a aba de medição mostra.
+const est = { customer: null, dados: null, modulo: null, busca: '', carregando: false };
+
+const EST_NIVEL_TIT = ['Empresa', 'Unidade de Negócio', 'Filial'];
+
+async function initEstrutura() {
+  const cli = state.selected?.cli || null;
+  if (est.customer === cli && est.dados) { renderEstrutura(); return; }
+  await carregaEstrutura(cli);
+}
+
+async function carregaEstrutura(customer) {
+  est.customer = customer || null;
+  const box = $('#est-conteudo');
+  $('#est-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || customer || '—';
+  if (!customer) {
+    box.innerHTML = blocoVazioCad('Abra um projeto para definir a estrutura de empresas.');
+    return;
+  }
+  box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando definição…</div>';
+  try {
+    est.dados = await api(`/api/estrutura/${encodeURIComponent(customer)}`);
+    // Primeiro módulo com tabela definida abre por padrão. Mostrar as ~130
+    // linhas de todos os módulos de uma vez não é leitura, é rolagem.
+    const mods = modulosDefinidos();
+    if (!mods.includes(est.modulo)) est.modulo = mods[0] || null;
+    renderEstrutura();
+  } catch (e) {
+    box.innerHTML = blocoErro('Não foi possível carregar a estrutura', e,
+      () => carregaEstrutura(customer));
+  }
+}
+
+function modulosDefinidos() {
+  return [...new Set((est.dados?.tabelas || []).map(t => t.modulo))].sort();
+}
+
+function estCfg() { return est.dados?.config || { leiaute: 'EEFF' }; }
+
+/** Exemplo de código montado com os tamanhos definidos — vale mais que a
+ *  explicação: o consultor confere "0101" com o cliente em dois segundos. */
+function estExemplo(cfg) {
+  const p = [];
+  if (cfg.tam_empresa) p.push('01');
+  if (cfg.tam_unidade) p.push('01');
+  if (cfg.tam_filial) p.push('02');
+  return p.join('') || '—';
+}
+
+function estSelo(nivel) {
+  return { erro: 'bg-rose-100 text-rose-800', aviso: 'bg-amber-100 text-amber-900',
+           info: 'bg-slate-100 text-slate-600' }[nivel] || 'bg-slate-100 text-slate-600';
+}
+
+function renderEstrutura() {
+  const d = est.dados;
+  const box = $('#est-conteudo');
+  if (!d) { box.innerHTML = blocoVazioCad('Sem dados.'); return; }
+  const cfg = estCfg();
+  const erros = d.alertas.filter(a => a.nivel === 'erro');
+  $('#est-leiaute-selo').textContent = cfg.leiaute;
+  $('#est-leiaute-selo').className =
+    'px-2 py-0.5 rounded-full text-xs font-semibold bg-totvs-blue/20 text-totvs-petroleo';
+
+  box.innerHTML = `
+    ${estBlocoLeiaute(cfg, d)}
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 my-4">
+      ${kpi('Grupos',   d.grupos.length,   'bg-slate-100 text-slate-700')}
+      ${kpi('Empresas', d.empresas.length, 'bg-totvs-blue text-totvs-petroleo')}
+      ${kpi('Filiais',  d.filiais.length,  'bg-slate-100 text-slate-700')}
+      ${kpi('Tabelas definidas', `${d.tabelas.filter(t => t.compart).length}/${d.tabelas.length}`,
+            'bg-slate-100 text-slate-700')}
+      ${kpi('Inconsistências', erros.length,
+            erros.length ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800')}
+    </div>
+    ${estBlocoAlertas(d.alertas)}
+    ${estBlocoArvore(d)}
+    ${estBlocoSM0(d, cfg)}
+    ${estBlocoTabelas(d)}`;
+  ligaEstrutura();
+}
+
+function estBlocoLeiaute(cfg, d) {
+  const l = (d.leiautes || []).find(x => x.id === cfg.leiaute) || {};
+  return `<div class="bg-white rounded-lg border border-slate-200 p-4">
+    <div class="flex flex-wrap items-start gap-x-8 gap-y-2">
+      <div>
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Leiaute do código</p>
+        <p class="font-totvs text-lg text-totvs-petroleo">${escapeHtml(l.label || cfg.leiaute)}</p>
+        <p class="text-xs text-slate-500 mt-0.5">${escapeHtml(l.ajuda || '')}</p>
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Tamanhos</p>
+        <p class="text-sm mt-1">Empresa <b>${cfg.tam_empresa || 0}</b> ·
+           Unidade <b>${cfg.tam_unidade || 0}</b> · Filial <b>${cfg.tam_filial || 0}</b></p>
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Exemplo de código</p>
+        <p class="font-mono text-lg mt-0.5">${estExemplo(cfg)}</p>
+      </div>
+      <div class="flex-1 min-w-[200px]">
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Observação</p>
+        <p class="text-sm mt-1 text-slate-600">${escapeHtml(cfg.observacao || '—')}</p>
+        ${cfg.definido_por ? `<p class="text-[11px] text-slate-400 mt-1">Definido por
+          ${escapeHtml(cfg.definido_por)}</p>` : ''}
+      </div>
+    </div>
+    <p class="text-xs text-slate-500 mt-3 border-t border-slate-100 pt-2">
+      A estrutura de empresas e o compartilhamento das tabelas devem ser definidos
+      <b>na implantação</b>. Alterar depois da carga compromete a integridade dos dados
+      (TDN · Compartilhamento de tabelas do módulo Financeiro).</p>
+  </div>`;
+}
+
+function estBlocoAlertas(alertas) {
+  if (!alertas.length) {
+    return `<div class="bg-emerald-50 border border-emerald-200 rounded-lg p-3 mb-4 text-sm
+      text-emerald-800">Nenhuma inconsistência na definição atual.</div>`;
+  }
+  return `<details class="bg-white rounded-lg border border-slate-200 mb-4" open>
+    <summary class="px-4 py-3 cursor-pointer font-totvs text-totvs-petroleo">
+      Conferência <span class="text-xs font-normal text-slate-500">${alertas.length} ponto(s)</span>
+    </summary>
+    <div class="px-4 pb-4 space-y-1.5">
+      ${alertas.map(a => `<div class="flex items-start gap-2 text-sm">
+        <span class="${estSelo(a.nivel)} px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase
+          shrink-0 mt-0.5">${a.nivel}</span>
+        <span class="font-mono text-xs text-slate-500 shrink-0 mt-0.5 w-28 truncate"
+          title="${escapeHtml(String(a.chave))}">${escapeHtml(String(a.chave))}</span>
+        <span class="text-slate-700">${escapeHtml(a.texto)}
+          ${a.fonte ? `<span class="text-[10px] text-slate-400">(${escapeHtml(a.fonte)})</span>` : ''}</span>
+      </div>`).join('')}
+    </div>
+  </details>`;
+}
+
+function estBlocoArvore(d) {
+  const porEmpresa = {};
+  d.filiais.forEach(f => (porEmpresa[f.empresa_id] = porEmpresa[f.empresa_id] || []).push(f));
+  const semGrupo = d.empresas.filter(e => !e.grupo_id);
+  const grupos = [...d.grupos.map(g => ({ g, emps: d.empresas.filter(e => e.grupo_id === g.id) })),
+                  ...(semGrupo.length ? [{ g: null, emps: semGrupo }] : [])];
+  if (!d.empresas.length) {
+    return `<div class="bg-white rounded-lg border border-slate-200 p-8 text-center mb-4">
+      <p class="text-slate-500 text-sm">Nenhuma empresa definida ainda.</p>
+      <p class="text-slate-400 text-xs mt-1">Use <b>＋ Empresa</b> no rail de ações à esquerda.</p>
+    </div>`;
+  }
+  return `<div class="bg-white rounded-lg border border-slate-200 mb-4">
+    <div class="px-4 py-3 border-b border-slate-200 font-totvs text-totvs-petroleo">
+      Grupo · Empresa · Filial</div>
+    <div class="p-4 space-y-4">
+    ${grupos.map(({ g, emps }) => `
+      <div>
+        <div class="flex items-center gap-2 mb-2">
+          <span class="font-mono text-xs px-1.5 py-0.5 rounded bg-slate-800 text-white">
+            ${escapeHtml(g ? g.codigo : '—')}</span>
+          <span class="font-semibold text-sm">${escapeHtml(g ? g.nome : 'Sem grupo de empresas')}</span>
+          ${g ? `<button data-est-grupo="${g.id}" class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button>` : ''}
+        </div>
+        <div class="pl-3 border-l-2 border-slate-200 space-y-3">
+        ${emps.map(e => `
+          <div>
+            <div class="flex items-center gap-2 flex-wrap">
+              <span class="font-mono text-xs px-1.5 py-0.5 rounded bg-totvs-blue/25 text-totvs-petroleo">
+                ${escapeHtml(e.codigo)}</span>
+              <span class="text-sm font-medium">${escapeHtml(e.nome)}</span>
+              ${e.cnpj ? `<span class="text-xs text-slate-400 font-mono">${escapeHtml(e.cnpj)}</span>` : ''}
+              ${e.uf ? `<span class="text-xs text-slate-400">${escapeHtml(e.uf)}</span>` : ''}
+              <button data-est-empresa="${e.id}" class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button>
+            </div>
+            <table class="w-full text-sm mt-1.5">
+              <tbody>
+              ${(porEmpresa[e.id] || []).map(f => `
+                <tr class="border-t border-slate-100">
+                  <td class="py-1 pr-3 w-24 font-mono text-xs">${escapeHtml(f.codigo)}</td>
+                  <td class="py-1 pr-3">${escapeHtml(f.nome)}
+                    ${f.matriz ? '<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">MATRIZ</span>' : ''}</td>
+                  <td class="py-1 pr-3 text-xs text-slate-400 font-mono">${escapeHtml(f.cnpj || '')}</td>
+                  <td class="py-1 pr-3 text-xs text-slate-400">${escapeHtml([f.municipio, f.uf].filter(Boolean).join('/'))}</td>
+                  <td class="py-1 text-right"><button data-est-filial="${f.id}"
+                    class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button></td>
+                </tr>`).join('') ||
+                `<tr><td class="py-1 text-xs text-slate-400">Sem filial cadastrada.</td></tr>`}
+              </tbody>
+            </table>
+          </div>`).join('')}
+        </div>
+      </div>`).join('')}
+    </div>
+  </div>`;
+}
+
+/** Empresas lidas da base, lado a lado com a definicao. SO REFERENCIA: nada
+ *  daqui entra na arvore acima. A aba Estrutura e o que a consultoria combinou,
+ *  e essa distincao se perde no instante em que o painel comeca a copiar um
+ *  para o outro. O que vale comparar aqui e o leiaute: divergiu, a carga vai
+ *  gravar codigo de filial com tamanho diferente do combinado. */
+function estBlocoSM0(d, cfg) {
+  const sm0 = d.sm0 || [];
+  if (!sm0.length) {
+    return `<div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-500">
+      <b class="text-slate-600">Empresas da base</b> — nenhuma leitura da SM0 ainda.
+      Rode o <b>Script SM0</b> na aba Empresas e Compartilhamento para ver aqui, lado a lado,
+      o que a base tem de verdade.</div>`;
+  }
+  const amb = AMB[d.sm0_ambiente] || AMB.producao;
+  const r0 = sm0[0];
+  const porEmp = new Map();
+  sm0.forEach(r => { if (!porEmp.has(r.empresa)) porEmp.set(r.empresa, []); porEmp.get(r.empresa).push(r); });
+  const difLeiaute = [...new Set(sm0.map(r => (r.leiaute || '').trim().toUpperCase()))]
+    .filter(l => l && l !== (cfg.leiaute || '').toUpperCase());
+  const linhas = [...porEmp.entries()].map(([e, fs]) => `<tr class="border-t border-slate-100 align-top">
+      <td class="px-3 py-2 font-mono font-semibold">${escapeHtml(e)}</td>
+      <td class="px-3 py-2">${escapeHtml(fs[0].nome_empresa || '')}</td>
+      <td class="px-3 py-2 font-mono text-xs">${escapeHtml(fs[0].leiaute || '—')}</td>
+      <td class="px-3 py-2 text-xs">${fs.map(f => `<span class="inline-block mr-1 mb-1 px-1.5 py-0.5 rounded bg-slate-100"
+          title="${escapeHtml(f.cnpj || '')}"><b class="font-mono">${escapeHtml(f.filial)}</b> ${escapeHtml(f.nome_filial || '')}</span>`).join('')}</td>
+    </tr>`).join('');
+  return `<div class="mt-4 bg-white rounded-lg border border-slate-200 overflow-x-auto">
+    <div class="px-4 py-2 border-b border-slate-200 flex items-center gap-2 flex-wrap text-sm">
+      <h3 class="font-semibold text-slate-700">Empresas da base</h3>
+      <span class="px-2 py-0.5 rounded-full text-xs ${amb.cls}">${escapeHtml(amb.label)}</span>
+      <span class="text-xs text-slate-500">${porEmp.size} empresa(s) · ${sm0.length} filial(is) ·
+        lida em ${escapeHtml(r0.lido_em || fmtDataHora(r0.updated_at))}</span>
+      <span class="text-xs text-slate-400">só referência — não entra na árvore</span>
+    </div>
+    ${difLeiaute.length ? `<div class="px-4 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-900">
+      A base está com leiaute <b class="font-mono">${escapeHtml(difLeiaute.join(', '))}</b> e a definição acima diz
+      <b class="font-mono">${escapeHtml(cfg.leiaute || '—')}</b>. Um dos dois está errado, e é o código da filial que paga.</div>` : ''}
+    <table class="w-full text-sm"><thead class="bg-slate-50 text-xs text-slate-500 text-left">
+      <tr><th class="px-3 py-2">Emp.</th><th class="px-3 py-2">Nome</th>
+      <th class="px-3 py-2">Leiaute</th><th class="px-3 py-2">Filiais</th></tr></thead>
+      <tbody>${linhas}</tbody></table></div>`;
+}
+
+function estBlocoTabelas(d) {
+  const mods = modulosDefinidos();
+  if (!mods.length) {
+    return `<div class="bg-white rounded-lg border border-slate-200 p-8 text-center">
+      <p class="text-slate-500 text-sm">Nenhuma tabela na definição deste cliente.</p>
+      <p class="text-slate-400 text-xs mt-1">Use <b>📚 Trazer módulos</b> para semear do catálogo
+        ou <b>＋ Tabela</b> para incluir na mão.</p></div>`;
+  }
+  const linhas = d.tabelas.filter(t => t.modulo === est.modulo);
+  const niveis = d.niveis || [0, 2];
+  return `<div class="bg-white rounded-lg border border-slate-200">
+    <div class="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center gap-2">
+      <span class="font-totvs text-totvs-petroleo mr-2">Tabelas e compartilhamento</span>
+      <select id="est-modulo" class="px-2 py-1 text-sm border border-slate-300 rounded-md">
+        ${mods.map(m => `<option value="${escapeHtml(m)}" ${m === est.modulo ? 'selected' : ''}>
+          ${escapeHtml(m)} (${d.tabelas.filter(t => t.modulo === m).length})</option>`).join('')}
+      </select>
+      <input id="est-busca" value="${escapeHtml(est.busca)}" placeholder="filtrar tabela ou descrição"
+        class="px-2 py-1 text-sm border border-slate-300 rounded-md w-56">
+      <span class="ml-auto text-xs text-slate-400">
+        ${EST_NIVEL_TIT.filter((_, i) => niveis.includes(i)).join(' · ')} ·
+        <b>E</b> exclusiva, <b>C</b> compartilhada</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+          <tr>
+            <th class="px-3 py-2 text-left">Tabela</th>
+            <th class="px-3 py-2 text-left">Descrição</th>
+            <th class="px-3 py-2 text-left">Tipo</th>
+            ${EST_NIVEL_TIT.map((t, i) => `<th class="px-2 py-2 text-center ${niveis.includes(i) ? '' : 'opacity-40'}">${t}</th>`).join('')}
+            <th class="px-3 py-2 text-center">Sugestão</th>
+            <th class="px-3 py-2"></th>
+          </tr>
+        </thead>
+        <tbody>
+        ${linhas.map(t => {
+          const c = t.compart || '';
+          const chave = `${t.tabela} ${t.descricao || ''}`.toUpperCase();
+          return `<tr data-est-linha="${escapeHtml(chave)}" class="border-t border-slate-100 hover:bg-slate-50/60">
+            <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(t.tabela)}
+              ${t.origem === 'manual' ? '<span class="ml-1 text-[9px] px-1 rounded bg-slate-200 text-slate-600">MANUAL</span>' : ''}</td>
+            <td class="px-3 py-1.5 text-slate-600">${escapeHtml(t.descricao || '')}
+              ${t.observacao ? `<span class="block text-[11px] text-slate-400">${escapeHtml(t.observacao)}</span>` : ''}</td>
+            <td class="px-3 py-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${
+              t.tipo === 'movimento' ? 'bg-amber-100 text-amber-900' : 'bg-sky-100 text-sky-900'}">
+              ${t.tipo === 'movimento' ? 'movimento' : 'cadastro'}</span></td>
+            ${[0, 1, 2].map(i => `<td class="px-2 py-1.5 text-center">
+              <select data-est-mode="${t.id}" data-pos="${i}" ${niveis.includes(i) ? '' : 'disabled'}
+                class="px-1 py-0.5 text-xs border border-slate-300 rounded ${niveis.includes(i) ? '' : 'opacity-40'}">
+                <option value="" ${c[i] ? '' : 'selected'}>—</option>
+                <option value="E" ${c[i] === 'E' ? 'selected' : ''}>E</option>
+                <option value="C" ${c[i] === 'C' ? 'selected' : ''}>C</option>
+              </select></td>`).join('')}
+            <td class="px-3 py-1.5 text-center font-mono text-xs ${
+              t.sugestao && c && t.sugestao !== c ? 'text-amber-700 font-semibold' : 'text-slate-400'}">
+              ${escapeHtml(t.sugestao || '—')}</td>
+            <td class="px-3 py-1.5 text-right whitespace-nowrap">
+              <button data-est-tab="${t.id}" class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button>
+            </td>
+          </tr>`;
+        }).join('') || `<tr><td colspan="8" class="px-3 py-6 text-center text-slate-400 text-sm">
+          Nenhuma tabela com esse filtro.</td></tr>`}
+        </tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ── Gravação ───────────────────────────────────────────────────────────────
+async function estPost(rota, corpo) {
+  return api(`/api/estrutura/${encodeURIComponent(est.customer)}/${rota}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(corpo),
+  });
+}
+
+function ligaEstrutura() {
+  const sel = $('#est-modulo');
+  if (sel) sel.addEventListener('change', () => { est.modulo = sel.value; est.busca = ''; renderEstrutura(); });
+  // Filtra ESCONDENDO linha, não redesenhando o bloco: redesenhar a cada tecla
+  // recria o input e o cursor volta para o começo da palavra.
+  const bus = $('#est-busca');
+  if (bus) bus.addEventListener('input', () => {
+    est.busca = bus.value;
+    const alvo = bus.value.trim().toUpperCase();
+    $$('#est-conteudo tbody tr[data-est-linha]').forEach(tr => {
+      tr.classList.toggle('hidden', !!alvo && !tr.dataset.estLinha.includes(alvo));
+    });
+  });
+
+  // Os três selects gravam JUNTOS: o compartilhamento é uma coisa só (3
+  // posições), gravar posição a posição deixaria a tabela num estado que a
+  // regra da TDN considera inválido entre um clique e o outro.
+  $$('#est-conteudo [data-est-mode]').forEach(s => s.addEventListener('change', async () => {
+    const id = s.dataset.estMode;
+    const linha = est.dados.tabelas.find(t => t.id === id);
+    const atual = (linha.compart || '   ').padEnd(3, ' ').split('');
+    const partes = $$(`#est-conteudo [data-est-mode="${id}"]`);
+    partes.forEach(p => { atual[+p.dataset.pos] = p.value || ' '; });
+    // Nível que o leiaute não usa nasce compartilhado: sem unidade de negócio
+    // no código, "exclusiva por unidade" não significa nada.
+    const niveis = est.dados.niveis || [0, 1, 2];
+    [0, 1, 2].forEach(i => { if (!niveis.includes(i) && atual[i] === ' ') atual[i] = 'C'; });
+    const valor = atual.join('');
+    if (valor.includes(' ')) return;                 // ainda incompleto, não grava
+    try {
+      await estPost('tabela', { id, compart: valor, tipo: linha.tipo,
+                                descricao: linha.descricao, observacao: linha.observacao });
+      await carregaEstrutura(est.customer);
+    } catch (e) { alert(e.message); }
+  }));
+
+  $$('#est-conteudo [data-est-tab]').forEach(b => b.addEventListener('click',
+    () => estModalTabela(est.dados.tabelas.find(t => t.id === b.dataset.estTab))));
+  $$('#est-conteudo [data-est-grupo]').forEach(b => b.addEventListener('click',
+    () => estModalGrupo(est.dados.grupos.find(g => g.id === b.dataset.estGrupo))));
+  $$('#est-conteudo [data-est-empresa]').forEach(b => b.addEventListener('click',
+    () => estModalEmpresa(est.dados.empresas.find(e => e.id === b.dataset.estEmpresa))));
+  $$('#est-conteudo [data-est-filial]').forEach(b => b.addEventListener('click',
+    () => estModalFilial(est.dados.filiais.find(f => f.id === b.dataset.estFilial))));
+}
+
+function estGuarda() {
+  if (!est.customer) { alert('Abra um projeto primeiro.'); return false; }
+  return true;
+}
+
+/** Fecha o modal, recarrega e devolve o erro na própria caixa — repetir isso
+ *  em cada modal era onde o tratamento de erro ia se perdendo. */
+function estSalvar(m, rota, corpo, rotulo) {
+  m.aoConfirmar(async () => {
+    m.erro(''); m.ocupado(true, 'Salvando…');
+    try {
+      await estPost(rota, corpo());
+      m.fecha();
+      await carregaEstrutura(est.customer);
+    } catch (e) { m.erro(e.message); m.ocupado(false, rotulo); }
+  });
+}
+
+function estModalLeiaute() {
+  if (!estGuarda()) return;
+  const cfg = estCfg();
+  const m = modal('Leiaute do código de filial', `
+    <label class="block"><span class="text-xs text-slate-500">Leiaute</span>
+      <select id="est-cfg-leiaute" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+        ${(est.dados.leiautes || []).map(l => `<option value="${l.id}" ${l.id === cfg.leiaute ? 'selected' : ''}>
+          ${escapeHtml(l.label)}</option>`).join('')}
+      </select></label>
+    <div class="grid grid-cols-3 gap-2">
+      ${campo('est-cfg-te', 'Tam. empresa', String(cfg.tam_empresa ?? 2), 'number')}
+      ${campo('est-cfg-tu', 'Tam. unidade', String(cfg.tam_unidade ?? 0), 'number')}
+      ${campo('est-cfg-tf', 'Tam. filial',  String(cfg.tam_filial  ?? 2), 'number')}
+    </div>
+    ${campo('est-cfg-obs', 'Observação', cfg.observacao || '')}
+    <p class="text-xs text-slate-500">Trocar o leiaute depois da carga é retrabalho de base
+      inteira — confirme com o cliente antes de gravar.</p>`, 'Gravar');
+  // Trocar o leiaute repõe os tamanhos padrão: quem escolhe FF não quer
+  // continuar com 2 caracteres de empresa no campo ao lado.
+  const padrao = { FF: [0, 0, 2], EEFF: [2, 0, 2], EEUUFF: [2, 2, 2] };
+  m.campo('est-cfg-leiaute').addEventListener('change', ev => {
+    const p = padrao[ev.target.value] || padrao.EEFF;
+    m.campo('est-cfg-te').value = p[0];
+    m.campo('est-cfg-tu').value = p[1];
+    m.campo('est-cfg-tf').value = p[2];
+  });
+  estSalvar(m, 'config', () => ({
+    leiaute: m.campo('est-cfg-leiaute').value,
+    tam_empresa: +m.campo('est-cfg-te').value, tam_unidade: +m.campo('est-cfg-tu').value,
+    tam_filial: +m.campo('est-cfg-tf').value, observacao: m.campo('est-cfg-obs').value,
+  }), 'Gravar');
+}
+
+function estModalGrupo(g) {
+  if (!estGuarda()) return;
+  const m = modal(g ? 'Grupo de empresas' : 'Novo grupo de empresas',
+    campo('est-g-cod', 'Código', g?.codigo || '') +
+    campo('est-g-nome', 'Nome', g?.nome || '') +
+    campo('est-g-obs', 'Observação', g?.observacao || '') +
+    (g ? `<label class="flex items-center gap-2 text-sm text-rose-700">
+      <input id="est-g-excluir" type="checkbox"> Remover este grupo da definição</label>` : ''),
+    'Gravar');
+  estSalvar(m, 'grupo', () => ({
+    id: g?.id, codigo: m.campo('est-g-cod').value, nome: m.campo('est-g-nome').value,
+    observacao: m.campo('est-g-obs').value, excluir: !!m.campo('est-g-excluir')?.checked,
+  }), 'Gravar');
+}
+
+function estModalEmpresa(e) {
+  if (!estGuarda()) return;
+  const cfg = estCfg();
+  const m = modal(e ? 'Empresa' : 'Nova empresa',
+    `<label class="block"><span class="text-xs text-slate-500">Grupo</span>
+      <select id="est-e-grupo" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+        <option value="">— sem grupo —</option>
+        ${est.dados.grupos.map(g => `<option value="${g.id}" ${e?.grupo_id === g.id ? 'selected' : ''}>
+          ${escapeHtml(g.codigo)} · ${escapeHtml(g.nome)}</option>`).join('')}
+      </select></label>` +
+    campo('est-e-cod', `Código (${cfg.tam_empresa || 0} caracteres)`, e?.codigo || '') +
+    campo('est-e-nome', 'Razão social', e?.nome || '') +
+    `<div class="grid grid-cols-2 gap-2">
+      ${campo('est-e-cnpj', 'CNPJ', e?.cnpj || '')}${campo('est-e-uf', 'UF', e?.uf || '')}</div>` +
+    campo('est-e-obs', 'Observação', e?.observacao || '') +
+    (e ? `<label class="flex items-center gap-2 text-sm text-rose-700">
+      <input id="est-e-excluir" type="checkbox"> Remover esta empresa (e suas filiais)</label>` : ''),
+    'Gravar');
+  estSalvar(m, 'empresa', () => ({
+    id: e?.id, grupo_id: m.campo('est-e-grupo').value || null,
+    codigo: m.campo('est-e-cod').value, nome: m.campo('est-e-nome').value,
+    cnpj: m.campo('est-e-cnpj').value, uf: m.campo('est-e-uf').value,
+    observacao: m.campo('est-e-obs').value, excluir: !!m.campo('est-e-excluir')?.checked,
+  }), 'Gravar');
+}
+
+function estModalFilial(f) {
+  if (!estGuarda()) return;
+  if (!est.dados.empresas.length) { alert('Cadastre uma empresa antes da filial.'); return; }
+  const cfg = estCfg();
+  const tam = (cfg.tam_empresa || 0) + (cfg.tam_unidade || 0) + (cfg.tam_filial || 0);
+  const m = modal(f ? 'Filial' : 'Nova filial',
+    `<label class="block"><span class="text-xs text-slate-500">Empresa</span>
+      <select id="est-f-emp" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+        ${est.dados.empresas.map(e => `<option value="${e.id}" ${f?.empresa_id === e.id ? 'selected' : ''}>
+          ${escapeHtml(e.codigo)} · ${escapeHtml(e.nome)}</option>`).join('')}
+      </select></label>` +
+    campo('est-f-cod', `Código completo (${tam} caracteres, começa pelo código da empresa)`,
+          f?.codigo || '') +
+    (cfg.tam_unidade ? campo('est-f-un', 'Unidade de negócio', f?.unidade || '') : '') +
+    campo('est-f-nome', 'Nome da filial', f?.nome || '') +
+    `<div class="grid grid-cols-3 gap-2">
+      ${campo('est-f-cnpj', 'CNPJ', f?.cnpj || '')}
+      ${campo('est-f-mun', 'Município', f?.municipio || '')}
+      ${campo('est-f-uf', 'UF', f?.uf || '')}</div>` +
+    `<label class="flex items-center gap-2 text-sm"><input id="est-f-matriz" type="checkbox"
+      ${f?.matriz ? 'checked' : ''}> É a matriz desta empresa</label>` +
+    campo('est-f-obs', 'Observação', f?.observacao || '') +
+    (f ? `<label class="flex items-center gap-2 text-sm text-rose-700">
+      <input id="est-f-excluir" type="checkbox"> Remover esta filial</label>` : ''),
+    'Gravar');
+  estSalvar(m, 'filial', () => ({
+    id: f?.id, empresa_id: m.campo('est-f-emp').value, codigo: m.campo('est-f-cod').value,
+    unidade: m.campo('est-f-un')?.value, nome: m.campo('est-f-nome').value,
+    cnpj: m.campo('est-f-cnpj').value, municipio: m.campo('est-f-mun').value,
+    uf: m.campo('est-f-uf').value, matriz: m.campo('est-f-matriz').checked,
+    observacao: m.campo('est-f-obs').value, excluir: !!m.campo('est-f-excluir')?.checked,
+  }), 'Gravar');
+}
+
+function estModalTabela(t) {
+  if (!estGuarda()) return;
+  const mods = [...new Set([...(est.dados.catalogo || []).map(c => c.modulo),
+                            ...modulosDefinidos()])].sort();
+  const m = modal(t ? `Tabela ${t.tabela}` : 'Incluir tabela manualmente',
+    (t ? '' : `<label class="block"><span class="text-xs text-slate-500">Módulo</span>
+      <input id="est-t-mod" list="est-t-mods" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+      <datalist id="est-t-mods">${mods.map(x => `<option value="${escapeHtml(x)}">`).join('')}</datalist>
+      <span class="text-xs text-slate-400">Escolha da lista ou digite um módulo novo.</span></label>` +
+      campo('est-t-tab', 'Nome da tabela (alias)', '', 'text', 'Ex.: SA1, Z01')) +
+    campo('est-t-desc', 'Descrição', t?.descricao || '') +
+    `<label class="block"><span class="text-xs text-slate-500">Tipo</span>
+      <select id="est-t-tipo" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+        <option value="cadastro" ${t?.tipo !== 'movimento' ? 'selected' : ''}>Cadastro</option>
+        <option value="movimento" ${t?.tipo === 'movimento' ? 'selected' : ''}>Movimento</option>
+      </select></label>` +
+    campo('est-t-comp', 'Compartilhamento (Empresa·Unidade·Filial)', t?.compart || '', 'text',
+          'Três posições E/C — ex.: ECC (exclusiva por empresa) ou CCC (tudo compartilhado)') +
+    campo('est-t-obs', 'Observação / por que fugiu da sugestão', t?.observacao || '') +
+    (t ? `<label class="flex items-center gap-2 text-sm text-rose-700">
+      <input id="est-t-excluir" type="checkbox"> Remover esta tabela da definição</label>` : ''),
+    'Gravar');
+  estSalvar(m, 'tabela', () => ({
+    id: t?.id, modulo: m.campo('est-t-mod')?.value, tabela: m.campo('est-t-tab')?.value,
+    descricao: m.campo('est-t-desc').value, tipo: m.campo('est-t-tipo').value,
+    compart: m.campo('est-t-comp').value, observacao: m.campo('est-t-obs').value,
+    excluir: !!m.campo('est-t-excluir')?.checked,
+  }), 'Gravar');
+}
+
+function estModalSemear() {
+  if (!estGuarda()) return;
+  const cat = est.dados.catalogo || [];
+  const jaTem = new Set(modulosDefinidos());
+  const m = modal('Trazer módulos do catálogo', `
+    <p class="text-xs text-slate-500">O catálogo é o ponto de partida da consultoria: traz as
+      principais tabelas do módulo com a sugestão de compartilhamento. Trazer de novo
+      <b>não apaga</b> o que já foi decidido.</p>
+    <div class="grid grid-cols-2 gap-1 max-h-72 overflow-y-auto border border-slate-200 rounded-md p-2">
+      ${cat.map(c => `<label class="flex items-center gap-2 text-sm">
+        <input type="checkbox" class="est-mod" value="${escapeHtml(c.modulo)}">
+        <span>${escapeHtml(c.modulo)} <span class="text-xs text-slate-400">${c.n}</span>
+        ${jaTem.has(c.modulo) ? '<span class="text-[10px] text-emerald-700">já trazido</span>' : ''}</span>
+      </label>`).join('')}
+    </div>
+    <label class="flex items-center gap-2 text-sm"><input id="est-semente-sug" type="checkbox" checked>
+      Já preencher com a sugestão (dá para alterar depois)</label>`, 'Trazer');
+  estSalvar(m, 'semear', () => ({
+    modulos: [...m.el.querySelectorAll('.est-mod')].filter(c => c.checked).map(c => c.value),
+    usar_sugestao: m.campo('est-semente-sug').checked,
+  }), 'Trazer');
+}
+
+$('#est-reload').addEventListener('click', () => carregaEstrutura(est.customer));
+$('#est-leiaute').addEventListener('click', estModalLeiaute);
+$('#est-grupo-novo').addEventListener('click', () => estModalGrupo(null));
+$('#est-empresa-nova').addEventListener('click', () => estModalEmpresa(null));
+$('#est-filial-nova').addEventListener('click', () => estModalFilial(null));
+$('#est-semear').addEventListener('click', estModalSemear);
+$('#est-tabela-nova').addEventListener('click', () => estModalTabela(null));
 
 $('#btn-acessos').addEventListener('click', abreAcessos);
 

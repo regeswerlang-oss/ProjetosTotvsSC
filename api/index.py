@@ -296,6 +296,7 @@ ABAS = [
     {"id": "cadastros", "label": "Cadastros e Movimentos", "cliente": True},
     {"id": "cobertura", "label": "Cobertura",            "cliente": True},
     {"id": "empresas",  "label": "Empresas e Compartilhamento", "cliente": True},
+    {"id": "estrutura", "label": "Estrutura de Empresas", "cliente": False},
     {"id": "prototipo", "label": "Protótipo",            "cliente": True},
     {"id": "transicao", "label": "Transição",            "cliente": True},
 ]
@@ -4550,6 +4551,414 @@ def api_proto_export(customer, rid):
     return Response(buf.getvalue(),
                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  ESTRUTURA DE EMPRESAS — a DEFINIÇÃO (o que foi decidido na implantação)
+# ═══════════════════════════════════════════════════════════════════════════
+# NÃO confundir com a aba Empresas e Compartilhamento (monitemp_*): lá se MEDE
+# a base do cliente (SM0 + SX2 lidas do banco dele); aqui se DESENHA, antes de
+# existir base. Uma responde "como está", a outra "como combinamos que seria".
+# A TDN é explícita: "a estrutura das tabelas deve ser definida na implantação
+# do sistema (...) não aconselhamos a alteração no compartilhamento das tabelas
+# após a implantação" — por isso esta tela existe, e existe ANTES da carga.
+#
+# COMPARTILHAMENTO SEMPRE EM 3 POSIÇÕES: Empresa · Unidade de Negócio · Filial,
+# na MESMA ordem de X2_MODOEMP|X2_MODOUN|X2_MODO que a aba de medição já mostra.
+# 'E' = exclusiva, 'C' = compartilhada. Trocar essa ordem entre as duas telas
+# faria o consultor comparar coisas diferentes achando que são a mesma.
+
+ESTRUT_LEIAUTES = {
+    "FF":     {"label": "FF · só filial", "tam": (0, 0, 2),
+               "ajuda": "Uma empresa só. O código de filial é o código inteiro."},
+    "EEFF":   {"label": "EEFF · empresa + filial", "tam": (2, 0, 2),
+               "ajuda": "O código da filial começa pelo código da empresa (ex.: 01 + 01 = 0101)."},
+    "EEUUFF": {"label": "EEUUFF · empresa + unidade + filial", "tam": (2, 2, 2),
+               "ajuda": "Empresa + unidade de negócio + filial (ex.: 01 + 01 + 02 = 010102)."},
+}
+# Índice de cada nível dentro da string de 3 posições do compartilhamento.
+ESTRUT_NIVEL = {"empresa": 0, "unidade": 1, "filial": 2}
+ESTRUT_NIVEL_LABEL = ("Empresa", "Unidade de Negócio", "Filial")
+
+
+def _estrut_niveis(leiaute):
+    """Quais posições do compartilhamento VALEM neste leiaute.
+    Sem unidade de negócio no código, a posição do meio é decorativa: cobrar
+    coerência dela geraria alerta que ninguém consegue resolver."""
+    t = ESTRUT_LEIAUTES.get(leiaute, ESTRUT_LEIAUTES["EEFF"])["tam"]
+    return [i for i in range(3) if t[i] > 0]
+
+
+def _estrut_compart_ok(v):
+    return isinstance(v, str) and len(v) == 3 and all(c in "EC" for c in v)
+
+
+def _estrut_mais_compart(a, b, niveis):
+    """'a' é MAIS compartilhada que 'b'? (C é mais amplo que E).
+    Só é verdade quando 'a' é >= em TODOS os níveis que valem e > em algum —
+    dois modos cruzados (um mais amplo aqui, menos ali) não são comparáveis e
+    não viram alerta: inventar ordem onde não há vira alarme falso."""
+    if not (_estrut_compart_ok(a) and _estrut_compart_ok(b)):
+        return False
+    maior = False
+    for i in niveis:
+        pa, pb = a[i] == "C", b[i] == "C"
+        if pb and not pa:
+            return False
+        if pa and not pb:
+            maior = True
+    return maior
+
+
+def _estrut_cfg(customer):
+    r = q("select * from cockpit.estrut_config where customer=%s", (customer,), one=True)
+    if r:
+        return dict(r)
+    return {"customer": customer, "leiaute": "EEFF", "tam_empresa": 2,
+            "tam_unidade": 0, "tam_filial": 2, "observacao": None,
+            "definido_por": None, "definido_em": None, "novo": True}
+
+
+def _estrut_tam_esperado(cfg):
+    t = ESTRUT_LEIAUTES.get(cfg["leiaute"], ESTRUT_LEIAUTES["EEFF"])["tam"]
+    return (cfg.get("tam_empresa") or t[0]) + (cfg.get("tam_unidade") or t[1]) \
+         + (cfg.get("tam_filial") or t[2])
+
+
+def _estrut_alertas(cfg, empresas, filiais, tabelas):
+    """As três famílias de problema que só aparecem quando alguém confere:
+
+      1. CÓDIGO que não fecha com o leiaute (tamanho, ou filial que não começa
+         pelo código da empresa dona). É o erro que só aparece na carga.
+      2. Tabela DEFINIDA fora do padrão sugerido — não é erro, é decisão; entra
+         como aviso para a ata da reunião, nunca como bloqueio.
+      3. REGRAS da TDN (cockpit.estrut_regras): movimento mais compartilhado que
+         o cadastro (1:n) e pares que têm de ser idênticos. Essa é a que quebra
+         o go-live em silêncio.
+    """
+    niveis = _estrut_niveis(cfg["leiaute"])
+    tam = _estrut_tam_esperado(cfg)
+    tam_emp = cfg.get("tam_empresa") or 0
+    al = []
+    emp_por_id = {e["id"]: e for e in empresas}
+
+    for e in empresas:
+        if tam_emp and len(e["codigo"] or "") != tam_emp:
+            al.append({"nivel": "erro", "onde": "empresa", "chave": e["codigo"],
+                       "texto": f"Código da empresa com {len(e['codigo'] or '')} caractere(s); "
+                                f"o leiaute {cfg['leiaute']} espera {tam_emp}."})
+    for f in filiais:
+        cod = f["codigo"] or ""
+        if len(cod) != tam:
+            al.append({"nivel": "erro", "onde": "filial", "chave": cod,
+                       "texto": f"Código da filial com {len(cod)} caractere(s); "
+                                f"o leiaute {cfg['leiaute']} espera {tam}."})
+        dona = emp_por_id.get(f["empresa_id"])
+        if tam_emp and dona and not cod.startswith(dona["codigo"] or ""):
+            al.append({"nivel": "erro", "onde": "filial", "chave": cod,
+                       "texto": f"A filial é da empresa {dona['codigo']} mas o código não "
+                                f"começa por {dona['codigo']}."})
+    if not any(f.get("matriz") for f in filiais) and filiais:
+        al.append({"nivel": "aviso", "onde": "filial", "chave": "—",
+                   "texto": "Nenhuma filial marcada como matriz."})
+
+    por_tab = {t["tabela"]: t for t in tabelas if t.get("compart")}
+    for t in tabelas:
+        if t.get("compart") and t.get("sugestao") and t["compart"] != t["sugestao"]:
+            al.append({"nivel": "info", "onde": "tabela", "chave": t["tabela"],
+                       "texto": f"Definida como {t['compart']} — a sugestão era {t['sugestao']}. "
+                                f"Registre o porquê na observação."})
+        if not t.get("compart"):
+            al.append({"nivel": "aviso", "onde": "tabela", "chave": t["tabela"],
+                       "texto": "Sem compartilhamento definido."})
+
+    for r in q("select * from cockpit.estrut_regras"):
+        a, b = por_tab.get(r["tab_a"]), por_tab.get(r["tab_b"])
+        if not (a and b):
+            continue                      # regra sobre tabela que este projeto não usa
+        if r["tipo"] == "nao_mais" and _estrut_mais_compart(b["compart"], a["compart"], niveis):
+            al.append({"nivel": "erro", "onde": "regra", "chave": f"{r['tab_b']} x {r['tab_a']}",
+                       "texto": f"{r['tab_b']} ({b['compart']}) está MAIS compartilhada que "
+                                f"{r['tab_a']} ({a['compart']}). {r['motivo']}",
+                       "fonte": r["fonte"]})
+        if r["tipo"] == "igual" and a["compart"] != b["compart"]:
+            al.append({"nivel": "erro", "onde": "regra", "chave": f"{r['tab_a']} x {r['tab_b']}",
+                       "texto": f"{r['tab_a']} ({a['compart']}) e {r['tab_b']} ({b['compart']}) "
+                                f"precisam ser iguais. {r['motivo']}",
+                       "fonte": r["fonte"]})
+    ordem = {"erro": 0, "aviso": 1, "info": 2}
+    return sorted(al, key=lambda x: (ordem.get(x["nivel"], 9), x["onde"], str(x["chave"])))
+
+
+@app.get("/api/estrutura/<customer>")
+def api_estrutura(customer):
+    """Tudo da aba numa requisição: sem isso a tela faria cinco chamadas e o
+    consultor veria a árvore montar em pedaços na frente do cliente."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    cfg = _estrut_cfg(customer)
+    grupos = q("select * from cockpit.estrut_grupos where customer=%s and ativo "
+               "order by ordem, codigo", (customer,))
+    empresas = q("select * from cockpit.estrut_empresas where customer=%s and ativo "
+                 "order by ordem, codigo", (customer,))
+    filiais = q("select * from cockpit.estrut_filiais where customer=%s and ativo "
+                "order by ordem, codigo", (customer,))
+    tabelas = q("select * from cockpit.estrut_tabelas where customer=%s and ativo "
+                "order by modulo, tabela", (customer,))
+    catalogo = q("select modulo, count(*) n from cockpit.estrut_catalogo "
+                 "group by modulo order by min(ordem), modulo")
+    # Referencia, so leitura: o que a aba Empresas ja leu da base do cliente
+    # (monitemp_sm0). NAO alimenta a arvore acima - serve para o consultor ver
+    # lado a lado o que foi combinado e o que a base tem. Producao na frente;
+    # sem ela, a de testes, porque em projeto novo so existe a de testes.
+    sm0, sm0_amb = [], None
+    for amb in ("producao", "teste"):
+        linhas = q("""select empresa, filial, nome_empresa, nome_filial, cnpj, leiaute,
+                             sizefil, lido_em, updated_by
+                        from cockpit.monitemp_sm0 where customer=%s and ambiente=%s
+                       order by empresa, filial""", (customer, amb))
+        if linhas:
+            sm0, sm0_amb = linhas, amb
+            break
+    return _json({"ok": True, "customer": customer, "config": cfg,
+                  "sm0": sm0, "sm0_ambiente": sm0_amb,
+                  "leiautes": [{"id": k, **{x: v[x] for x in ("label", "ajuda")}}
+                               for k, v in ESTRUT_LEIAUTES.items()],
+                  "niveis": _estrut_niveis(cfg["leiaute"]),
+                  "niveis_label": list(ESTRUT_NIVEL_LABEL),
+                  "grupos": grupos, "empresas": empresas, "filiais": filiais,
+                  "tabelas": tabelas, "catalogo": catalogo,
+                  "alertas": _estrut_alertas(cfg, empresas, filiais, tabelas),
+                  "interno": eh_interno()})
+
+
+@app.get("/api/estrutura/catalogo/<modulo>")
+def api_estrutura_catalogo(modulo):
+    if (r := require_interno()):
+        return r
+    return _json({"ok": True, "modulo": modulo,
+                  "tabelas": q("select * from cockpit.estrut_catalogo where modulo=%s "
+                               "order by tipo desc, tabela", (modulo,))})
+
+
+@app.post("/api/estrutura/<customer>/config")
+def api_estrutura_config(customer):
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    leiaute = (b.get("leiaute") or "EEFF").upper()
+    if leiaute not in ESTRUT_LEIAUTES:
+        return _err(422, "Leiaute inválido.")
+    t = ESTRUT_LEIAUTES[leiaute]["tam"]
+    execute("""insert into cockpit.estrut_config
+                 (customer, leiaute, tam_empresa, tam_unidade, tam_filial,
+                  observacao, definido_por, definido_em)
+               values (%s,%s,%s,%s,%s,%s,%s, now())
+               on conflict (customer) do update
+                  set leiaute=excluded.leiaute, tam_empresa=excluded.tam_empresa,
+                      tam_unidade=excluded.tam_unidade, tam_filial=excluded.tam_filial,
+                      observacao=excluded.observacao, definido_por=excluded.definido_por,
+                      definido_em=now()""",
+            (customer, leiaute,
+             int(b.get("tam_empresa") or t[0]), int(b.get("tam_unidade") or t[1]),
+             int(b.get("tam_filial") or t[2]),
+             (b.get("observacao") or "").strip() or None, current_user()))
+    return _json({"ok": True, "config": _estrut_cfg(customer)})
+
+
+def _estrut_txt(b, campo, obrig=False):
+    v = (b.get(campo) or "").strip()
+    if obrig and not v:
+        raise ValueError(f"Informe {campo}.")
+    return v or None
+
+
+@app.post("/api/estrutura/<customer>/grupo")
+def api_estrutura_grupo(customer):
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    if b.get("excluir") and b.get("id"):
+        # Inativar, não apagar: o grupo pode já ter virado decisão em ata.
+        execute("update cockpit.estrut_grupos set ativo=false where id=%s and customer=%s",
+                (b["id"], customer))
+        return _json({"ok": True})
+    try:
+        codigo, nome = _estrut_txt(b, "codigo", True), _estrut_txt(b, "nome", True)
+    except ValueError as e:
+        return _err(422, str(e))
+    if b.get("id"):
+        execute("""update cockpit.estrut_grupos set codigo=%s, nome=%s, observacao=%s,
+                     ordem=%s where id=%s and customer=%s""",
+                (codigo, nome, _estrut_txt(b, "observacao"), int(b.get("ordem") or 0),
+                 b["id"], customer))
+    else:
+        execute("""insert into cockpit.estrut_grupos
+                     (customer, codigo, nome, observacao, ordem, created_by)
+                   values (%s,%s,%s,%s,%s,%s)
+                   on conflict (customer, codigo) do update
+                      set nome=excluded.nome, observacao=excluded.observacao, ativo=true""",
+                (customer, codigo, nome, _estrut_txt(b, "observacao"),
+                 int(b.get("ordem") or 0), current_user()))
+    return _json({"ok": True})
+
+
+@app.post("/api/estrutura/<customer>/empresa")
+def api_estrutura_empresa(customer):
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    if b.get("excluir") and b.get("id"):
+        execute("update cockpit.estrut_empresas set ativo=false where id=%s and customer=%s",
+                (b["id"], customer))
+        return _json({"ok": True})
+    try:
+        codigo, nome = _estrut_txt(b, "codigo", True), _estrut_txt(b, "nome", True)
+    except ValueError as e:
+        return _err(422, str(e))
+    campos = (b.get("grupo_id") or None, codigo, nome, _estrut_txt(b, "cnpj"),
+              (_estrut_txt(b, "uf") or "").upper() or None, _estrut_txt(b, "observacao"),
+              int(b.get("ordem") or 0))
+    if b.get("id"):
+        execute("""update cockpit.estrut_empresas set grupo_id=%s, codigo=%s, nome=%s,
+                     cnpj=%s, uf=%s, observacao=%s, ordem=%s
+                   where id=%s and customer=%s""", campos + (b["id"], customer))
+    else:
+        execute("""insert into cockpit.estrut_empresas
+                     (customer, grupo_id, codigo, nome, cnpj, uf, observacao, ordem, created_by)
+                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   on conflict (customer, codigo) do update
+                      set grupo_id=excluded.grupo_id, nome=excluded.nome, cnpj=excluded.cnpj,
+                          uf=excluded.uf, observacao=excluded.observacao, ativo=true""",
+                (customer,) + campos + (current_user(),))
+    return _json({"ok": True})
+
+
+@app.post("/api/estrutura/<customer>/filial")
+def api_estrutura_filial(customer):
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    if b.get("excluir") and b.get("id"):
+        execute("update cockpit.estrut_filiais set ativo=false where id=%s and customer=%s",
+                (b["id"], customer))
+        return _json({"ok": True})
+    if not b.get("empresa_id"):
+        return _err(422, "A filial precisa pertencer a uma empresa.")
+    try:
+        codigo, nome = _estrut_txt(b, "codigo", True), _estrut_txt(b, "nome", True)
+    except ValueError as e:
+        return _err(422, str(e))
+    # Matriz é UMA por empresa: duas matrizes viram divergência silenciosa no
+    # cadastro da SM0 e ninguém repara até a emissão do primeiro documento.
+    if b.get("matriz"):
+        execute("""update cockpit.estrut_filiais set matriz=false
+                    where customer=%s and empresa_id=%s""", (customer, b["empresa_id"]))
+    campos = (b["empresa_id"], codigo, _estrut_txt(b, "unidade"), nome,
+              _estrut_txt(b, "cnpj"), (_estrut_txt(b, "uf") or "").upper() or None,
+              _estrut_txt(b, "municipio"), bool(b.get("matriz")),
+              _estrut_txt(b, "observacao"), int(b.get("ordem") or 0))
+    if b.get("id"):
+        execute("""update cockpit.estrut_filiais set empresa_id=%s, codigo=%s, unidade=%s,
+                     nome=%s, cnpj=%s, uf=%s, municipio=%s, matriz=%s, observacao=%s, ordem=%s
+                   where id=%s and customer=%s""", campos + (b["id"], customer))
+    else:
+        execute("""insert into cockpit.estrut_filiais
+                     (customer, empresa_id, codigo, unidade, nome, cnpj, uf, municipio,
+                      matriz, observacao, ordem, created_by)
+                   values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                   on conflict (customer, codigo) do update
+                      set empresa_id=excluded.empresa_id, unidade=excluded.unidade,
+                          nome=excluded.nome, cnpj=excluded.cnpj, uf=excluded.uf,
+                          municipio=excluded.municipio, matriz=excluded.matriz,
+                          observacao=excluded.observacao, ativo=true""",
+                (customer,) + campos + (current_user(),))
+    return _json({"ok": True})
+
+
+@app.post("/api/estrutura/<customer>/semear")
+def api_estrutura_semear(customer):
+    """Traz um módulo inteiro do catálogo para a definição do cliente.
+    'do nothing' no conflito de propósito: semear de novo NÃO pode apagar o que
+    a consultoria já decidiu — semeadura é ponto de partida, não reset."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    mods = [m for m in (b.get("modulos") or []) if isinstance(m, str)]
+    if not mods:
+        return _err(422, "Escolha ao menos um módulo.")
+    linhas = q("select * from cockpit.estrut_catalogo where modulo = any(%s::text[]) "
+               "order by modulo, tabela", (mods,))
+    if not linhas:
+        return _json({"ok": True, "incluidas": 0})
+    usar_sugestao = bool(b.get("usar_sugestao", True))
+    with db() as conn, conn.cursor() as cur:
+        execute_values(cur,
+            """insert into cockpit.estrut_tabelas
+                 (customer, modulo, tabela, descricao, tipo, compart, sugestao, origem,
+                  definido_por, definido_em)
+               values %s on conflict (customer, modulo, tabela) do nothing""",
+            [(customer, l["modulo"], l["tabela"], l["descricao"], l["tipo"],
+              l["sugestao"] if usar_sugestao else None, l["sugestao"], "catalogo",
+              current_user())
+             for l in linhas],
+            template="(%s,%s,%s,%s,%s,%s,%s,%s,%s, now())")
+    return _json({"ok": True, "incluidas": len(linhas), "modulos": mods})
+
+
+@app.post("/api/estrutura/<customer>/tabela")
+def api_estrutura_tabela(customer):
+    """Inclusão manual e edição da definição. A inclusão manual é obrigatória de
+    verdade: tabela customizada (Z*) e alias de módulo que não está no catálogo
+    aparecem em todo projeto, e sem isso a planilha volta a ser do Excel."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    if b.get("excluir") and b.get("id"):
+        execute("update cockpit.estrut_tabelas set ativo=false where id=%s and customer=%s",
+                (b["id"], customer))
+        return _json({"ok": True})
+    compart = (b.get("compart") or "").strip().upper() or None
+    if compart and not _estrut_compart_ok(compart):
+        return _err(422, "Compartilhamento deve ter 3 posições E/C (Empresa·Unidade·Filial), "
+                         "por exemplo ECC ou CCC.")
+    if b.get("id"):
+        execute("""update cockpit.estrut_tabelas set descricao=%s, tipo=%s, compart=%s,
+                     observacao=%s, definido_por=%s, definido_em=now()
+                   where id=%s and customer=%s""",
+                (_estrut_txt(b, "descricao"), b.get("tipo") or "cadastro", compart,
+                 _estrut_txt(b, "observacao"), current_user(), b["id"], customer))
+        return _json({"ok": True})
+    tabela = (b.get("tabela") or "").strip().upper()
+    modulo = (b.get("modulo") or "").strip()
+    if not tabela or not modulo:
+        return _err(422, "Informe o módulo e o nome da tabela.")
+    execute("""insert into cockpit.estrut_tabelas
+                 (customer, modulo, tabela, descricao, tipo, compart, origem,
+                  observacao, definido_por, definido_em)
+               values (%s,%s,%s,%s,%s,%s,'manual',%s,%s, now())
+               on conflict (customer, modulo, tabela) do update
+                  set descricao=excluded.descricao, tipo=excluded.tipo,
+                      compart=excluded.compart, observacao=excluded.observacao,
+                      ativo=true, definido_por=excluded.definido_por, definido_em=now()""",
+            (customer, modulo, tabela, _estrut_txt(b, "descricao"),
+             b.get("tipo") or "cadastro", compart, _estrut_txt(b, "observacao"),
+             current_user()))
+    return _json({"ok": True})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────
