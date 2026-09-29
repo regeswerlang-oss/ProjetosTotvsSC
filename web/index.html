@@ -7096,19 +7096,21 @@ function estBlocoArvore(d) {
               ${e.uf ? `<span class="text-xs text-slate-400">${escapeHtml(e.uf)}</span>` : ''}
               <button data-est-empresa="${e.id}" class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button>
             </div>
-            <table class="w-full text-sm mt-1.5">
+            <table class="w-full text-sm mt-1.5 table-fixed">
               <tbody>
               ${(porEmpresa[e.id] || []).map(f => `
                 <tr class="border-t border-slate-100">
-                  <td class="py-1 pr-3 w-24 font-mono text-xs">${escapeHtml(f.codigo)}</td>
-                  <td class="py-1 pr-3">${escapeHtml(f.nome)}
-                    ${f.matriz ? '<span class="ml-1 text-[10px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">MATRIZ</span>' : ''}</td>
-                  <td class="py-1 pr-3 text-xs text-slate-400 font-mono">${escapeHtml(f.cnpj || '')}</td>
-                  <td class="py-1 pr-3 text-xs text-slate-400">${escapeHtml([f.municipio, f.uf].filter(Boolean).join('/'))}</td>
-                  <td class="py-1 text-right"><button data-est-filial="${f.id}"
+                  <td class="py-1 pr-3 w-20 font-mono text-xs">${escapeHtml(f.codigo)}</td>
+                  <td class="py-1 pr-3">${escapeHtml(f.nome)}</td>
+                  <td class="py-1 pr-3 w-24">${f.matriz
+                    ? '<span class="text-[10px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 font-semibold">MATRIZ</span>'
+                    : ''}</td>
+                  <td class="py-1 pr-3 w-44 text-xs text-slate-400 font-mono">${escapeHtml(f.cnpj || '')}</td>
+                  <td class="py-1 pr-3 w-28 text-xs text-slate-400 truncate">${escapeHtml([f.municipio, f.uf].filter(Boolean).join('/'))}</td>
+                  <td class="py-1 w-16 text-right"><button data-est-filial="${f.id}"
                     class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button></td>
                 </tr>`).join('') ||
-                `<tr><td class="py-1 text-xs text-slate-400">Sem filial cadastrada.</td></tr>`}
+                `<tr><td colspan="6" class="py-1 text-xs text-slate-400">Sem filial cadastrada.</td></tr>`}
               </tbody>
             </table>
           </div>`).join('')}
