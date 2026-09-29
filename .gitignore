@@ -5,3 +5,7 @@ __pycache__/
 .vercel
 .DS_Store
 .proto_template.py
+
+0*.patch
+Claude outputs/
+api/.probe
