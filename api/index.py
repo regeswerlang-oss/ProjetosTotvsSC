@@ -1923,6 +1923,28 @@ def _gravar_empresas(customer, amb, body, origem="upload"):
                      it.get("sx2"), it.get("filial"), it.get("filial_tipo"),
                      it.get("nome_filial"), it.get("qtde") or 0,
                      _consistencia(it, tam.get(it.get("empresa")))))
+    # O P1 so mede o que o P0 achou: tabela inexistente nao entra no SQL, senao o
+    # script passa de 300 KB e a base devolve HTTP 500. As linhas "NAO EXISTE"
+    # sao recompostas aqui, cruzando o escopo da aba Estrutura com as empresas da
+    # SM0 - elas sao justamente uma das respostas que a aba tem de dar, entao nao
+    # podem sumir da matriz so porque nao ha o que medir.
+    escopo = q("""select tabela, descricao, tipo from cockpit.estrut_tabelas
+                    where customer=%s and ativo order by tabela""", (customer,))
+    if escopo:
+        emps = q("""select distinct on (empresa) empresa, nome_empresa, leiaute
+                      from cockpit.monitemp_sm0 where customer=%s and ambiente=%s
+                     order by empresa""", (customer, amb))
+        vistos = {(v[3], v[7]) for v in vals}
+        for inf in emps:
+            e = inf["empresa"]
+            for tb in escopo:
+                alias = (tb["tabela"] or "").upper()
+                if not alias or (e, alias) in vistos:
+                    continue
+                vals.append((mid, customer, amb, e, inf.get("nome_empresa"), inf.get("leiaute"),
+                             (tb.get("tipo") or "cadastro").upper(), alias, tb.get("descricao"),
+                             f"{alias}{e}0", "NAO EXISTE", None, None, None, None, 0,
+                             _consistencia({"situacao": "NAO EXISTE"}, tam.get(e))))
     with db() as c, c.cursor() as cur:
         execute_values(cur, """
             insert into cockpit.monitemp_itens

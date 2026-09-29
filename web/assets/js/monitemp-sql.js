@@ -323,8 +323,11 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
         'Montado a partir da leitura da SM0 (P0). Empresas: ' + emps.map(x => x.empresa).join(', ') + '.',
         'Uma linha por EMPRESA x TABELA x CONTEUDO DO CAMPO FILIAL, com o',
         'compartilhamento da SX2 da propria empresa ao lado (EMP|UNID|FIL).',
-        'SITUACAO: NAO EXISTE (a tabela fisica nao existe) | VAZIA (existe, sem',
-        'registro ativo) | COM DADOS | SEM CAMPO FILIAL.',
+        'SITUACAO: VAZIA (existe, sem registro ativo) | COM DADOS | SEM CAMPO',
+        'FILIAL. Tabela que o P0 nao achou NAO entra aqui: ela nao tem o que',
+        'medir e inchava o script (131 tabelas x 3 empresas = 320 KB, que a base',
+        'recusa com HTTP 500). O painel recompoe essas linhas como NAO EXISTE',
+        'ao gravar, cruzando o escopo com a SM0.',
         'FILIAL_TIPO: BRANCO | FILIAL (codigo da SM0) | PARCIAL (nivel empresa/',
         'unidade) | FILIAL DE OUTRA EMPRESA | NAO CADASTRADA NA SM0.',
         'Exporte em CSV e suba em "Subir medicao" da aba Empresas, ou use',
@@ -366,11 +369,13 @@ SELECT S.EMPRESA, S.FILIAL, S.NOME_EMPRESA, S.NOME_FILIAL, S.CNPJ, S.LEIAUTE, S.
         : "'SEM SX2'";
       const fixo = `SELECT ${lit(x.empresa)} AS EMPRESA, ${lit(x.nome)} AS NOME_EMPRESA, ${lit(x.leiaute)} AS LEIAUTE,
            ${lit(l.tipo)} AS TIPO, ${lit(l.tab)} AS TABELA, ${lit(l.descr)} AS DESCRICAO, ${lit(fis)} AS TABELA_FISICA,`;
+      // Tabela que o P0 nao achou NAO entra no SQL. Ela nao tem nada a medir -
+      // o bloco so repetia literais - e era ela que inchava o script: com 131
+      // tabelas e 3 empresas sao 393 blocos, ~320 KB numa consulta so, que a
+      // base devolve como HTTP 500. O painel recompoe as linhas 'NAO EXISTE'
+      // na hora de gravar, cruzando o escopo com a SM0.
       if (!existe) {
-        blocos.push(`    ${fixo}
-           'NAO EXISTE' AS SITUACAO,
-           ${modo} AS SX2,
-           ${nuloTexto} AS FILIAL_BRUTA, 0 AS QTDE${O ? '\n      FROM DUAL' : ''}`);
+        return;
       } else if (semCampo) {
         // Existe, mas sem <PFX>_FILIAL: conta o total e marca com '*', que a
         // classificacao le como SEM CAMPO FILIAL. HAVING sem GROUP BY vale nos
