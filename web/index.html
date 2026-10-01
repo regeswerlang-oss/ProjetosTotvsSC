@@ -143,8 +143,9 @@
   .rx .rx-corner { position:sticky; left:0; top:0; z-index:6; background:#fff;
                    border-right:1px solid #cbd5e1; border-bottom:1px solid #cbd5e1; }
   .rx .rx-ghead { position:sticky; top:0; z-index:4; background:#fff; border-bottom:1px solid #e2e8f0;
-                  padding:.35rem .5rem; font-size:9.5px; letter-spacing:.1em; text-transform:uppercase;
-                  font-weight:700; text-align:left; white-space:nowrap; color:#475569; }
+                  padding:.35rem .5rem; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase;
+                  font-weight:700; text-align:left; color:#475569;
+                  white-space:normal; line-height:1.2; vertical-align:bottom; }
   .rx .rx-mhead { position:sticky; z-index:3; background:#fff; border-bottom:1px solid #cbd5e1;
                   height:196px; vertical-align:bottom; padding:0; }
   .rx .rx-mhead .rot { writing-mode:vertical-rl; transform:rotate(180deg); padding:.6rem 0 .75rem;
@@ -163,8 +164,10 @@
                        padding:.4rem .6rem .35rem; font-size:10px; letter-spacing:.11em;
                        text-transform:uppercase; font-weight:700; color:#475569; }
   .rx .rx-fband .txt b { font-weight:500; font-size:11px; letter-spacing:.02em; text-transform:none; color:#94a3b8; }
-  .rx td.rx-cell { border-bottom:1px solid #f1f5f9; border-right:1px solid #f1f5f9; background:var(--rxvazio); padding:0; }
-  .rx .rx-sq { width:30px; height:30px; border:0; padding:0; display:block; position:relative; cursor:pointer;
+  .rx td.rx-cell { border-bottom:1px solid #f1f5f9; border-right:1px solid #f1f5f9;
+                   background:var(--rxvazio); padding:0; text-align:center; }
+  .rx .rx-sq { width:30px; height:30px; border:0; padding:0; display:block; margin:0 auto;
+               position:relative; cursor:pointer;
                font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; transition:transform .09s ease; }
   .rx .rx-sq:hover { transform:scale(1.22); z-index:9; box-shadow:0 0 0 2px var(--totvs-petroleo); }
   .rx .rx-sq[data-n="0"]{background:var(--rx0);color:var(--rx0t)} .rx .rx-sq[data-n="1"]{background:var(--rx1);color:var(--rx1t)}
@@ -7939,6 +7942,13 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       cons.forEach(c => { h += linha(c); });
     }
     t.innerHTML = h + '</tbody>';
+
+    // A faixa de grupos cresce quando um nome quebra em duas ou três linhas.
+    // Sem recalcular, o cabeçalho dos módulos gruda em 26px e passa por baixo
+    // dela na rolagem.
+    const banda = t.querySelector('thead tr');
+    const alt = banda ? Math.round(banda.getBoundingClientRect().height) : 26;
+    if (alt > 0) sela('#rx-matriz thead tr:nth-child(2) > th').forEach(e => { e.style.top = alt + 'px'; });
 
     sel('#rx-escala').innerHTML = '<span class="rx-esc inline-flex">'
       + RX.niveis.map(n => `<b style="background:var(--rx${n.nivel});color:var(--rx${n.nivel}t)" `
