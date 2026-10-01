@@ -145,7 +145,12 @@
   .rx .rx-ghead { position:sticky; top:0; z-index:4; background:#fff; border-bottom:1px solid #e2e8f0;
                   padding:.35rem .5rem; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase;
                   font-weight:700; text-align:left; color:#475569;
-                  white-space:normal; line-height:1.2; vertical-align:bottom; }
+                  white-space:normal; line-height:1.2; vertical-align:bottom; text-align:center; }
+  .rx .rx-corner.rx-ghead { text-align:left; }
+  /* Filete de grupo: um fio mais firme que a grade (#f1f5f9) e mais leve que a
+     moldura (#cbd5e1), descendo do rótulo até a última linha. Só nas divisas —
+     o primeiro grupo já é delimitado pela coluna fixa do consultor. */
+  .rx .rx-ghead.rx-div, .rx .rx-mhead.rx-div, .rx td.rx-cell.rx-div { border-left:1px solid #dbe2ea; }
   .rx .rx-mhead { position:sticky; z-index:3; background:#fff; border-bottom:1px solid #cbd5e1;
                   height:196px; vertical-align:bottom; padding:0; }
   .rx .rx-mhead .rot { writing-mode:vertical-rl; transform:rotate(180deg); padding:.6rem 0 .75rem;
@@ -7907,28 +7912,35 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       if (u && u.nome === g.nome) u.n++; else blocos.push({ nome: g.nome, cor: g.cor, n: 1 });
     });
 
+    // Índice da primeira coluna de cada grupo, para o filete de divisa.
+    const divisa = new Set();
+    let acc = 0;
+    blocos.forEach((b, i) => { if (i) divisa.add(acc); acc += b.n; });
+
     let h = '<thead><tr><th class="rx-corner rx-ghead" style="min-width:196px">Grupo</th>';
-    blocos.forEach(b => {
-      h += `<th class="rx-ghead" colspan="${b.n}" style="box-shadow:inset 0 -3px 0 ${esc(b.cor)}">${esc(b.nome)}</th>`;
+    blocos.forEach((b, i) => {
+      h += `<th class="rx-ghead${i ? ' rx-div' : ''}" colspan="${b.n}" `
+        + `style="box-shadow:inset 0 -3px 0 ${esc(b.cor)}">${esc(b.nome)}</th>`;
     });
     h += '</tr><tr><th class="rx-corner rx-rowhead" style="top:26px;z-index:7">'
       + '<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Consultor</span></th>';
-    mods.forEach(m => {
-      h += `<th class="rx-mhead${m.critico ? ' crit' : ''}" style="top:26px" title="${esc(m.nome)}${m.sigla ? ' · ' + esc(m.sigla) : ''}">`
+    mods.forEach((m, i) => {
+      h += `<th class="rx-mhead${m.critico ? ' crit' : ''}${divisa.has(i) ? ' rx-div' : ''}" style="top:26px" `
+        + `title="${esc(m.nome)}${m.sigla ? ' · ' + esc(m.sigla) : ''}">`
         + `<span class="rot">${esc(m.nome)}</span></th>`;
     });
     h += '</tr></thead><tbody>';
 
     const linha = c => {
       let l = `<tr><th class="rx-rowhead"><span class="nm">${esc(c.nome)}</span><span class="cd">${esc(c.codigo)}</span></th>`;
-      mods.forEach(m => {
+      mods.forEach((m, i) => {
         const a = av(c.id, m.id);
         const v = !a ? null : (RX.lente === 'gestor' ? a.nivel_gestor : RX.lente === 'auto' ? a.nivel_auto : a.meta);
         const cls = ['rx-sq'];
         if (a && a.nivel_auto != null && a.nivel_gestor != null && a.nivel_auto !== a.nivel_gestor) cls.push('diverge');
         if (a && a.meta != null && (a.nivel_gestor == null || a.nivel_gestor < a.meta)) cls.push('abaixo');
         const rot = v == null ? 'não avaliado' : ((RX.niveis[v] || {}).rotulo || v);
-        l += `<td class="rx-cell"><button class="${cls.join(' ')}" data-n="${v == null ? '-' : v}" `
+        l += `<td class="rx-cell${divisa.has(i) ? ' rx-div' : ''}"><button class="${cls.join(' ')}" data-n="${v == null ? '-' : v}" `
           + `data-c="${c.id}" data-m="${m.id}" title="${esc(c.nome + ' · ' + m.nome + ' — ' + rot)}" `
           + `aria-label="${esc(c.nome + ', ' + m.nome + ': ' + rot)}">${v == null ? '' : v}</button></td>`;
       });
