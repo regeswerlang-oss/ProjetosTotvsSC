@@ -253,7 +253,9 @@
         <button id="btn-interno" aria-haspopup="true" aria-expanded="false"
                 class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors"
                 title="Painéis internos da célula">🧭 Interno</button>
-        <div id="menu-interno" class="hidden absolute right-0 mt-2 w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-xl z-50"></div>
+        <!-- posicionado por JS e movido para o <body>: o header corta (overflow:hidden) -->
+        <div id="menu-interno" class="hidden fixed w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+             style="z-index:50"></div>
       </div>
       <button id="btn-acessos" data-interno class="hidden px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Liberar usuários por cliente e escolher as abas que cada um enxerga">👥 Acessos</button>
       <button id="btn-sync" data-interno class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base (só a regional e os clientes da carteira). O cron do Supabase já faz isso de hora em hora.">⟳ Sincronizar API</button>
@@ -8399,6 +8401,15 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
   const menu = document.querySelector('#menu-interno');
   if (!btn || !menu) return;
 
+  // O header é .totvs-hex (overflow:hidden). Um menu ancorado lá dentro é
+  // cortado na borda de baixo, então ele mora no <body> e se posiciona sozinho.
+  document.body.appendChild(menu);
+  function posiciona() {
+    const r = btn.getBoundingClientRect();
+    menu.style.top = (r.bottom + 8) + 'px';
+    menu.style.right = Math.max(8, window.innerWidth - r.right) + 'px';
+  }
+
   menu.innerHTML = PAINEIS_INTERNOS.map(p =>
     `<button data-painel="${p.id}" class="w-full text-left px-3 py-2 hover:bg-slate-50">`
     + `<span class="block text-[13px] font-semibold text-slate-800">${p.label}</span>`
@@ -8423,9 +8434,12 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
   btn.addEventListener('click', e => {
     e.stopPropagation();
     const abrir = menu.classList.contains('hidden');
+    if (abrir) posiciona();
     menu.classList.toggle('hidden', !abrir);
     btn.setAttribute('aria-expanded', String(abrir));
   });
+  window.addEventListener('resize', () => { if (!menu.classList.contains('hidden')) posiciona(); });
+  window.addEventListener('scroll', () => { if (!menu.classList.contains('hidden')) posiciona(); }, true);
   menu.addEventListener('click', e => {
     const b = e.target.closest('button[data-painel]');
     if (!b) return;
