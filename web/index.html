@@ -209,7 +209,7 @@
   .rx .rx-gt i { width:8px; height:8px; border-radius:2px; }
   .rx .rx-tl { display:grid; grid-template-columns:96px 1fr auto; gap:.75rem; padding:.5rem 1rem;
                border-bottom:1px solid #f1f5f9; font-size:12.5px; align-items:baseline; }
-  .rx .rx-eqrow { display:grid; grid-template-columns:minmax(150px,1fr) minmax(140px,1fr) 180px auto;
+  .rx .rx-eqrow { display:grid; grid-template-columns:minmax(160px,1.1fr) minmax(190px,1.2fr) 170px auto;
                   gap:.9rem; align-items:center; padding:.5rem 1rem; border-bottom:1px solid #f1f5f9; }
   .rx .rx-eqrow:last-child { border-bottom:0; }
   .rx .rx-eqrow input { width:100%; padding:.35rem .5rem; border:1px solid #cbd5e1; border-radius:.375rem; font-size:.8125rem; }
@@ -246,6 +246,15 @@
               class="hidden px-2 py-1.5 rounded-md bg-white/10 text-totvs-white text-xs border border-white/20">
         <option value="">👁 Ver como…</option>
       </select>
+      <!-- Painéis INTERNOS da célula — Raio X hoje, o que vier depois amanhã.
+           Ficam fora da barra de abas do projeto de propósito: não são dado de
+           cliente e não dependem de haver um projeto aberto. -->
+      <div id="interno-wrap" data-interno class="relative">
+        <button id="btn-interno" aria-haspopup="true" aria-expanded="false"
+                class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors"
+                title="Painéis internos da célula">🧭 Interno</button>
+        <div id="menu-interno" class="hidden absolute right-0 mt-2 w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-xl z-50"></div>
+      </div>
       <button id="btn-acessos" data-interno class="hidden px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Liberar usuários por cliente e escolher as abas que cada um enxerga">👥 Acessos</button>
       <button id="btn-sync" data-interno class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base (só a regional e os clientes da carteira). O cron do Supabase já faz isso de hora em hora.">⟳ Sincronizar API</button>
       <button id="btn-refresh" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde transition-colors">↻ Atualizar</button>
@@ -419,7 +428,6 @@
             <button data-tab="estrutura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Estrutura</button>
             <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
             <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
-            <button data-tab="raiox"     class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Raio X</button>
           </div>
         </div>
 
@@ -691,11 +699,21 @@
             <iframe id="frame-transicao" title="Painel de status do cliente" loading="lazy"></iframe>
           </div>
         </div>
+      </div>
+      </div>
+    </div>
+  </section>
 
-        <!-- Aba Raio X — maturidade da equipe por módulo (schema pdi).
-             É a única aba que NÃO segue o cliente do projeto aberto: a matriz é
-             da célula inteira. Dados e escrita por /api/raiox (require_interno). -->
-        <div id="tab-raiox" class="p-5 hidden">
+  <!-- Painéis internos da célula (menu "Interno" do topo). Vivem FORA do
+       detalhe do projeto porque não são do cliente nem dependem de projeto. -->
+  <section id="view-interno" class="hidden">
+    <div class="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+
+      <!-- Raio X — maturidade da equipe por módulo (schema pdi).
+           Não é aba de projeto: é painel INTERNO da célula, aberto pelo menu
+           "Interno" do topo. Dados e escrita por /api/raiox (require_interno);
+           quem tem perfil 'consultoria' recebe só a própria linha. -->
+      <div id="tab-raiox" data-painel-interno="raiox" class="p-5 hidden">
           <div class="rx">
             <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
               <span class="text-xs text-slate-500">Célula</span>
@@ -712,6 +730,7 @@
               <button data-rxv="cadastro"  class="rx-v">Cadastro</button>
             </div>
 
+            <p id="rx-aviso" class="hidden mb-4 rounded-md border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm text-sky-900"></p>
             <div id="rx-msg" class="hidden mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"></div>
 
             <!-- MATRIZ -->
@@ -821,7 +840,7 @@
               <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
                 <div class="px-4 py-3 border-b border-slate-100">
                   <h3 class="text-sm font-semibold text-slate-800">Equipe</h3>
-                  <p class="text-xs text-slate-500 mt-0.5">Mover de frente (texto livre: nome novo cria a frente) ou arquivar quem saiu.</p>
+                  <p class="text-xs text-slate-500 mt-0.5">O <b>login</b> é o que faz o consultor enxergar só a própria linha — sem ele, a tela dele fica vazia. A <b>frente</b> é texto livre: nome novo cria a frente.</p>
                 </div>
                 <div id="rx-equipe"></div>
               </div>
@@ -835,8 +854,6 @@
             </section>
           </div>
         </div>
-      </div>
-      </div>
     </div>
   </section>
 </main>
@@ -1177,6 +1194,7 @@ function blocoErro(titulo, e, retry) {
 function voltarLista() {
   state.view = 'lista';
   state.selected = null;
+  $('#view-interno').classList.add('hidden');
   $('#view-detalhe').classList.add('hidden');
   $('#view-lista').classList.remove('hidden');
   $('#nav-back').classList.add('hidden');
@@ -1966,7 +1984,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'prototipo', 'transicao', 'raiox'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2028,7 +2046,6 @@ function setTab(nome) {
   if (nome === 'estrutura') initEstrutura();
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
-  if (nome === 'raiox') initRaioX();       // única aba que ignora o projeto aberto
 }
 
 function setSub(nome) {
@@ -7779,6 +7796,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     avaliacoes: [], historico: [], cel: new Map(), grupoDe: new Map(),
     vista: 'matriz', lente: 'gestor', frente: '', grupo: '', busca: '',
     covOrd: 'risco', soGap: false, consultorSel: null, aberta: null,
+    eu: { so_eu: false, pode_gerir: true, consultor_id: null }, semVinculo: false,
   };
   const ch = (c, m) => c + '|' + m;
   const av = (c, m) => RX.cel.get(ch(c, m)) || null;
@@ -7795,6 +7813,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
   }
 
   function erro(e) {
+    if (RX.semVinculo) return;          // já há um aviso permanente na tela
     const box = sel('#rx-msg');
     box.textContent = (e && e.message) || 'Falha ao falar com o servidor.';
     box.classList.remove('hidden');
@@ -7814,6 +7833,8 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 
   async function carregar() {
     const s = await api('');
+    RX.eu = s.eu || { so_eu: false, pode_gerir: true, consultor_id: null };
+    RX.semVinculo = !!s.sem_vinculo;
     RX.niveis = s.niveis || []; RX.grupos = s.grupos || [];
     RX.consultores = s.consultores || []; RX.modulos = s.modulos || [];
     RX.avaliacoes = s.avaliacoes || []; RX.historico = s.historico || [];
@@ -7850,11 +7871,15 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     const risco = RX.modulos.filter(m => aptos(m.id) < 2).length;
     const tag = (k, v, cor) => `<span class="px-2 py-0.5 rounded-full bg-slate-100 ${cor || 'text-slate-700'}">`
       + `<b class="font-semibold">${v}</b> ${k}</span>`;
-    sel('#rx-readout').innerHTML =
-      tag('consultores', equipe.length) + tag('módulos', RX.modulos.length) +
-      tag('mapeado', (total ? Math.round(n / total * 100) : 0) + '%') +
-      tag('maturidade', n ? (soma / n).toFixed(1) : '–') +
-      tag('em risco', risco, risco ? 'text-rose-700' : 'text-emerald-700');
+    // Com uma linha só, "mapeado" e "em risco" da célula não existem — o que
+    // interessa ao consultor é quanto do mapa dele já está preenchido.
+    sel('#rx-readout').innerHTML = RX.eu.so_eu
+      ? tag('módulos', RX.modulos.length) + tag('avaliados', n)
+        + tag('minha média', n ? (soma / n).toFixed(1) : '–')
+      : tag('consultores', equipe.length) + tag('módulos', RX.modulos.length) +
+        tag('mapeado', (total ? Math.round(n / total * 100) : 0) + '%') +
+        tag('maturidade', n ? (soma / n).toFixed(1) : '–') +
+        tag('em risco', risco, risco ? 'text-rose-700' : 'text-emerald-700');
   }
 
   // ── matriz ────────────────────────────────────────────────────────────────
@@ -8075,9 +8100,10 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     sel('#rx-grupos-list').innerHTML = RX.grupos.map(g => `<option value="${esc(g.nome)}"></option>`).join('');
     sel('#rx-frentes-list').innerHTML = frentes().map(f => `<option value="${esc(f)}"></option>`).join('');
     sel('#rx-equipe').innerHTML = RX.consultores.map(c =>
-      '<div class="rx-eqrow"><div><div class="text-[12.5px] font-semibold text-slate-800">' + esc(c.nome) + '</div>'
-      + `<div class="text-[10.5px] text-slate-400 tabular-nums">${esc(c.codigo)}</div></div>`
-      + `<span class="text-xs text-slate-500 truncate">${esc(c.funcao || '—')}</span>`
+      '<div class="rx-eqrow"><div class="min-w-0"><div class="text-[12.5px] font-semibold text-slate-800">' + esc(c.nome) + '</div>'
+      + `<div class="text-[10.5px] text-slate-400 tabular-nums">${esc(c.codigo)}</div>`
+      + `<div class="text-[10.5px] text-slate-400 truncate">${esc(c.funcao || '—')}</div></div>`
+      + `<input type="email" data-email="${c.id}" value="${esc(c.email || '')}" placeholder="login@totvs.com.br" aria-label="Login de ${esc(c.nome)}">`
       + `<input type="text" list="rx-frentes-list" data-frente="${c.id}" value="${esc(c.frente || 'Funcional')}" aria-label="Frente de ${esc(c.nome)}">`
       + `<button class="px-2.5 py-1 rounded-md border border-slate-300 text-xs hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700" `
       + `data-arquivar="${c.id}" data-nome="${esc(c.nome)}">Arquivar</button></div>`).join('');
@@ -8104,6 +8130,11 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     const chips = (campo, atual) => '<div class="flex gap-1 flex-wrap">' + RX.niveis.map(n =>
       `<button class="chip${atual === n.nivel ? ' is-on' : ''}" data-campo="${campo}" data-v="${n.nivel}">${n.nivel} ${esc(n.rotulo)}</button>`).join('')
       + `<button class="chip${atual == null ? ' is-on' : ''}" data-campo="${campo}" data-v="" style="flex:0 0 auto">limpar</button></div>`;
+    // Leitura, não edição: o consultor vê a nota do gestor e a meta, mas quem
+    // move esses dois é a coordenação.
+    const leitura = (v) => '<div class="text-[13px] text-slate-700">'
+      + (v == null ? '<span class="text-slate-400">ainda não definido</span>'
+         : `<b class="tabular-nums">${v}</b> · ${esc((RX.niveis[v] || {}).rotulo || '')}`) + '</div>';
     const bloco = (titulo, corpo) =>
       `<div><span class="block text-[10.5px] uppercase tracking-wider font-bold text-slate-400 mb-1.5">${titulo}</span>${corpo}</div>`;
 
@@ -8117,13 +8148,18 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       + ` · <span style="color:${esc(g.cor || '#64748b')}">■</span> ${esc(g.nome || '—')}</div></header>`
       + '<div class="px-4 py-4 flex-1 overflow-auto flex flex-col gap-4" id="rx-dw-body">'
       + bloco('Autoavaliação do consultor', chips('auto', a.nivel_auto == null ? null : a.nivel_auto))
-      + bloco('Nota do gestor', chips('gestor', a.nivel_gestor == null ? null : a.nivel_gestor))
-      + bloco('Meta', chips('meta', a.meta == null ? null : a.meta))
-      + bloco('Prazo da meta', `<input type="date" id="rx-dw-prazo" class="px-2.5 py-1.5 border border-slate-300 rounded-md text-sm" value="${esc(a.meta_prazo || '')}">`)
-      + bloco('Plano de ação / observação',
-        `<textarea id="rx-dw-obs" rows="3" class="w-full px-2.5 py-2 border border-slate-300 rounded-md text-[13px]" `
-        + `placeholder="Ex.: acompanhar a implantação do Fiscal na Digitro no 4º tri.">${esc(a.observacao || '')}</textarea>`
-        + '<div class="flex justify-end mt-2"><button id="rx-dw-salvar" class="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold hover:bg-slate-50">Salvar observação</button></div>')
+      + (RX.eu.pode_gerir
+        ? bloco('Nota do gestor', chips('gestor', a.nivel_gestor == null ? null : a.nivel_gestor))
+          + bloco('Meta', chips('meta', a.meta == null ? null : a.meta))
+          + bloco('Prazo da meta', `<input type="date" id="rx-dw-prazo" class="px-2.5 py-1.5 border border-slate-300 rounded-md text-sm" value="${esc(a.meta_prazo || '')}">`)
+          + bloco('Plano de ação / observação',
+            `<textarea id="rx-dw-obs" rows="3" class="w-full px-2.5 py-2 border border-slate-300 rounded-md text-[13px]" `
+            + `placeholder="Ex.: acompanhar a implantação do Fiscal na Digitro no 4º tri.">${esc(a.observacao || '')}</textarea>`
+            + '<div class="flex justify-end mt-2"><button id="rx-dw-salvar" class="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold hover:bg-slate-50">Salvar observação</button></div>')
+        : bloco('Nota do gestor', leitura(a.nivel_gestor))
+          + bloco('Meta', leitura(a.meta)
+            + (a.meta_prazo ? `<div class="text-xs text-slate-400 mt-1">Prazo: ${new Date(a.meta_prazo + 'T00:00').toLocaleDateString('pt-BR')}</div>` : ''))
+          + (a.observacao ? bloco('Plano de ação', `<p class="text-[13px] text-slate-600">${esc(a.observacao)}</p>`) : ''))
       + (a.atualizado_em ? `<p class="text-[11px] text-slate-400">Atualizado em ${new Date(a.atualizado_em).toLocaleString('pt-BR')}</p>` : '')
       + '</div><footer class="px-4 py-3 border-t border-slate-100 flex justify-end">'
       + '<button id="rx-dw-fechar" class="px-3 py-1.5 rounded-md border border-slate-300 text-sm font-semibold hover:bg-slate-50">Fechar</button></footer>';
@@ -8274,12 +8310,23 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       } catch (e) { erro(e); }
     });
     sel('#rx-equipe').addEventListener('change', async e => {
-      const i = e.target.closest('input[data-frente]'); if (!i) return;
-      const c = RX.consultores.find(x => x.id === i.dataset.frente); if (!c) return;
-      const nova = i.value.trim();
-      if (!nova || nova === c.frente) { i.value = c.frente || 'Funcional'; return; }
-      try { await api('/frente', { consultor: c.id, frente: nova }); c.frente = nova; pintaSelects(); pinta(); }
-      catch (err) { i.value = c.frente || 'Funcional'; erro(err); }
+      const f = e.target.closest('input[data-frente]');
+      if (f) {
+        const c = RX.consultores.find(x => x.id === f.dataset.frente); if (!c) return;
+        const nova = f.value.trim();
+        if (!nova || nova === c.frente) { f.value = c.frente || 'Funcional'; return; }
+        try { await api('/frente', { consultor: c.id, frente: nova }); c.frente = nova; pintaSelects(); pinta(); }
+        catch (err) { f.value = c.frente || 'Funcional'; erro(err); }
+        return;
+      }
+      const m = e.target.closest('input[data-email]');
+      if (m) {
+        const c = RX.consultores.find(x => x.id === m.dataset.email); if (!c) return;
+        const novo = m.value.trim().toLowerCase();
+        if (novo === (c.email || '')) return;
+        try { await api('/email', { consultor: c.id, email: novo }); c.email = novo || null; }
+        catch (err) { m.value = c.email || ''; erro(err); }
+      }
     });
     sel('#rx-equipe').addEventListener('click', async e => {
       const b = e.target.closest('button[data-arquivar]'); if (!b) return;
@@ -8289,6 +8336,27 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     });
   }
 
+  /** Esconde o que não é do consultor. Isto é cosmética: o corte de verdade
+   *  é o /api/raiox, que nem manda a linha dos outros. */
+  function aplicaRecorte() {
+    const soEu = !!RX.eu.so_eu;
+    ['cobertura', 'cadastro'].forEach(v => {
+      const b = sel(`#tab-raiox .rx-v[data-rxv="${v}"]`);
+      if (b) b.classList.toggle('hidden', soEu);
+    });
+    sel('#rx-frente').classList.toggle('hidden', soEu);
+    sel('#rx-busca').classList.toggle('hidden', soEu);
+    sel('#rx-consultor').classList.toggle('hidden', soEu);
+    const aviso = sel('#rx-aviso');
+    if (soEu) {
+      aviso.textContent = 'Você está vendo a sua linha. A nota do gestor e a meta são de leitura — preencha a sua autoavaliação.';
+      aviso.classList.remove('hidden');
+    } else {
+      aviso.classList.add('hidden');
+    }
+    if (soEu && ['cobertura', 'cadastro'].includes(RX.vista)) RX.vista = 'matriz';
+  }
+
   window.initRaioX = async function () {
     if (RX.carregado) { pinta(); return; }
     sel('#rx-matriz').innerHTML = '<tr><td class="p-6 text-sm text-slate-400">Carregando…</td></tr>';
@@ -8296,8 +8364,21 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       await carregar();
       RX.carregado = true;
       ligaEventos();
+      if (RX.semVinculo) {
+        // Nada de sub-abas e filtros numa tela que não tem o que mostrar.
+        sela('#tab-raiox .rx-v').forEach(b => b.classList.add('hidden'));
+        ['#rxv-matriz', '#rxv-cobertura', '#rxv-consultor', '#rxv-evolucao', '#rxv-cadastro']
+          .forEach(k => sel(k).classList.add('hidden'));
+        sel('#rx-matriz').innerHTML = '';
+        sel('#rx-msg').innerHTML = '<b>Seu login ainda não está vinculado a um consultor.</b><br>'
+          + 'Peça à coordenação para preencher o seu e-mail na sub-aba Cadastro → Equipe do Raio X. '
+          + 'Até lá esta tela fica vazia de propósito.';
+        sel('#rx-msg').classList.remove('hidden');
+        return;
+      }
       sela('#rx-lente button').forEach(b => b.classList.toggle('is-on', b.dataset.lente === RX.lente));
       sela('#rx-covord button').forEach(b => b.classList.toggle('is-on', b.dataset.ord === RX.covOrd));
+      aplicaRecorte();
       pintaSelects();
       vista(RX.vista);
     } catch (e) {
@@ -8305,6 +8386,54 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       erro(e);
     }
   };
+})();
+
+// ── Menu "Interno" — porta de entrada dos painéis que não são do cliente ────
+//  Acrescentar um painel aqui é: uma entrada em PAINEIS_INTERNOS, uma <div>
+//  com data-painel-interno dentro de #view-interno, e a função que a preenche.
+(function () {
+  const PAINEIS_INTERNOS = [
+    { id: 'raiox', label: 'Raio X', desc: 'Maturidade da equipe por módulo', init: () => window.initRaioX && window.initRaioX() },
+  ];
+  const btn = document.querySelector('#btn-interno');
+  const menu = document.querySelector('#menu-interno');
+  if (!btn || !menu) return;
+
+  menu.innerHTML = PAINEIS_INTERNOS.map(p =>
+    `<button data-painel="${p.id}" class="w-full text-left px-3 py-2 hover:bg-slate-50">`
+    + `<span class="block text-[13px] font-semibold text-slate-800">${p.label}</span>`
+    + `<span class="block text-[11.5px] text-slate-500">${p.desc}</span></button>`).join('');
+
+  const fecha = () => { menu.classList.add('hidden'); btn.setAttribute('aria-expanded', 'false'); };
+
+  window.abreInterno = function (id) {
+    const p = PAINEIS_INTERNOS.find(x => x.id === id);
+    if (!p) return;
+    state.view = 'interno';
+    document.querySelector('#view-lista').classList.add('hidden');
+    document.querySelector('#view-detalhe').classList.add('hidden');
+    document.querySelector('#view-interno').classList.remove('hidden');
+    document.querySelector('#nav-back').classList.remove('hidden');
+    document.querySelectorAll('#view-interno [data-painel-interno]').forEach(e =>
+      e.classList.toggle('hidden', e.dataset.painelInterno !== id));
+    window.scrollTo(0, 0);
+    if (p.init) p.init();
+  };
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const abrir = menu.classList.contains('hidden');
+    menu.classList.toggle('hidden', !abrir);
+    btn.setAttribute('aria-expanded', String(abrir));
+  });
+  menu.addEventListener('click', e => {
+    const b = e.target.closest('button[data-painel]');
+    if (!b) return;
+    fecha();
+    window.abreInterno(b.dataset.painel);
+  });
+  document.addEventListener('click', e => { if (!menu.contains(e.target) && e.target !== btn) fecha(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') fecha(); });
 })();
 
 carregaLista();

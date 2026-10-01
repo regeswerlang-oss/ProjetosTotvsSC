@@ -275,3 +275,54 @@ insert into pdi.niveis (nivel, rotulo, descricao, cor) values
  (4,'Implantou','Conduziu implantação do módulo em cliente','#2dd4bf'),
  (5,'Especialista','Referência técnica: resolve exceções e capacita os demais','#0d9488')
 on conflict (nivel) do update set rotulo=excluded.rotulo, descricao=excluded.descricao, cor=excluded.cor;
+
+-- ============================================================================
+--  Recorte por pessoa (01/10/2026)
+--  O consultor (perfil 'consultoria') enxerga só a própria linha. O vínculo
+--  login→consultor é o e-mail, preenchido no Cadastro → Equipe. Sem e-mail o
+--  consultor não vê nada: falhar fechado é melhor que mostrar a pessoa errada.
+-- ============================================================================
+create unique index if not exists consultores_email_idx
+  on pdi.consultores (lower(email)) where email is not null;
+
+create or replace function pdi.fn_set_email(p_consultor uuid, p_email text) returns jsonb
+language plpgsql security definer as $$
+declare v_e text := lower(nullif(btrim(p_email), ''));
+begin
+  if v_e is not null and v_e not like '%@%' then
+    raise exception 'e-mail invalido: %', p_email;
+  end if;
+  if v_e is not null and exists (select 1 from pdi.consultores
+        where lower(email) = v_e and id <> p_consultor) then
+    raise exception 'esse e-mail ja esta vinculado a outro consultor';
+  end if;
+  update pdi.consultores set email = v_e, atualizado_em = now() where id = p_consultor;
+  return jsonb_build_object('ok', true, 'email', v_e);
+end $$;
+
+-- Mesma forma do fn_snapshot(), com uma linha só. Módulos, grupos e níveis vêm
+-- inteiros — são as COLUNAS da matriz, não dado de ninguém. O que fica de fora
+-- são as outras pessoas.
+create or replace function pdi.fn_snapshot_consultor(p_consultor uuid) returns jsonb
+language sql stable security definer as $$
+  select jsonb_build_object(
+    'niveis', (select coalesce(jsonb_agg(to_jsonb(n) order by n.nivel),'[]'::jsonb) from pdi.niveis n),
+    'grupos', (select coalesce(jsonb_agg(to_jsonb(g) order by g.ordem, g.nome),'[]'::jsonb) from pdi.grupos g where g.ativo),
+    'consultores', (select coalesce(jsonb_agg(to_jsonb(c)),'[]'::jsonb)
+                    from pdi.consultores c where c.ativo and c.id = p_consultor),
+    'modulos', (select coalesce(jsonb_agg(to_jsonb(m) order by m.ordem, m.nome),'[]'::jsonb) from pdi.modulos m where m.ativo),
+    'avaliacoes', (select coalesce(jsonb_agg(jsonb_build_object(
+        'consultor_id', a.consultor_id, 'modulo_id', a.modulo_id,
+        'nivel_auto', a.nivel_auto, 'nivel_gestor', a.nivel_gestor,
+        'meta', a.meta, 'meta_prazo', a.meta_prazo, 'observacao', a.observacao,
+        'atualizado_em', a.atualizado_em)),'[]'::jsonb)
+      from pdi.avaliacoes a where a.consultor_id = p_consultor),
+    'historico', (select coalesce(jsonb_agg(jsonb_build_object(
+        'id', h.id, 'consultor_id', h.consultor_id, 'modulo_id', h.modulo_id,
+        'campo', h.campo, 'de', h.valor_de, 'para', h.valor_para,
+        'criado_em', h.criado_em) order by h.criado_em desc),'[]'::jsonb)
+      from (select * from pdi.historico where consultor_id = p_consultor
+            order by criado_em desc limit 3000) h),
+    'gerado_em', now()
+  );
+$$;

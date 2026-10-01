@@ -799,8 +799,17 @@ def api_health():
 # ── Raio X · maturidade da equipe (schema pdi) ──────────────────────────────
 # Matriz consultor × módulo com escala 0..5 (0 não conhece → 5 especialista).
 # Toda escrita passa pelas funções pdi.fn_*, que validam a escala e deixam a
-# trigger registrar o histórico. É tela de gestão de pessoas: só equipe TOTVS,
-# nunca login de cliente — por isso require_interno() em todas as rotas.
+# trigger registrar o histórico.
+#
+# QUEM VÊ O QUÊ — a regra toda mora aqui, não no front:
+#   perfil 'consultoria'  → só a PRÓPRIA linha, e só edita a própria
+#                           autoavaliação. Nunca vê a nota que o gestor deu a
+#                           outra pessoa, nem o recorte da célula.
+#   admin / comum / leitor → a célula inteira (é o CP e o time fixo).
+#   cliente                → nada: require_interno() barra antes.
+# O vínculo login→consultor é o e-mail em pdi.consultores.email, preenchido na
+# sub-aba Cadastro. SEM vínculo, um 'consultoria' não vê linha nenhuma — falhar
+# fechado é melhor que mostrar a pessoa errada.
 RX_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
@@ -830,12 +839,44 @@ def _rx_par(b):
     return cons, mod, None
 
 
+def _rx_ctx():
+    """(email, perfil, so_eu, meu_id). so_eu=True ⇒ enxerga uma linha só."""
+    email = effective_user() or ""
+    perfil = perfil_do(email)
+    so_eu = perfil == "consultoria"
+    meu = q("select id from pdi.consultores where ativo and lower(email)=%s",
+            (email.lower(),), one=True) if email else None
+    return email, perfil, so_eu, (meu["id"] if meu else None)
+
+
+def _rx_gestor():
+    """Portão das ações de gestão: nota do gestor, meta, cadastro, frente,
+    vínculo de e-mail e arquivamento. Consultor não mexe em nada disso."""
+    if (r := require_interno()):
+        return r
+    if perfil_do(effective_user() or "") == "consultoria":
+        return _err(403, "Ação restrita à coordenação.")
+    return None
+
+
 @app.get("/api/raiox")
 def api_raiox():
     if (r := require_interno()):
         return r
-    row = q("select pdi.fn_snapshot() as s", one=True)
-    return _json(row["s"] if row else {})
+    email, perfil, so_eu, meu_id = _rx_ctx()
+    if so_eu and not meu_id:
+        return _json({"sem_vinculo": True, "eu": {"email": email, "perfil": perfil,
+                      "so_eu": True, "consultor_id": None, "pode_gerir": False},
+                      "niveis": [], "grupos": [], "consultores": [], "modulos": [],
+                      "avaliacoes": [], "historico": []})
+    if so_eu:
+        row = q("select pdi.fn_snapshot_consultor(%s::uuid) as s", (meu_id,), one=True)
+    else:
+        row = q("select pdi.fn_snapshot() as s", one=True)
+    s = (row or {}).get("s") or {}
+    s["eu"] = {"email": email, "perfil": perfil, "so_eu": so_eu,
+               "consultor_id": meu_id, "pode_gerir": not so_eu}
+    return _json(s)
 
 
 @app.post("/api/raiox/nivel")
@@ -852,6 +893,15 @@ def api_raiox_nivel():
     cons, mod, falha = _rx_par(b)
     if falha:
         return falha
+
+    _, _, so_eu, meu_id = _rx_ctx()
+    if so_eu:
+        # O consultor preenche a própria autoavaliação — e só isso.
+        if campo != "auto":
+            return _err(403, "Você só pode preencher a sua autoavaliação.")
+        if not meu_id or cons != meu_id:
+            return _err(403, "Você só pode avaliar a sua própria linha.")
+
     row = q("select pdi.fn_set_nivel(%s::uuid, %s::uuid, %s, %s::smallint) as r",
             (cons, mod, campo, nivel), one=True)
     return _json(row["r"] if row else {"ok": True})
@@ -859,7 +909,7 @@ def api_raiox_nivel():
 
 @app.post("/api/raiox/detalhe")
 def api_raiox_detalhe():
-    if (r := require_interno()):
+    if (r := _rx_gestor()):
         return r
     b = request.get_json(silent=True) or {}
     cons, mod, falha = _rx_par(b)
@@ -873,7 +923,7 @@ def api_raiox_detalhe():
 
 @app.post("/api/raiox/frente")
 def api_raiox_frente():
-    if (r := require_interno()):
+    if (r := _rx_gestor()):
         return r
     b = request.get_json(silent=True) or {}
     cons = _rx_uuid(b.get("consultor"))
@@ -886,9 +936,24 @@ def api_raiox_frente():
     return _json(row["r"] if row else {"ok": True})
 
 
+@app.post("/api/raiox/email")
+def api_raiox_email():
+    """Vincula o login do consultor à linha dele. É isto que faz o recorte
+    'só a minha linha' funcionar — sem e-mail, o consultor não vê nada."""
+    if (r := _rx_gestor()):
+        return r
+    b = request.get_json(silent=True) or {}
+    cons = _rx_uuid(b.get("consultor"))
+    if not cons:
+        return _err(400, "consultor precisa ser UUID.")
+    row = q("select pdi.fn_set_email(%s::uuid, %s) as r",
+            (cons, (b.get("email") or "").strip()), one=True)
+    return _json(row["r"] if row else {"ok": True})
+
+
 @app.post("/api/raiox/modulo")
 def api_raiox_modulo():
-    if (r := require_interno()):
+    if (r := _rx_gestor()):
         return r
     b = request.get_json(silent=True) or {}
     codigo = re.sub(r"\s+", "_", (b.get("codigo") or "").strip()).upper()
@@ -904,7 +969,7 @@ def api_raiox_modulo():
 
 @app.post("/api/raiox/consultor")
 def api_raiox_consultor():
-    if (r := require_interno()):
+    if (r := _rx_gestor()):
         return r
     b = request.get_json(silent=True) or {}
     codigo = (b.get("codigo") or "").strip().upper()
@@ -920,7 +985,7 @@ def api_raiox_consultor():
 
 @app.post("/api/raiox/arquivar")
 def api_raiox_arquivar():
-    if (r := require_interno()):
+    if (r := _rx_gestor()):
         return r
     b = request.get_json(silent=True) or {}
     tipo = (b.get("tipo") or "").strip()
