@@ -326,3 +326,35 @@ language sql stable security definer as $$
     'gerado_em', now()
   );
 $$;
+
+-- ============================================================================
+--  Abrir um módulo em subgrupos (01/10/2026) — o caso "Qualidade"
+--  Não precisou de schema novo: quando um módulo é grande demais para uma
+--  coluna só, ele VIRA UM GRUPO e as suas frentes viram os módulos. O nível
+--  hierárquico já existia; o que muda é onde a linha é desenhada.
+--
+--  Duas regras ao repetir isso em outro módulo:
+--   1. as bandas da matriz são blocos CONTÍGUOS de `modulos.ordem` — abra as
+--      posições seguidas antes de inserir, senão o grupo aparece partido;
+--   2. arquive o módulo antigo em vez de apagar. Se ele já tiver avaliação,
+--      decida antes para onde a nota vai (em geral, para o item "Outros").
+-- ============================================================================
+update pdi.modulos set ativo = false where codigo = 'QUALIDADE';   -- tinha 0 avaliações
+
+update pdi.grupos set ordem = ordem + 1 where ordem >= 5;
+insert into pdi.grupos (nome, cor, ordem) values ('Qualidade', '#be185d', 5)
+on conflict (nome) do update set cor = excluded.cor, ordem = excluded.ordem, ativo = true;
+
+update pdi.modulos set ordem = ordem + 3 where ordem >= 17;
+
+insert into pdi.modulos (grupo_id, codigo, nome, sigla, critico, ordem)
+select g.id, v.codigo, v.nome, 'SIGAQIE', false, v.ordem
+from (values
+  ('QUA_ENTRADA',  'Inspeção de Entradas',  16),
+  ('QUA_PROCESSO', 'Inspeção de Processos', 17),
+  ('QUA_NAO_CONF', 'Não Conformidade',      18),
+  ('QUA_OUTROS',   'Outros',                19)
+) as v(codigo, nome, ordem)
+join pdi.grupos g on g.nome = 'Qualidade'
+on conflict (codigo) do update set nome = excluded.nome, sigla = excluded.sigla,
+  grupo_id = excluded.grupo_id, ordem = excluded.ordem, ativo = true;
