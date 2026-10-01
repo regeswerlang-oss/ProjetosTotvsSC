@@ -6070,10 +6070,144 @@ async function enviaArquivoEmp(ev, tipo) {
   });
 }
 
+// ── Coleta FASEADA do script de Empresas ───────────────────────────────────
+//  O gerador monta um bloco por empresa × tabela: com 4 empresas o script passa
+//  de 250 KB e a REST recusa acima de ~146 KB — teto que existe porque script
+//  desse tamanho PRENDE A LICENÇA do REST até o banco responder.
+//
+//  Então vai uma EMPRESA POR VEZ, e o laço é aqui, no navegador: cada fase é uma
+//  invocação própria da Vercel, com seus 60s. Quatro leituras numa invocação só
+//  disputariam o mesmo orçamento e a última morreria pela metade. No fim o CSV
+//  juntado entra pelo /upload de sempre — a gravação e as regras do painel não
+//  mudam em nada.
+function coletaEmpresasFases(cli, amb) {
+  if (!window.MonitEmp) { alert('Gerador de scripts não carregou (/assets/js/monitemp-sql.js).'); return; }
+  const sm0 = emp.dados?.sm0 || [];
+  if (!sm0.length) {
+    alert(`A SM0 da ${AMB[amb].label} ainda não foi lida. Rode o "🏢 Script SM0" e suba o resultado antes — `
+          + 'as fases são montadas a partir dela.');
+    return;
+  }
+  const empresas = [...new Set(sm0.map(r => r.empresa))].sort();
+  const lista = empEscopo() || undefined;
+  // Dialeto NÃO se adivinha: vem do ⚙ Ambiente, que é onde a REST já está
+  // cadastrada. Sem banco informado eu pararia aqui em vez de gerar Oracle por
+  // omissão numa base SQL Server — o script roda, volta errado, e ninguém vê.
+  const banco = (emp.dados?.banco || '').toLowerCase();
+  if (!banco) {
+    alert('O banco desta base não está informado no ⚙ Ambiente. Preencha lá antes de coletar — '
+          + 'o dialeto do script depende dele, e gerar Oracle numa base SQL Server volta errado em silêncio.');
+    return;
+  }
+  if (banco !== 'oracle' && banco !== 'mssql') {
+    alert(`O gerador do script de Empresas só tem Oracle e SQL Server; o ⚙ Ambiente está como "${banco}".`);
+    return;
+  }
+  const dialeto = banco;
+  const base = { dialeto, lista, sm0,
+                 cliente: `${(state.selected?.projeto?.nome_cliente_projeto || '').trim()} (${cli})`,
+                 base: AMB[amb].label, quando: new Date().toLocaleString('pt-BR') };
+
+  let fases;
+  try {
+    fases = empresas.map(e => ({
+      empresa: e,
+      nome: sm0.find(r => r.empresa === e)?.nome_empresa || '',
+      sql: MonitEmp.scriptEmpresas({ ...base, empresas: [e] }),
+      estado: 'pendente', linhas: null, erro: null, csv: null,
+    }));
+  } catch (e) { alert('Não consegui montar as fases: ' + e.message); return; }
+
+  const m = modal(`Coletar empresas em fases · ${AMB[amb].label}`,
+    `<p>Vou ler <b>uma empresa por vez</b> na <b>${AMB[amb].label}</b>, pela REST TSCMONITREST,
+       e só depois gravar a medição com tudo junto.</p>
+     <p class="text-xs text-slate-500">O script inteiro tem mais de 250 KB e a base recusa acima de 146 KB —
+       script desse tamanho prende a licença do REST até o banco responder. Cada fase sai com
+       ${LISTA_EMP_ESCOPO()} tabelas de uma empresa só.</p>
+     <p class="text-xs text-amber-800">As fases são montadas <b>da SM0</b> em
+       <b>${dialeto === 'mssql' ? 'SQL Server' : 'Oracle'}</b> (do ⚙ Ambiente), não do script salvo:
+       se você editou o script à mão, essa edição não entra aqui.</p>
+     <div id="cf-barra" class="h-2 rounded-full bg-slate-200 overflow-hidden">
+       <div id="cf-barra-in" class="h-full bg-totvs-blue transition-all" style="width:0%"></div></div>
+     <div id="cf-lista" class="text-sm"></div>
+     <p id="cf-msg" class="text-xs hidden"></p>`, 'Coletar');
+
+  const SELO = { pendente: ['·', 'text-slate-400'], rodando: ['…', 'text-totvs-petroleo font-semibold'],
+                 ok: ['✓', 'text-emerald-700'], erro: ['✕', 'text-rose-700'] };
+  const pinta = () => {
+    const feitas = fases.filter(f => f.estado === 'ok').length;
+    m.campo('cf-barra-in').style.width = `${Math.round(feitas / fases.length * 100)}%`;
+    m.campo('cf-lista').innerHTML = fases.map(f => {
+      const [ic, cls] = SELO[f.estado];
+      return `<div class="flex items-start gap-2 py-0.5 border-t border-slate-100">
+        <span class="${cls} w-4 text-center">${ic}</span>
+        <span class="font-mono font-semibold w-8">${escapeHtml(f.empresa)}</span>
+        <span class="text-slate-500 flex-1">${escapeHtml(f.nome)}</span>
+        <span class="text-xs ${f.erro ? 'text-rose-700' : 'text-slate-400'}">${
+          f.erro ? escapeHtml(f.erro) : (f.linhas != null ? `${f.linhas} linha(s)` : `${Math.round(f.sql.length / 1024)} KB`)}</span>
+      </div>`;
+    }).join('');
+  };
+  const msg = (t, cls) => { const el = m.campo('cf-msg');
+    el.textContent = t; el.className = `text-xs px-3 py-2 rounded-md border ${cls}`; };
+  pinta();
+
+  // Junta os CSVs: cabeçalho da primeira fase que trouxe linha, corpo de todas.
+  // Cabeçalho repetido no meio vira linha de dado e estraga a medição inteira.
+  const junta = () => {
+    let cab = null; const corpo = [];
+    fases.forEach(f => {
+      const linhas = (f.csv || '').split(/\r?\n/).filter(l => l.trim());
+      if (!linhas.length) return;
+      if (!cab) cab = linhas[0];
+      corpo.push(...linhas.slice(1));
+    });
+    return cab ? [cab, ...corpo].join('\n') : '';
+  };
+
+  const roda = async () => {
+    const alvo = fases.filter(f => f.estado !== 'ok');
+    m.erro(''); m.ocupado(true, 'Coletando…');
+    for (const f of alvo) {
+      f.estado = 'rodando'; f.erro = null; pinta();
+      try {
+        const j = await api(`/api/protheus/${encodeURIComponent(cli)}/${amb}/fase`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql: f.sql, rotulo: f.empresa }),
+        });
+        f.csv = j.csv || ''; f.linhas = j.linhas; f.estado = 'ok';
+      } catch (e) {
+        f.estado = 'erro'; f.erro = e.message;
+      }
+      pinta();
+    }
+    const falhas = fases.filter(f => f.estado === 'erro');
+    if (falhas.length) {
+      m.ocupado(false, `Tentar de novo (${falhas.length})`);
+      msg(`${falhas.length} de ${fases.length} fase(s) falharam. As que deram certo ficam guardadas — `
+          + 'o botão repete só as que faltam.', 'text-rose-700 bg-rose-50 border-rose-200');
+      return;
+    }
+    // Todas ok: grava pelo mesmo caminho do "Subir medição".
+    m.ocupado(true, 'Gravando…');
+    try {
+      const texto = junta();
+      if (!texto.trim()) throw new Error('As fases rodaram e voltaram vazias — nada para gravar.');
+      const j = await api(`/api/monitemp/${encodeURIComponent(cli)}/upload?ambiente=${amb}`, {
+        method: 'POST', headers: { 'Content-Type': 'text/csv; charset=utf-8' }, body: texto });
+      m.fecha();
+      alert(`${AMB[amb].label}: ${fases.length} fase(s), ${j.itens} linha(s) gravadas na medição de ${fmtData(j.ultima_medicao)}.`);
+      emp.customer = null; initEmpresas(amb);
+    } catch (e) { m.ocupado(false, 'Gravar medição'); m.erro(e.message); }
+  };
+  m.aoConfirmar(roda);
+}
+
 function coletaEmp(tipo) {
   const cli = state.selected?.cli;
   if (!cli) { alert('Abra um projeto antes de coletar.'); return; }
   const amb = emp.ambiente;
+  if (tipo === 'empresas') { coletaEmpresasFases(cli, amb); return; }
   const m = modal(`Coletar ${tipo === 'sm0' ? 'SM0' : 'empresas'} · ${AMB[amb].label}`,
     `<p>Vou rodar na <b>${AMB[amb].label}</b> o script <b>${tipo === 'sm0' ? 'SM0 (P0)' : 'Empresas'}</b> salvo para este
        cliente, pela REST TSCMONITREST.</p>

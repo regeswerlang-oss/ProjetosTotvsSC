@@ -2010,9 +2010,15 @@ def api_monitemp(customer):
             (customer,), one=True)
     sm0_em = max([r["updated_at"] for r in sm0 if r.get("updated_at")], default=None)
     escopo_mudou = bool(lim and lim.get("em") and sm0_em and lim["em"] > sm0_em)
+    # O BANCO vem do cadastro ⚙ Ambiente, não de um select na tela: o dialeto do
+    # script não é preferência, é fato da base — e quem já informou a REST já
+    # informou o banco. Perguntar de novo é mais um campo para errar.
+    cfg = q("select banco from cockpit.protheus_ambientes where customer=%s and ambiente=%s",
+            (customer, amb), one=True)
     return _json({"ok": True, "customer": customer, "ambiente": amb, "sm0": sm0,
                   "medicoes": meds, "medicao": alvo, "itens": itens,
-                  "escopo": escopo, "escopo_mudou": escopo_mudou})
+                  "escopo": escopo, "escopo_mudou": escopo_mudou,
+                  "banco": (cfg or {}).get("banco")})
 
 
 @app.post("/api/monitemp/<customer>/sm0")
@@ -5316,6 +5322,103 @@ def api_estrutura_tabela(customer):
                  (customer, modulo, tabela), one=True)
         _estrut_hist(novo["id"], customer, tabela, antes["compart"], compart, "manual")
     return _json({"ok": True})
+
+
+# ── Coleta FASEADA: o script de Empresas não cabe numa consulta só ──────────
+# O gerador monta UM BLOCO por empresa × tabela. Com 4 empresas o script passou
+# de 257 KB e a REST recusa acima de ~146 KB (LIM_SQL do TSCMONITREST). O teto
+# não é capricho: script desse tamanho PRENDE A LICENÇA do REST até o banco
+# responder. A saída não é subir o teto — é mandar uma empresa por vez.
+#
+# Quem orquestra o laço é o NAVEGADOR, não esta rota: cada fase vira uma
+# invocação própria da Vercel, com seus próprios 60s. Quatro leituras numa
+# invocação só disputariam o mesmo orçamento e a última morreria pela metade.
+# Esta rota faz UMA fase e devolve o CSV cru — não grava nada. Quem junta as
+# fases e grava a medição é o painel, pelo /upload de sempre.
+FASE_SQL_TETO = 140 * 1024          # abaixo do LIM_SQL do fonte, com folga
+FASE_PROIBIDO = ("INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "CREATE", "ALTER",
+                 "TRUNCATE", "GRANT", "REVOKE", "EXECUTE", "EXEC", "CALL", "COMMIT",
+                 "ROLLBACK", "INTO", "DBMS_", "UTL_", "XP_", "SP_", "OPENROWSET",
+                 "OPENQUERY", "BULK")
+FASE_SEP = set(" \t\r\n(),.;=<>+-*/|")
+
+
+def _fase_sql_erro(sql):
+    """Mesma regra do SqlSeguro do TSCMONITREST, repetida aqui de propósito. A
+    base já recusaria — mas o SQL desta rota vem do navegador, e uma segunda
+    porta trancada custa quinze linhas."""
+    limpo = re.sub(r"--[^\n]*", " ", re.sub(r"/\*.*?\*/", " ", sql, flags=re.S))
+    limpo = re.sub(r"'[^']*'", " ", limpo)
+    limpo = re.sub(r"[\s]+", " ", limpo).strip().upper()
+    if not (limpo.startswith("SELECT") or limpo.startswith("WITH")):
+        return "A fase precisa começar com SELECT ou WITH (somente leitura)."
+    if ";" in limpo[:-1]:
+        return "Envie um único comando — remova o ';' do meio da fase."
+    for palavra in FASE_PROIBIDO:
+        for m in re.finditer(re.escape(palavra), limpo):
+            ant = limpo[m.start() - 1] if m.start() else " "
+            dep = limpo[m.end()] if m.end() < len(limpo) else ""
+            if ant in FASE_SEP and (dep == "" or dep in FASE_SEP):
+                return f"Comando não permitido nesta rota: {palavra}."
+    return None
+
+
+@app.post("/api/protheus/<customer>/<ambiente>/fase")
+def api_protheus_fase(customer, ambiente):
+    """Roda UMA fase da coleta na base do cliente e devolve o CSV cru.
+
+        POST /api/protheus/TFEHXQ00/producao/fase   {"sql": "...", "rotulo": "01"}
+    """
+    erro, amb = _guarda_ambiente(customer, ambiente, escrita=True)
+    if erro:
+        return erro
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
+    if not cfg.get("ativo"):
+        return _err(409, f"Ambiente {amb} está inativo — reative antes de coletar.")
+
+    b = request.get_json(silent=True) or {}
+    sql = (b.get("sql") or "").strip()
+    rotulo = (b.get("rotulo") or "fase").strip()[:40]
+    if not sql:
+        return _err(400, f"Fase {rotulo} chegou sem SQL.")
+    if len(sql.encode("utf-8")) > FASE_SQL_TETO:
+        return _err(400, f"A fase {rotulo} tem {len(sql.encode('utf-8')) // 1024} KB, "
+                         f"acima do teto de {FASE_SQL_TETO // 1024} KB. Quebre em mais fases.")
+    if (m := _fase_sql_erro(sql)):
+        return _err(400, m)
+
+    ini = time.time()
+    try:
+        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+    except RuntimeError as e:
+        return _err(500, str(e))
+    if not tok:
+        return _err(409, "Sem token cadastrado para este ambiente — a REST da base "
+                         "recusa a chamada sem o X-TSC-Token.")
+    try:
+        r = requests.post(f"{cfg['url_rest']}/query",
+                          json={"token": tok, "tipo": "cadastros", "sql": sql,
+                                "limite": int(cfg.get("limite_linhas") or 50000)},
+                          headers=heads, auth=auth,
+                          params={"empresa": cfg.get("empresa") or "01",
+                                  "filial": cfg.get("filial") or "01"},
+                          timeout=min(int(cfg.get("timeout_s") or 45), TIMEOUT_TETO))
+        dados = _json_da_resposta(r)
+    except requests.RequestException as e:
+        return _err(502, f"Fase {rotulo}: falha ao chamar a base ({type(e).__name__}). "
+                         f"Timeout do ambiente = {cfg.get('timeout_s')}s.")
+    if r.status_code >= 400 or not dados.get("ok"):
+        return _err(502, f"Fase {rotulo} — a base recusou: " + (dados.get("erro")
+                    or f"HTTP {r.status_code}. {_trecho(r)}"))
+    if dados.get("truncado"):
+        return _err(502, f"Fase {rotulo} bateu o limite de linhas — medição truncada é "
+                         "medição errada. Suba o limite no ⚙ Ambiente.")
+    csv_txt = dados.get("csv") or ""
+    return _json({"ok": True, "rotulo": rotulo, "csv": csv_txt,
+                  "linhas": dados.get("linhas"), "bytes": len(csv_txt),
+                  "duracao_ms": int((time.time() - ini) * 1000)})
 
 
 # ── Compara: dicionário (SX2/SX3/SX6) entre as empresas da MESMA base ───────
