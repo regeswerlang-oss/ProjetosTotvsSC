@@ -5330,6 +5330,11 @@ def api_estrutura_tabela(customer):
 # DIVERGE. O X2 vem inteiro porque "a tabela existe só na empresa 1 e 2" é uma
 # pergunta sobre AUSÊNCIA: sem a lista completa não dá para saber quem falta.
 CMP_RE_SUFIXO = re.compile(r"^SX([236])(\d{3})$")
+# A 99 é a empresa de exemplo que vem no pacote do Protheus: existe em toda base
+# e não é do cliente. Comparar contra ela só produz ruído — "a tabela falta na
+# 99" aparecia em quase tudo e inflava a contagem de divergências. Fora antes da
+# consulta, não na tela: assim nem entra no UNION e as três leituras ficam menores.
+CMP_EMPRESAS_IGNORADAS = ("99",)
 CMP_SQL_SUFIXOS = ("SELECT TABLE_NAME AS TABELA FROM ALL_TABLES "
                    "WHERE TABLE_NAME LIKE 'SX2%' OR TABLE_NAME LIKE 'SX3%' "
                    "OR TABLE_NAME LIKE 'SX6%' ORDER BY TABLE_NAME")
@@ -5539,8 +5544,11 @@ def api_estrutura_comparar(customer):
                 por_dic[m.group(1)].add(m.group(2))
         # Só compara o sufixo que tem os TRÊS dicionários: um SX3 sem o SX2 do
         # mesmo grupo é sobra de migração, não empresa.
-        sufixos = sorted(por_dic["2"] & por_dic["3"] & por_dic["6"])
-        parciais = sorted((por_dic["2"] | por_dic["3"] | por_dic["6"]) - set(sufixos))
+        completos = {s for s in por_dic["2"] & por_dic["3"] & por_dic["6"]
+                     if s[:-1] not in CMP_EMPRESAS_IGNORADAS}
+        sufixos = sorted(completos)
+        parciais = sorted(s for s in (por_dic["2"] | por_dic["3"] | por_dic["6"])
+                          if s not in completos and s[:-1] not in CMP_EMPRESAS_IGNORADAS)
         if len(sufixos) < 2:
             return _err(409, "Encontrei menos de dois dicionários completos nesta base "
                              f"(SX2/SX3/SX6 por grupo de empresas): {sufixos or 'nenhum'}. "

@@ -60,7 +60,13 @@ tipo/tamanho/decimal entre elas. Mesma lógica no SX6.
 ## Descoberta das empresas
 
 Ninguém digita sufixo: uma consulta em `ALL_TABLES` acha os `SX[236]\d{3}` e só
-entram os sufixos que têm os **três** dicionários. Um `SX3` sem o `SX2` do mesmo
+entram os sufixos que têm os **três** dicionários.
+
+A **empresa 99 fica de fora, sempre**. É a empresa de exemplo que vem no pacote
+do Protheus: existe em toda base, não é do cliente, e comparar contra ela só
+produz ruído — "a tabela falta na 99" aparecia em quase tudo e inflava a
+contagem. O corte acontece **antes da consulta**, não na tela: assim a 99 nem
+entra no `UNION` e as três leituras ficam menores. Um `SX3` sem o `SX2` do mesmo
 grupo é sobra de migração, não empresa — esses aparecem num aviso à parte, para
 não virarem conclusão errada. O nome da empresa vem do SM0 que a aba Estrutura
 já leu; o dicionário só conhece o sufixo, e `010 × 020` não diz nada a ninguém.
