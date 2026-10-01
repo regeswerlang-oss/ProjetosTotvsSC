@@ -8303,11 +8303,31 @@ function cmpBlocoX3(d) {
 function cmpBlocoX6(d) {
   const linhas = d.x6.map(x => {
     const chave = `${x.param} ${x.descricao || ''}`.toUpperCase();
+    // O chip sozinho dizia QUE diverge, não O QUÊ — e aí a leitura exigia varrer
+    // as colunas de volta. Aqui vai o valor da divergência, na ordem das empresas
+    // e sem repetir: "01 × A" resolve a linha num relance.
+    const ordem = d.empresas.map(e => e.sufixo);
+    const distintos = (fn) => {
+      const vistos = [];
+      ordem.forEach(suf => (x.empresas[suf] || []).forEach(r => {
+        const v = fn(r);
+        if (!vistos.includes(v)) vistos.push(v);
+      }));
+      return vistos;
+    };
     const marcas = [
-      x.falta_em.length ? '<span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px]">ausente</span>' : '',
+      x.falta_em.length ? `<span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px]">ausente</span>` : '',
       x.compart_diverge ? '<span class="px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 text-[10px]">compartilhamento</span>' : '',
       x.conteudo_diverge ? '<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px]">conteúdo</span>' : '',
     ].filter(Boolean).join(' ');
+    const detalhe = [
+      x.falta_em.length
+        ? `<div class="text-rose-700">falta em ${escapeHtml(x.falta_em.map(f => f.slice(0, -1)).join(', '))}</div>` : '',
+      x.compart_diverge
+        ? `<div class="text-violet-800">${distintos(r => r.filial || 'todas').map(escapeHtml).join(' × ')}</div>` : '',
+      x.conteudo_diverge
+        ? `<div class="text-amber-900 font-mono">${distintos(r => (r.conteudo || '(vazio)').slice(0, 40)).map(escapeHtml).join(' × ')}</div>` : '',
+    ].filter(Boolean).join('');
     return `<tr data-cmp-linha="${escapeHtml(chave)}" data-cmp-div="1"
         class="border-t border-slate-100 align-top hover:bg-slate-50/60">
       <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(x.param)}
@@ -8322,13 +8342,13 @@ function cmpBlocoX6(d) {
             >${escapeHtml(r.filial || 'todas')}</span>
             <span class="ml-1 text-slate-700 break-all">${escapeHtml(r.conteudo || '(vazio)')}</span></div>`).join('')}</td>`;
       }).join('')}
-      <td class="px-3 py-1.5 whitespace-nowrap">${marcas}</td>
+      <td class="px-3 py-1.5 text-xs">${marcas}${detalhe}</td>
     </tr>`;
   }).join('');
   return cmpCaixa('x6', 'SX6 · Parâmetros divergentes',
     'o chip é o X6_FIL: "todas" = parâmetro global, código = só naquela filial. Ao lado, o conteúdo',
     `${cmpPlural(d.x6.length, 'parâmetro', 'parâmetros')}`,
-    () => `<table class="w-full text-sm" data-cmp-tab="x6">
+    () => `<table class="text-sm min-w-full" data-cmp-tab="x6">
       <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
         ${cmpTh(d, ['Parâmetro']).replace('</tr>', '<th class="px-3 py-2 text-left">Diverge em</th></tr>')}
       </thead>
