@@ -65,6 +65,18 @@ grupo é sobra de migração, não empresa — esses aparecem num aviso à parte
 não virarem conclusão errada. O nome da empresa vem do SM0 que a aba Estrutura
 já leu; o dicionário só conhece o sufixo, e `010 × 020` não diz nada a ninguém.
 
+## Recolher: o bloco fechado nem gera DOM
+
+Na primeira base real a aba voltou com **5.529 campos divergentes** e 238
+parâmetros. Despejar isso de uma vez não é leitura, é rolagem — e o navegador
+sente. Os três blocos recolhem, e o corpo da tabela é uma **função**: fechado,
+a tabela não chega a ser montada.
+
+O **SX2 abre por padrão**; SX3 e SX6 nascem recolhidos. O SX2 é o menor e o mais
+lido — "a tabela existe nesta empresa?" é a primeira pergunta; o detalhe de
+campo e de parâmetro vem depois, sob demanda. O contador fica no cabeçalho para
+o bloco fechado ainda informar (`5.529 campos em 1.240 tabelas`).
+
 ## Limites que valem lembrar
 
 - **Só Oracle** por enquanto. O ambiente cadastrado como `mssql`/`postgres`

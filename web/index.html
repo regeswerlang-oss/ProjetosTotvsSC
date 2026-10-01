@@ -8094,14 +8094,17 @@ $('#est-tabela-nova').addEventListener('click', () => estModalTabela(null));
 //  dicionário engana mais do que ajuda. Por isso também não roda sozinho ao
 //  abrir a aba — quem dispara é o consultor, sabendo em que base está.
 // ============================================================================
+// SX2 abre, SX3 e SX6 nascem recolhidos: numa base real o SX3 passa de 5 mil
+// campos divergentes, e despejar isso de cara não é leitura, é rolagem. O bloco
+// recolhido nem gera DOM — o custo some junto com a tela.
 const cmp = { customer: null, ambiente: 'producao', dados: null, rodando: false,
-              soDiverg: true, busca: '', abertas: new Set() };
+              soDiverg: true, busca: '', abertas: new Set(['x2']) };
 
 function initCompara() {
   const cli = state.selected?.cli;
   $('#cmp-cliente-nome').textContent =
     (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
-  if (cmp.customer !== cli) { cmp.customer = cli; cmp.dados = null; cmp.abertas = new Set(); }
+  if (cmp.customer !== cli) { cmp.customer = cli; cmp.dados = null; cmp.abertas = new Set(['x2']); }
   $('#cmp-ambiente').value = cmp.ambiente;
   renderCompara();
 }
@@ -8201,15 +8204,26 @@ function cmpTh(d, antes) {
       <span class="font-mono">${escapeHtml(e.codigo)}</span></th>`).join('')}</tr>`;
 }
 
-function cmpCaixa(titulo, sub, corpo) {
+/** `corpo` é uma FUNÇÃO de propósito: recolhido, a tabela nem chega a ser
+ *  montada. Com 5 mil linhas de SX3 isso é a diferença entre a aba abrir e a
+ *  aba travar. O contador fica no cabeçalho para o bloco fechado ainda informar. */
+function cmpCaixa(id, titulo, sub, conta, corpo) {
+  const aberta = cmp.abertas.has(id);
   return `<div class="bg-white rounded-lg border border-slate-200 mb-6">
-    <div class="px-4 py-3 border-b border-slate-200">
+    <button type="button" data-cmp-caixa="${id}"
+      class="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-slate-50 ${aberta ? 'border-b border-slate-200' : ''}">
+      <span class="text-slate-400 w-3 text-center">${aberta ? '▾' : '▸'}</span>
       <span class="font-totvs text-totvs-petroleo">${titulo}</span>
-      <span class="ml-2 text-xs text-slate-400">${sub}</span>
-    </div>
-    <div class="overflow-x-auto">${corpo}</div>
+      <span class="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600 whitespace-nowrap">${conta}</span>
+      <span class="ml-2 text-xs text-slate-400 hidden lg:inline">${sub}</span>
+      <span class="ml-auto text-xs text-slate-400 whitespace-nowrap">${aberta ? 'recolher' : 'expandir'}</span>
+    </button>
+    ${aberta ? `<div class="overflow-x-auto">${corpo()}</div>` : ''}
   </div>`;
 }
+
+const cmpNum = (n) => Number(n).toLocaleString('pt-BR');
+const cmpPlural = (n, um, varios) => `${cmpNum(n)} ${n === 1 ? um : varios}`;
 
 // ── SX2 · a tabela existe em quais empresas ────────────────────────────────
 function cmpBlocoX2(d) {
@@ -8234,9 +8248,10 @@ function cmpBlocoX2(d) {
         : t.modo_diverge ? 'text-amber-700' : 'text-slate-400'}">${escapeHtml(sit)}</td>
     </tr>`;
   }).join('');
-  return cmpCaixa('SX2 · Tabelas por empresa',
+  return cmpCaixa('x2', 'SX2 · Tabelas por empresa',
     'a célula mostra o compartilhamento (empresa · unidade · filial); — é tabela ausente',
-    `<table class="w-full text-sm" data-cmp-tab="x2">
+    `divergem ${cmpNum(d.x2.filter(t => t.falta_em.length || t.modo_diverge).length)} de ${cmpPlural(d.x2.length, 'tabela', 'tabelas')}`,
+    () => `<table class="w-full text-sm" data-cmp-tab="x2">
       <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
         ${cmpTh(d, ['Tabela', 'Nome', 'Arquivo']).replace('</tr>', '<th class="px-3 py-2 text-left">Situação</th></tr>')}
       </thead>
@@ -8273,9 +8288,11 @@ function cmpBlocoX3(d) {
     }).join('');
     return cab + corpo;
   }).join('');
-  return cmpCaixa('SX3 · Campos divergentes por tabela',
+  const nCampos = d.x3.reduce((a, t) => a + t.campos.length, 0);
+  return cmpCaixa('x3', 'SX3 · Campos divergentes por tabela',
     'a célula traz tipo/tamanho,decimal; — é campo que não existe naquela empresa. Só aparece o que diverge',
-    `<table class="w-full text-sm" data-cmp-tab="x3">
+    `${cmpPlural(nCampos, 'campo', 'campos')} em ${cmpPlural(d.x3.length, 'tabela', 'tabelas')}`,
+    () => `<table class="w-full text-sm" data-cmp-tab="x3">
       <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
         ${cmpTh(d, ['Campo', 'Título'])}
       </thead>
@@ -8308,9 +8325,10 @@ function cmpBlocoX6(d) {
       <td class="px-3 py-1.5 whitespace-nowrap">${marcas}</td>
     </tr>`;
   }).join('');
-  return cmpCaixa('SX6 · Parâmetros divergentes',
+  return cmpCaixa('x6', 'SX6 · Parâmetros divergentes',
     'o chip é o X6_FIL: "todas" = parâmetro global, código = só naquela filial. Ao lado, o conteúdo',
-    `<table class="w-full text-sm" data-cmp-tab="x6">
+    `${cmpPlural(d.x6.length, 'parâmetro', 'parâmetros')}`,
+    () => `<table class="w-full text-sm" data-cmp-tab="x6">
       <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
         ${cmpTh(d, ['Parâmetro']).replace('</tr>', '<th class="px-3 py-2 text-left">Diverge em</th></tr>')}
       </thead>
@@ -8318,6 +8336,11 @@ function cmpBlocoX6(d) {
 }
 
 function ligaCompara() {
+  $$('#cmp-conteudo [data-cmp-caixa]').forEach(b => b.addEventListener('click', () => {
+    const id = b.dataset.cmpCaixa;
+    cmp.abertas.has(id) ? cmp.abertas.delete(id) : cmp.abertas.add(id);
+    renderCompara();
+  }));
   const div = $('#cmp-so-div');
   if (div) div.addEventListener('change', () => { cmp.soDiverg = div.checked; cmpFiltra(); });
   const bus = $('#cmp-busca');
