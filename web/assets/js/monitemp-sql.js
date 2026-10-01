@@ -84,6 +84,9 @@
   // Colunas de saida - identicas nos dois dialetos, na mesma ordem.
   const COLS_SM0 = ['EMPRESA', 'FILIAL', 'NOME_EMPRESA', 'NOME_FILIAL', 'CNPJ', 'LEIAUTE',
     'SIZEFIL', 'SX2', 'QTD_TABELAS', 'TABELAS_EXISTENTES', 'DT_LEITURA', 'SEMANA'];
+  const COLS_DIC = ['EMPRESA', 'TABELA', 'REGISTRO', 'SEQ', 'CAMPO', 'CONTEUDO',
+    'TIPO_DADO', 'TAMANHO'];
+  const COLS_CMP = ['EMPRESA', 'TABELA', 'CHAVE', 'FILIAL', 'VALOR'];
   const COLS_EMP = ['EMPRESA', 'NOME_EMPRESA', 'LEIAUTE', 'TIPO', 'TABELA', 'DESCRICAO',
     'TABELA_FISICA', 'SITUACAO', 'SX2', 'FILIAL', 'FILIAL_TIPO', 'NOME_FILIAL', 'QTDE',
     'DT_LEITURA', 'SEMANA'];
@@ -419,6 +422,153 @@ ${classifica(d, 'B')},
  ORDER BY 1, 4, 5, 10`;
   }
 
+  // ------------------------------------------------------------------------
+  //  C0 - dicionario das tabelas marcadas para comparacao de conteudo.
+  //
+  //  Le a SIX (indice 1 = chave do registro) e a SX3 (campos) de cada empresa.
+  //  E manual pelo mesmo motivo do P0: o painel precisa saber os campos ANTES
+  //  de montar a leitura de conteudo, porque o release Oracle do cliente recusa
+  //  SQL dinamico. Roda nas TRES empresas de proposito - campo customizado que
+  //  existe numa e nao na outra e achado, nao ruido.
+  // ------------------------------------------------------------------------
+  function scriptDicionario(o = {}) {
+    const d = o.dialeto === 'oracle' ? 'oracle' : 'mssql';
+    const O = d === 'oracle';
+    const tabs = [...new Set((o.tabelas || []).map(cod).filter(Boolean))];
+    const emps = [...new Set((o.empresas || []).map(cod).filter(Boolean))];
+    if (!tabs.length) throw new Error('Nenhuma tabela marcada para comparar conteudo na aba Estrutura.');
+    if (!emps.length) throw new Error('Nenhuma empresa na SM0 - rode o Script SM0 antes.');
+    const du = O ? ' FROM DUAL' : '';
+    const t = O ? (x) => `TRIM(${x})` : (x) => `RTRIM(${x})`;
+    const nuloTxt = (n) => O ? `CAST(NULL AS VARCHAR2(${n}))` : `CAST(NULL AS varchar(${n}))`;
+    const litF = tabs.map((x, i) => i === 0
+      ? `    SELECT ${lit(x)} AS TAB${du}`
+      : `    SELECT ${lit(x)}${du}`).join('\n    UNION ALL\n');
+
+    const blocos = [];
+    emps.forEach(e => {
+      const sfx = e + '0';
+      blocos.push(`    SELECT ${lit(e)} AS EMPRESA, L.TAB AS TABELA, 'CHAVE' AS REGISTRO, '00' AS SEQ,
+           ${nuloTxt(10)} AS CAMPO, ${t('IX.CHAVE')} AS CONTEUDO, ${nuloTxt(1)} AS TIPO_DADO, 0 AS TAMANHO
+      FROM Q_LISTA L
+      JOIN SIX${sfx} IX ON ${t('IX.INDICE')} = L.TAB AND ${t('IX.ORDEM')} = '1' AND IX.D_E_L_E_T_ = ' '`);
+      blocos.push(`    SELECT ${lit(e)}, L.TAB, 'CAMPO', ${t('X3.X3_ORDEM')},
+           ${t('X3.X3_CAMPO')}, ${t('X3.X3_TITULO')}, ${t('X3.X3_TIPO')}, X3.X3_TAMANHO
+      FROM Q_LISTA L
+      JOIN SX3${sfx} X3 ON ${t('X3.X3_ARQUIVO')} = L.TAB AND X3.D_E_L_E_T_ = ' '`);
+    });
+
+    const cab = cabecalho({ ...o, dialeto: d,
+      titulo: 'MONITEMP C0 - Dicionario das tabelas marcadas para comparacao',
+      linhas: [
+        'PASSO MANUAL, como o P0. Le a SIX (indice 1 = chave) e a SX3 (campos)',
+        'das tabelas marcadas para comparar conteudo, em cada empresa, e o',
+        'painel usa isso para montar o C1 em SQL estatico.',
+        'Tabelas: ' + tabs.join(', ') + '. Empresas: ' + emps.join(', ') + '.',
+        'Rodar nas tres empresas e de proposito: campo que existe numa e nao',
+        'na outra e achado, nao ruido.',
+      ] });
+    return `${cab}
+WITH Q_LISTA AS (
+${litF}
+)
+${blocos.join('\n    UNION ALL\n')}
+ ORDER BY 1, 2, 3, 4`;
+  }
+
+  // Campos que NAO entram na comparacao: controle do ERP e auditoria. Divergem
+  // sempre, e alerta que diverge sempre e alerta que se aprende a ignorar.
+  // cod() tira underscore (serve para alias e codigo de empresa); nome de campo
+  // precisa manter, senao X6_FIL vira X6FIL e nunca bate com a chave da SIX.
+  const campoNome = (s) => ascii(s).replace(/[^0-9A-Za-z_]/g, '').toUpperCase();
+  const CTRL = /^(D_E_L_E_T_|R_E_C_N_O_|R_E_C_D_E_L_)$/;
+  const AUDIT = /_(USERLGI|USERLGA|DTLGI|DTLGA|HRLGI|HRLGA)$/;
+
+  // Campos citados na chave do indice. A SIX guarda expressao ("X6_FIL+X6_VAR",
+  // as vezes com funcao em volta), entao o que vale sao os nomes de campo que
+  // aparecem nela e existem na SX3 daquela tabela.
+  function camposDaChave(expr, campos) {
+    const nomes = new Set(campos.map(c => c.campo));
+    return [...new Set(String(expr || '').toUpperCase().match(/[A-Z0-9_]{3,}/g) || [])]
+      .filter(x => nomes.has(x));
+  }
+
+  // ------------------------------------------------------------------------
+  //  C1 - conteudo das tabelas marcadas, uma linha por empresa x tabela x chave.
+  //  Monta-se do dicionario lido no C0: SQL estatico, nada dinamico.
+  // ------------------------------------------------------------------------
+  function scriptConteudo(o = {}) {
+    const d = o.dialeto === 'oracle' ? 'oracle' : 'mssql';
+    const O = d === 'oracle';
+    const dic = o.dicionario || [];
+    if (!dic.length) throw new Error('Dicionario vazio - rode e suba o Script Dicionario (C0) antes.');
+    const cc = O ? ' || ' : ' + ';
+    const t = (x) => O ? `TRIM(${x})` : `RTRIM(${x})`;
+    const corta = (x, n) => O ? `SUBSTR(${x}, 1, ${n})` : `LEFT(${x}, ${n})`;
+    const texto = (c) => c.tipo === 'N'
+      ? (O ? `TO_CHAR(${c.campo})` : `CONVERT(varchar(30), ${c.campo})`)
+      : t(c.campo);
+
+    const porEmpTab = new Map();
+    dic.forEach(r => {
+      const k = cod(r.empresa) + '|' + cod(r.tabela);
+      if (!porEmpTab.has(k)) porEmpTab.set(k, { chave: '', campos: [] });
+      const alvo = porEmpTab.get(k);
+      if ((r.registro || '').toUpperCase() === 'CHAVE') alvo.chave = r.conteudo || '';
+      else alvo.campos.push({ campo: campoNome(r.campo), tipo: (r.tipo_dado || 'C').toUpperCase().slice(0, 1) });
+    });
+
+    const blocos = [];
+    const pulados = [];
+    [...porEmpTab.entries()].sort().forEach(([k, inf]) => {
+      const [emp, tab] = k.split('|');
+      const fis = tab + emp + '0';
+      const chaves = camposDaChave(inf.chave, inf.campos);
+      if (!chaves.length) { pulados.push(`${fis}: indice 1 sem campo reconhecido ("${inf.chave}")`); return; }
+      // A convencao <PFX>_FILIAL nao vale para todas: a SX6 usa X6_FIL. Quem
+      // sabe o nome certo e o dicionario, entao procura-se nele antes de cair
+      // na convencao.
+      const fil = (inf.campos.find(c => /_FIL(IAL)?$/.test(c.campo)) || {}).campo
+        || campoFilial(tab);
+      const comp = inf.campos.filter(c => !chaves.includes(c.campo) && c.campo !== fil
+        && !CTRL.test(c.campo) && !AUDIT.test(c.campo) && c.tipo !== 'M').slice(0, 40);
+      if (!comp.length) { pulados.push(`${fis}: nenhum campo comparavel fora da chave`); return; }
+      const temFil = inf.campos.some(c => c.campo === fil);
+      // A filial sai da CHAVE e vai para coluna propria. Com ela dentro, o
+      // MV_LOCAL da empresa 01 (filial 0101) e o da 03 (filial 0301) viram
+      // chaves diferentes e o painel diz "falta na outra" - quando a pergunta
+      // real e se o MESMO parametro tem o mesmo conteudo nas duas. A filial
+      // continua visivel ao lado, que e a outra metade da pergunta.
+      const semFil = chaves.filter(c => c !== fil);
+      const chaveFinal = semFil.length ? semFil : chaves;
+      const exprChave = chaveFinal.map(c => corta(t(c), 40)).join(`${cc}'|'${cc}`);
+      const exprValor = comp.map(c => `${lit(c.campo + '=')}${cc}${corta(texto(c), 60)}`)
+        .join(`${cc}' ~ '${cc}`);
+      blocos.push(`    SELECT ${lit(emp)} AS EMPRESA, ${lit(tab)} AS TABELA,
+           ${exprChave} AS CHAVE,
+           ${temFil ? t(fil) : "' '"} AS FILIAL,
+           ${corta(exprValor, 900)} AS VALOR
+      FROM ${fis} WHERE D_E_L_E_T_ = ' '`);
+    });
+    if (!blocos.length) throw new Error('Nada a comparar. ' + pulados.join('; '));
+
+    const cab = cabecalho({ ...o, dialeto: d,
+      titulo: 'MONITEMP C1 - Conteudo das tabelas marcadas, por empresa',
+      linhas: [
+        'Montado a partir do dicionario lido no C0 - por isso e SQL estatico.',
+        'Uma linha por EMPRESA x TABELA x CHAVE (indice 1 da SIX, sem a filial).',
+        'VALOR traz os campos comparaveis como CAMPO=valor ~ CAMPO=valor, e a',
+        'FILIAL vem em coluna propria.',
+        'Ficam de fora da comparacao: a chave, o campo de filial, os campos de',
+        'controle (D_E_L_E_T_, R_E_C_N_O_) e os de auditoria (_USERLGI,',
+        '_DTLGI...), que divergem sempre.',
+        ...(pulados.length ? ['Fora desta leitura: ' + pulados.join('; ')] : []),
+      ] });
+    return `${cab}
+${blocos.join('\n    UNION ALL\n')}
+ ORDER BY 2, 3, 1`;
+  }
+
   // Grupo de uma tabela medida. Medicao antiga (ou tabela tirada do escopo) cai
   // em 'Outros' em vez de desaparecer da tela.
   const grupoDaTabela = (tab) => {
@@ -426,8 +576,8 @@ ${classifica(d, 'B')},
     return achou ? achou.grupo : 'Outros';
   };
 
-  const api = { LISTA_ESCOPO, GRUPOS, grupoDaTabela, COLS_SM0, COLS_EMP,
-    scriptSM0, scriptEmpresas, estruturaSM0, campoFilial };
+  const api = { LISTA_ESCOPO, GRUPOS, grupoDaTabela, COLS_SM0, COLS_EMP, COLS_DIC, COLS_CMP,
+    scriptSM0, scriptEmpresas, scriptDicionario, scriptConteudo, estruturaSM0, campoFilial };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else raiz.MonitEmp = api;
 })(typeof window !== 'undefined' ? window : globalThis);
