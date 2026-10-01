@@ -384,6 +384,13 @@
           <button id="est-filial-nova"  class="rail-btn">＋ Filial</button>
           <button id="est-semear"       class="rail-btn rail-sep rail-btn-cta">📚 Trazer módulos<span class="rail-sub">catálogo de tabelas</span></button>
           <button id="est-tabela-nova"  class="rail-btn">＋ Tabela<span class="rail-sub">inclusão manual</span></button>
+          <button id="est-comparar"     class="rail-btn rail-sep">🔍 Comparar empresas<span class="rail-sub">SX2 · SX3 · SX6 ao vivo</span></button>
+        </div>
+
+        <!-- Compara: o seletor de base fica no cabeçalho da aba, junto do botão
+             de rodar — ler o dicionário da base errada é o erro caro aqui. -->
+        <div data-rail="cmp" class="rail-grupo hidden">
+          <button id="cmp-rodar" class="rail-btn rail-btn-cta">🔄 Rodar comparação<span class="rail-sub">lê o dicionário na hora</span></button>
         </div>
 
         <div data-rail="cob" class="rail-grupo hidden">
@@ -436,6 +443,7 @@
             <button data-tab="cobertura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cobertura</button>
             <button data-tab="empresas"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Empresas</button>
             <button data-tab="estrutura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Estrutura</button>
+            <button data-tab="compara"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Compara</button>
             <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
             <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
@@ -680,6 +688,23 @@
             <button id="est-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
           </div>
           <div id="est-conteudo"></div>
+        </div>
+
+        <!-- Aba Compara — dicionário (SX2/SX3/SX6) das empresas da MESMA base,
+             lido AO VIVO pela REST. Não guarda nada: a pergunta é "como está
+             agora", e retrato velho de dicionário engana mais do que ajuda. -->
+        <div id="tab-compara" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="cmp-cliente-nome" class="font-medium"></span>
+            <select id="cmp-ambiente" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
+              <option value="producao">Base Produção</option>
+              <option value="teste">Base de Testes</option>
+            </select>
+            <button id="cmp-rodar-topo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">🔄 Rodar comparação</button>
+            <span id="cmp-selo" class="text-xs text-slate-500"></span>
+          </div>
+          <div id="cmp-conteudo"></div>
         </div>
 
         <!-- Aba Protótipo — roteiro MIT045, ciclos e aproveitamento.
@@ -1994,7 +2019,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2016,7 +2041,7 @@ const AMB = {
 // lá quem decide é o setSub() — que roda depois deste mapa e sobrepõe.
 const RAIL_ABA = { crono: 'arvore', modulos: 'arvore', etapas: 'arvore',
                    cobertura: 'cob', empresas: 'emp', estrutura: 'est',
-                   prototipo: 'pro', transicao: 'tr' };
+                   compara: 'cmp', prototipo: 'pro', transicao: 'tr' };
 
 function railGrupo(chave) {
   $$('#tab-acoes [data-rail]').forEach(g =>
@@ -2054,6 +2079,7 @@ function setTab(nome) {
   if (nome === 'cobertura') initCobertura();
   if (nome === 'empresas') initEmpresas(emp.ambiente);
   if (nome === 'estrutura') initEstrutura();
+  if (nome === 'compara') initCompara();
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
 }
@@ -7221,9 +7247,13 @@ async function salvaAcessos() {
 //
 // Compartilhamento sempre em 3 posições: Empresa · Unidade · Filial, a MESMA
 // ordem de X2_MODOEMP|X2_MODOUN|X2_MODO que a aba de medição mostra.
-const est = { customer: null, dados: null, modulo: null, tipo: 'TODOS', busca: '', carregando: false };
+const est = { customer: null, dados: null, modulo: null, tipo: 'TODOS', busca: '', carregando: false,
+               situacao: 'TODAS' };
 
 const EST_NIVEL_TIT = ['Empresa', 'Unidade de Negócio', 'Filial'];
+// Valor do select de módulo para "ver tudo". '*' nunca é nome de módulo real —
+// o catálogo e a inclusão manual só gravam nomes de módulo do Protheus.
+const EST_MOD_TODOS = '*';
 
 async function initEstrutura() {
   const cli = state.selected?.cli || null;
@@ -7246,7 +7276,7 @@ async function carregaEstrutura(customer) {
     // Primeiro módulo com tabela definida abre por padrão. Mostrar as ~130
     // linhas de todos os módulos de uma vez não é leitura, é rolagem.
     const mods = modulosDefinidos();
-    if (!mods.includes(est.modulo)) est.modulo = mods[0] || null;
+    if (est.modulo !== EST_MOD_TODOS && !mods.includes(est.modulo)) est.modulo = mods[0] || null;
     renderEstrutura();
   } catch (e) {
     box.innerHTML = blocoErro('Não foi possível carregar a estrutura', e,
@@ -7469,17 +7499,34 @@ function estBlocoTabelas(d) {
   }
   // Cadastro x movimento e a mesma separacao da aba de medicao - e a que decide
   // a regra da TDN: movimento nao pode ser mais compartilhado que o cadastro.
-  const doModulo = d.tabelas.filter(t => t.modulo === est.modulo);
+  // "Todos os módulos" serve à leitura transversal — conferir se a mesma tabela
+  // ficou definida igual em dois módulos, achar o que ninguém classificou. NÃO é
+  // o padrão: o padrão continua sendo um módulo, porque ~130 linhas de uma vez é
+  // rolagem, não leitura. Ordena por módulo para a lista não virar sopa.
+  // Filtro de SITUAÇÃO (não definida / conflito / alterada / em discussão) olha o
+  // projeto INTEIRO: "o que falta definir" não respeita módulo, e esconder um
+  // conflito porque está no módulo ao lado é exatamente o que o filtro evita.
+  const sit = estSituacoes(d);
+  const porSit = est.situacao !== 'TODAS';
+  const todosMods = est.modulo === EST_MOD_TODOS || porSit;
+  const doModulo = todosMods
+    ? d.tabelas.slice().sort((a, b) => (a.modulo || '').localeCompare(b.modulo || '')
+        || (a.tabela || '').localeCompare(b.tabela || ''))
+    : d.tabelas.filter(t => t.modulo === est.modulo);
   const ehMov = (x) => x.tipo === 'movimento';
   const conta = { TODOS: doModulo.length, CADASTRO: doModulo.filter(x => !ehMov(x)).length,
                   MOVIMENTO: doModulo.filter(ehMov).length };
   const linhas = doModulo.filter(x => est.tipo === 'TODOS'
-    || (est.tipo === 'MOVIMENTO' ? ehMov(x) : !ehMov(x)));
+    || (est.tipo === 'MOVIMENTO' ? ehMov(x) : !ehMov(x)))
+    .filter(x => !porSit || sit.get(x.id)?.[est.situacao]);
   const niveis = d.niveis || [0, 2];
   return `<div class="bg-white rounded-lg border border-slate-200">
+    ${estBarraSituacao(d, sit)}
     <div class="px-4 py-3 border-b border-slate-200 flex flex-wrap items-center gap-2">
       <span class="font-totvs text-totvs-petroleo mr-2">Tabelas e compartilhamento</span>
-      <select id="est-modulo" class="px-2 py-1 text-sm border border-slate-300 rounded-md">
+      <select id="est-modulo" class="px-2 py-1 text-sm border border-slate-300 rounded-md" ${porSit
+        ? 'disabled title="O filtro de situação olha todos os módulos — volte para Todas para escolher um módulo."' : ''}>
+        <option value="${EST_MOD_TODOS}" ${todosMods ? 'selected' : ''}>Todos os módulos (${d.tabelas.length})</option>
         ${mods.map(m => `<option value="${escapeHtml(m)}" ${m === est.modulo ? 'selected' : ''}>
           ${escapeHtml(m)} (${d.tabelas.filter(t => t.modulo === m).length})</option>`).join('')}
       </select>
@@ -7503,18 +7550,26 @@ function estBlocoTabelas(d) {
             <th class="px-3 py-2 text-left">Tipo</th>
             ${EST_NIVEL_TIT.map((t, i) => `<th class="px-2 py-2 text-center ${niveis.includes(i) ? '' : 'opacity-40'}">${t}</th>`).join('')}
             <th class="px-3 py-2 text-center">Sugestão</th>
+            <th class="px-2 py-2 text-center" title="✓ = o compartilhamento foi alterado depois de semeado. Passe o mouse para ver quem alterou.">Alterada</th>
+            <th class="px-2 py-2 text-center" title="Propostas de outro compartilhamento, para discutir antes de mudar.">Discussão</th>
             <th class="px-3 py-2"></th>
           </tr>
         </thead>
         <tbody>
-        ${linhas.length ? '' : `<tr><td colspan="8" class="px-3 py-4 text-center text-xs text-slate-400">
-          Nenhuma tabela de ${est.tipo === 'MOVIMENTO' ? 'movimento' : 'cadastro'} neste módulo.</td></tr>`}
+        ${linhas.length || porSit ? '' : `<tr><td colspan="10" class="px-3 py-4 text-center text-xs text-slate-400">
+          Nenhuma tabela de ${est.tipo === 'MOVIMENTO' ? 'movimento' : 'cadastro'}
+          ${todosMods ? 'em nenhum módulo' : 'neste módulo'}.</td></tr>`}
         ${linhas.map(t => {
           const c = t.compart || '';
-          const chave = `${t.tabela} ${t.descricao || ''}`.toUpperCase();
-          return `<tr data-est-linha="${escapeHtml(chave)}" class="border-t border-slate-100 hover:bg-slate-50/60">
+          // Com todos os módulos na tela, sem o nome do módulo a linha não diz de
+          // onde veio — e a busca precisa achar por módulo também.
+          const chave = `${t.tabela} ${t.descricao || ''} ${todosMods ? (t.modulo || '') : ''}`.toUpperCase();
+          const si = sit.get(t.id) || {};
+          return `<tr data-est-linha="${escapeHtml(chave)}" class="border-t border-slate-100 hover:bg-slate-50/60 ${
+            si.CONFLITO ? 'bg-rose-50/60' : si.INDEF ? 'bg-amber-50/40' : ''}">
             <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(t.tabela)}
-              ${t.origem === 'manual' ? '<span class="ml-1 text-[9px] px-1 rounded bg-slate-200 text-slate-600">MANUAL</span>' : ''}</td>
+              ${t.origem === 'manual' ? '<span class="ml-1 text-[9px] px-1 rounded bg-slate-200 text-slate-600">MANUAL</span>' : ''}
+              ${todosMods ? `<span class="block font-sans font-normal text-[10px] text-slate-400">${escapeHtml(t.modulo || '—')}</span>` : ''}</td>
             <td class="px-3 py-1.5 text-slate-600">${escapeHtml(t.descricao || '')}
               ${t.observacao ? `<span class="block text-[11px] text-slate-400">${escapeHtml(t.observacao)}</span>` : ''}</td>
             <td class="px-3 py-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${
@@ -7530,16 +7585,222 @@ function estBlocoTabelas(d) {
             <td class="px-3 py-1.5 text-center font-mono text-xs ${
               t.sugestao && c && t.sugestao !== c ? 'text-amber-700 font-semibold' : 'text-slate-400'}">
               ${escapeHtml(t.sugestao || '—')}</td>
+            <td class="px-2 py-1.5 text-center">${estCelAlterada(t)}</td>
+            <td class="px-2 py-1.5 text-center">${estCelDiscussao(t)}</td>
             <td class="px-3 py-1.5 text-right whitespace-nowrap">
               <button data-est-tab="${t.id}" class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button>
             </td>
           </tr>`;
-        }).join('') || `<tr><td colspan="8" class="px-3 py-6 text-center text-slate-400 text-sm">
-          Nenhuma tabela com esse filtro.</td></tr>`}
+        }).join('') || `<tr><td colspan="10" class="px-3 py-6 text-center text-slate-400 text-sm">
+          ${porSit ? `Nenhuma tabela ${escapeHtml(EST_SIT[est.situacao].vazio)}.` : 'Nenhuma tabela com esse filtro.'}</td></tr>`}
         </tbody>
       </table>
     </div>
   </div>`;
+}
+
+// ── Trilha de alterações, propostas e filtro de situação (01/10/2026) ─────────
+// Spec: docs/specs/2026-10-01-estrutura-alteracoes-e-propostas.md
+// O ✓ diz que alguém MUDOU o compartilhamento depois de semeado; o hover diz
+// quem. A proposta é para o segundo consultor registrar a opinião dele sem
+// sobrescrever a do primeiro — a definição só muda quando alguém aplica.
+const EST_SIT = {
+  TODAS:     { rot: 'Todas',          cls: 'bg-slate-100 text-slate-700',     vazio: '' },
+  INDEF:     { rot: 'Não definidas',  cls: 'bg-amber-100 text-amber-900',     vazio: 'sem definição' },
+  CONFLITO:  { rot: 'Com conflito',   cls: 'bg-rose-100 text-rose-800',       vazio: 'em conflito' },
+  DISCUSSAO: { rot: 'Em discussão',   cls: 'bg-violet-100 text-violet-800',   vazio: 'com proposta aberta' },
+  ALTERADA:  { rot: 'Alteradas',      cls: 'bg-emerald-100 text-emerald-800', vazio: 'alterada' },
+};
+
+const estAbertas = (t) => (t.propostas || []).filter(p => p.status === 'aberta');
+const estQuem = (e) => escapeHtml(String(e || 'alguém').split('@')[0]);
+
+/** Situação de cada tabela, para a barra de filtro e para o realce da linha.
+ *  CONFLITO = regra da TDN violada (o mesmo erro da Conferência) OU proposta
+ *  aberta pedindo outro compartilhamento — duas pessoas discordando também é
+ *  conflito, só que ainda não chegou na base. */
+function estSituacoes(d) {
+  const regra = new Set();
+  (d.alertas || []).filter(a => a.onde === 'regra' && a.nivel === 'erro')
+    .forEach(a => (a.tabelas || String(a.chave).split(' x ')).forEach(x => regra.add(String(x).trim())));
+  const m = new Map();
+  d.tabelas.forEach(t => {
+    const abertas = estAbertas(t);
+    m.set(t.id, {
+      TODAS: true,
+      INDEF: !t.compart,
+      CONFLITO: regra.has(t.tabela) || abertas.some(p => p.compart !== t.compart),
+      DISCUSSAO: abertas.length > 0,
+      ALTERADA: (t.historico || []).length > 0,
+      regra: regra.has(t.tabela),
+    });
+  });
+  return m;
+}
+
+function estBarraSituacao(d, sit) {
+  const conta = (k) => [...sit.values()].filter(v => v[k]).length;
+  return `<div class="px-4 py-2.5 border-b border-slate-200 flex flex-wrap items-center gap-2 bg-slate-50/70">
+    <span class="text-[11px] uppercase tracking-wide text-slate-400 mr-1">Situação</span>
+    ${Object.entries(EST_SIT).map(([k, v]) => {
+      const n = conta(k);
+      const on = est.situacao === k;
+      return `<button data-est-sit="${k}" class="px-2.5 py-1 rounded-full text-xs border transition ${
+        on ? `${v.cls} border-transparent font-semibold ring-2 ring-offset-1 ring-totvs-blue/50`
+           : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-100'}">${v.rot}
+        <span class="ml-0.5 ${on ? '' : 'text-slate-400'}">${n}</span></button>`;
+    }).join('')}
+    ${est.situacao !== 'TODAS' ? '<span class="text-xs text-slate-400">· todos os módulos</span>' : ''}
+  </div>`;
+}
+
+function estCelAlterada(t) {
+  const h = t.historico || [];
+  if (!h.length) return '<span class="text-slate-300 text-xs">—</span>';
+  return `<button data-est-alt="${t.id}" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded
+      bg-emerald-100 text-emerald-800 text-xs font-bold hover:bg-emerald-200"
+      aria-label="Alterada ${h.length} vez(es) — ver quem alterou">✓${h.length > 1
+      ? `<span class="font-normal text-[10px]">${h.length}</span>` : ''}</button>`;
+}
+
+function estCelDiscussao(t) {
+  const ab = estAbertas(t).length;
+  const tot = (t.propostas || []).length;
+  if (ab) return `<button data-est-disc="${t.id}" class="px-1.5 py-0.5 rounded bg-violet-100 text-violet-800
+      text-xs font-semibold whitespace-nowrap hover:bg-violet-200">💬 ${ab} aberta${ab > 1 ? 's' : ''}</button>`;
+  return `<button data-est-disc="${t.id}" class="text-xs ${tot ? 'text-slate-500' : 'text-slate-400'}
+      hover:text-totvs-petroleo">${tot ? `💬 ${tot}` : '＋ propor'}</button>`;
+}
+
+const estRotOrigem = { edicao: 'alterou', proposta: 'aplicou proposta', manual: 'regravou',
+                       legado: 'definiu (antes da trilha)' };
+
+function estLinhaHist(h) {
+  return `<div class="flex items-baseline gap-2">
+    <span class="font-mono">${escapeHtml(h.compart_antes || '—')} → <b>${escapeHtml(h.compart_depois || '—')}</b></span>
+    <span class="text-slate-500">${estQuem(h.alterado_por)} ${estRotOrigem[h.origem] || 'alterou'}</span>
+    <span class="text-slate-400 ml-auto whitespace-nowrap">${escapeHtml(fmtDataHora(h.alterado_em))}</span></div>`;
+}
+
+/** Tooltip flutuante preso ao <body>: dentro da tabela (overflow-x-auto) um
+ *  tooltip absoluto seria cortado na borda do bloco. */
+function estTip(alvo, html) {
+  let tip = document.getElementById('est-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'est-tip';
+    tip.className = 'fixed z-[60] max-w-sm bg-slate-900 text-white text-xs rounded-md shadow-lg px-3 py-2 space-y-1 pointer-events-none hidden';
+    document.body.appendChild(tip);
+  }
+  if (!alvo) { tip.classList.add('hidden'); return; }
+  tip.innerHTML = html;
+  tip.classList.remove('hidden');
+  const r = alvo.getBoundingClientRect();
+  const w = tip.offsetWidth, hh = tip.offsetHeight;
+  let x = Math.min(window.innerWidth - w - 8, Math.max(8, r.left + r.width / 2 - w / 2));
+  let y = r.top - hh - 8;
+  if (y < 8) y = r.bottom + 8;
+  tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+}
+
+function estTipAlterada(t) {
+  const h = t.historico || [];
+  return `<p class="font-semibold">${escapeHtml(t.tabela)} · alterada ${h.length} vez${h.length > 1 ? 'es' : ''}</p>
+    ${h.slice(0, 5).map(x => `<div class="flex gap-2"><span class="font-mono">${escapeHtml(x.compart_antes || '—')} → ${escapeHtml(x.compart_depois || '—')}</span>
+      <span class="text-slate-300">${estQuem(x.alterado_por)}</span>
+      <span class="text-slate-400 ml-auto">${escapeHtml(fmtDataHora(x.alterado_em))}</span></div>`).join('')}
+    ${h.length > 5 ? `<p class="text-slate-400">+ ${h.length - 5} anterior(es)</p>` : ''}
+    <p class="text-slate-400 pt-1 border-t border-slate-700">Vai mudar? Converse com quem alterou — ou registre uma proposta.</p>`;
+}
+
+function estTipDiscussao(t) {
+  const ab = estAbertas(t);
+  if (!ab.length) return '';
+  return `<p class="font-semibold">${escapeHtml(t.tabela)} · ${ab.length} proposta(s) aberta(s)</p>
+    ${ab.slice(0, 4).map(p => `<div><span class="font-mono font-semibold">${escapeHtml(p.compart)}</span>
+      <span class="text-slate-300">por ${estQuem(p.autor)}</span> — ${escapeHtml(p.motivo)}</div>`).join('')}`;
+}
+
+/** Modal da discussão: definição atual, trilha, propostas e o formulário de
+ *  nova proposta. Aplicar/descartar resolvem a proposta na hora. */
+function estModalDiscussao(t) {
+  if (!estGuarda() || !t) return;
+  const niveis = est.dados.niveis || [0, 1, 2];
+  const h = t.historico || [];
+  const props = t.propostas || [];
+  const selo = (st) => ({ aberta: 'bg-violet-100 text-violet-800', aplicada: 'bg-emerald-100 text-emerald-800',
+                          descartada: 'bg-slate-200 text-slate-600' }[st]);
+  const m = modal(`Discussão · ${escapeHtml(t.tabela)} — ${escapeHtml(t.descricao || '')}`, `
+    <div class="flex items-center gap-3 flex-wrap">
+      <span class="text-xs text-slate-500">Definido hoje</span>
+      <span class="font-mono text-base font-semibold">${escapeHtml(t.compart || '—')}</span>
+      <span class="text-xs text-slate-400">sugestão ${escapeHtml(t.sugestao || '—')}</span>
+      ${t.definido_por ? `<span class="text-xs text-slate-400 ml-auto">por ${estQuem(t.definido_por)}</span>` : ''}
+    </div>
+    <div>
+      <p class="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Quem alterou</p>
+      <div class="space-y-1 text-xs bg-slate-50 rounded-md p-2 max-h-36 overflow-y-auto">
+        ${h.length ? h.map(estLinhaHist).join('') : '<p class="text-slate-400">Nenhuma alteração desde a semeadura.</p>'}
+      </div>
+    </div>
+    <div>
+      <p class="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Propostas</p>
+      <div class="space-y-2 max-h-64 overflow-y-auto">
+        ${props.length ? props.map(p => `<div class="border border-slate-200 rounded-md p-2 text-xs">
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="font-mono text-sm font-semibold">${escapeHtml(p.compart)}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${selo(p.status)}">${p.status}</span>
+            <span class="text-slate-500">por ${estQuem(p.autor)} · ${escapeHtml(fmtDataHora(p.criado_em))}</span>
+            ${p.compart_na_hora ? `<span class="text-slate-400">(estava ${escapeHtml(p.compart_na_hora)})</span>` : ''}
+          </div>
+          <p class="mt-1 text-slate-700 whitespace-pre-line">${escapeHtml(p.motivo)}</p>
+          ${p.status !== 'aberta' ? `<p class="mt-1 text-slate-400">${p.status === 'aplicada' ? 'Aplicada' : 'Descartada'}
+            por ${estQuem(p.resolvido_por)} · ${escapeHtml(fmtDataHora(p.resolvido_em))}${p.resolucao
+            ? ` — ${escapeHtml(p.resolucao)}` : ''}</p>` : `<div class="mt-2 flex gap-2">
+            <button data-prop-aplicar="${p.id}" class="px-2 py-1 rounded bg-emerald-600 text-white hover:bg-emerald-700">Aplicar ${escapeHtml(p.compart)}</button>
+            <button data-prop-descartar="${p.id}" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Descartar</button>
+          </div>`}
+        </div>`).join('') : '<p class="text-xs text-slate-400">Nenhuma proposta ainda.</p>'}
+      </div>
+    </div>
+    <div class="border-t border-slate-200 pt-3">
+      <p class="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Nova proposta</p>
+      <div class="flex items-end gap-3">
+        ${[0, 1, 2].map(i => `<label class="text-xs text-slate-500 ${niveis.includes(i) ? '' : 'opacity-40'}">
+          ${EST_NIVEL_TIT[i]}
+          <select data-prop-pos="${i}" ${niveis.includes(i) ? '' : 'disabled'}
+            class="block mt-1 px-2 py-1 border border-slate-300 rounded text-sm">
+            ${['E', 'C'].map(v => `<option value="${v}" ${((t.compart || t.sugestao || 'ECC')[i]
+              || (niveis.includes(i) ? 'E' : 'C')) === v ? 'selected' : ''}>${v}</option>`).join('')}
+          </select></label>`).join('')}
+      </div>
+      <label class="block mt-2"><span class="text-xs text-slate-500">Motivo (vai para a discussão / ata)</span>
+        <textarea id="est-prop-motivo" rows="3" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md"
+          placeholder="Ex.: a Filial 0102 tem cadastro de bens próprio, precisa ser exclusiva por filial."></textarea></label>
+    </div>`, 'Registrar proposta');
+
+  const recarrega = async () => { m.fecha(); await carregaEstrutura(est.customer); };
+  m.el.querySelectorAll('[data-prop-aplicar]').forEach(b => b.addEventListener('click', async () => {
+    const p = props.find(x => x.id === b.dataset.propAplicar);
+    if (!confirm(`Aplicar ${p.compart} em ${t.tabela}? A definição atual (${t.compart || '—'}) será substituída.`)) return;
+    try { await estPost('proposta', { id: p.id, acao: 'aplicar' }); await recarrega(); }
+    catch (e) { m.erro(e.message); }
+  }));
+  m.el.querySelectorAll('[data-prop-descartar]').forEach(b => b.addEventListener('click', async () => {
+    const por = prompt('Por que esta proposta foi descartada? (fica registrado)');
+    if (!por || !por.trim()) return;
+    try { await estPost('proposta', { id: b.dataset.propDescartar, acao: 'descartar', resolucao: por.trim() }); await recarrega(); }
+    catch (e) { m.erro(e.message); }
+  }));
+  m.aoConfirmar(async () => {
+    const v = [0, 1, 2].map(i => niveis.includes(i)
+      ? m.el.querySelector(`[data-prop-pos="${i}"]`).value : 'C').join('');
+    const motivo = m.campo('est-prop-motivo').value.trim();
+    if (!motivo) { m.erro('Explique o motivo — sem ele não há o que discutir.'); return; }
+    m.erro(''); m.ocupado(true, 'Registrando…');
+    try { await estPost('proposta', { tabela_id: t.id, compart: v, motivo }); await recarrega(); }
+    catch (e) { m.erro(e.message); m.ocupado(false, 'Registrar proposta'); }
+  });
 }
 
 // ── Gravação ───────────────────────────────────────────────────────────────
@@ -7553,6 +7814,24 @@ async function estPost(rota, corpo) {
 function ligaEstrutura() {
   $$('#est-conteudo [data-est-tipo]').forEach(b => b.addEventListener('click',
     () => { est.tipo = b.dataset.estTipo; renderEstrutura(); }));
+  $$('#est-conteudo [data-est-sit]').forEach(b => b.addEventListener('click',
+    () => { est.situacao = b.dataset.estSit; estTip(null); renderEstrutura(); }));
+  const tabPorId = (id) => est.dados.tabelas.find(t => t.id === id);
+  $$('#est-conteudo [data-est-alt]').forEach(b => {
+    b.addEventListener('mouseenter', () => estTip(b, estTipAlterada(tabPorId(b.dataset.estAlt))));
+    b.addEventListener('mouseleave', () => estTip(null));
+    b.addEventListener('focus', () => estTip(b, estTipAlterada(tabPorId(b.dataset.estAlt))));
+    b.addEventListener('blur', () => estTip(null));
+    b.addEventListener('click', () => { estTip(null); estModalDiscussao(tabPorId(b.dataset.estAlt)); });
+  });
+  $$('#est-conteudo [data-est-disc]').forEach(b => {
+    const t = tabPorId(b.dataset.estDisc);
+    if (estAbertas(t).length) {
+      b.addEventListener('mouseenter', () => estTip(b, estTipDiscussao(t)));
+      b.addEventListener('mouseleave', () => estTip(null));
+    }
+    b.addEventListener('click', () => { estTip(null); estModalDiscussao(t); });
+  });
   const sel = $('#est-modulo');
   if (sel) sel.addEventListener('change', () => { est.modulo = sel.value; est.busca = ''; renderEstrutura(); });
   // Filtra ESCONDENDO linha, não redesenhando o bloco: redesenhar a cada tecla
@@ -7581,6 +7860,24 @@ function ligaEstrutura() {
     [0, 1, 2].forEach(i => { if (!niveis.includes(i) && atual[i] === ' ') atual[i] = 'C'; });
     const valor = atual.join('');
     if (valor.includes(' ')) return;                 // ainda incompleto, não grava
+    // Antes de trocar o que OUTRA pessoa decidiu, mostra quem foi — é o momento
+    // de conversar (ou registrar uma proposta) em vez de sobrescrever calado.
+    const ult = (linha.historico || [])[0];
+    const eu = (euSou?.email || '').toLowerCase();
+    const abertas = estAbertas(linha);
+    if ((ult && (ult.alterado_por || '').toLowerCase() !== eu) || abertas.length) {
+      const txt = [
+        ult ? `${linha.tabela} foi alterada por ${String(ult.alterado_por || 'alguém').split('@')[0]} em ` +
+              `${fmtDataHora(ult.alterado_em)} (${ult.compart_antes || '—'} → ${ult.compart_depois || '—'}).` : '',
+        abertas.length ? `Há ${abertas.length} proposta(s) aberta(s) para esta tabela.` : '',
+        `\nGravar ${valor} mesmo assim? (Cancelar = manter e abrir a discussão)`,
+      ].filter(Boolean).join('\n');
+      if (!confirm(txt)) {
+        partes.forEach(p => { p.value = (linha.compart || '')[+p.dataset.pos] || ''; });
+        estModalDiscussao(linha);
+        return;
+      }
+    }
     try {
       await estPost('tabela', { id, compart: valor, tipo: linha.tipo,
                                 descricao: linha.descricao, observacao: linha.observacao });
@@ -7784,6 +8081,276 @@ $('#est-empresa-nova').addEventListener('click', () => estModalEmpresa(null));
 $('#est-filial-nova').addEventListener('click', () => estModalFilial(null));
 $('#est-semear').addEventListener('click', estModalSemear);
 $('#est-tabela-nova').addEventListener('click', () => estModalTabela(null));
+
+
+// ============================================================================
+//  ABA COMPARA — dicionário das empresas da MESMA base (SX2 · SX3 · SX6)
+// ----------------------------------------------------------------------------
+//  No Protheus o dicionário é por GRUPO DE EMPRESAS: SX2010, SX2020 e SX2030
+//  são dicionários DIFERENTES. A pergunta aqui é "as empresas desta base foram
+//  montadas iguais?" — e a resposta só existe comparando os três lado a lado.
+//
+//  Lê AO VIVO pela REST (TSCMONITREST) e não guarda nada: retrato velho de
+//  dicionário engana mais do que ajuda. Por isso também não roda sozinho ao
+//  abrir a aba — quem dispara é o consultor, sabendo em que base está.
+// ============================================================================
+const cmp = { customer: null, ambiente: 'producao', dados: null, rodando: false,
+              soDiverg: true, busca: '', abertas: new Set() };
+
+function initCompara() {
+  const cli = state.selected?.cli;
+  $('#cmp-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (cmp.customer !== cli) { cmp.customer = cli; cmp.dados = null; cmp.abertas = new Set(); }
+  $('#cmp-ambiente').value = cmp.ambiente;
+  renderCompara();
+}
+
+async function rodaCompara() {
+  const cli = cmp.customer;
+  if (!cli) { alert('Abra um projeto antes de comparar.'); return; }
+  cmp.rodando = true; renderCompara();
+  try {
+    cmp.dados = await api(
+      `/api/estrutura/${encodeURIComponent(cli)}/comparar?ambiente=${cmp.ambiente}`,
+      { method: 'POST' });
+  } catch (e) {
+    cmp.dados = { erro: e.message };
+  } finally {
+    cmp.rodando = false; renderCompara();
+  }
+}
+
+/** Nome da empresa vem do SM0 que a aba Estrutura já leu — o dicionário só
+ *  conhece o sufixo. Sem o nome, "010 × 020" não diz nada a ninguém. */
+function cmpNomeEmpresa(e) {
+  const sm0 = (est.dados?.sm0 || []).find(r => (r.empresa || '').trim() === e.codigo);
+  return sm0?.nome_empresa ? `${e.codigo} ${sm0.nome_empresa}` : e.codigo;
+}
+
+function renderCompara() {
+  const box = $('#cmp-conteudo');
+  const selo = $('#cmp-selo');
+  $('#cmp-rodar-topo').disabled = cmp.rodando;
+  if (!cmp.customer) { selo.textContent = ''; box.innerHTML = blocoVazioCad('Abra um projeto para comparar as empresas.'); return; }
+  if (cmp.rodando) {
+    selo.textContent = '';
+    box.innerHTML = `<div class="bg-white rounded-lg border border-slate-200 p-10 text-center">
+      <p class="text-slate-600">Lendo SX2, SX3 e SX6 na base…</p>
+      <p class="text-slate-400 text-xs mt-1">São quatro consultas de leitura. Pode levar alguns segundos.</p></div>`;
+    return;
+  }
+  const d = cmp.dados;
+  if (!d) {
+    selo.textContent = '';
+    box.innerHTML = blocoVazioCad('Nenhuma comparação rodada ainda.',
+      `<p class="text-slate-400 text-xs mt-2">Escolha a base acima e clique em
+        <b>Rodar comparação</b>. A leitura é direta na base, pela REST cadastrada
+        em <b>⚙ Ambiente</b>.</p>`);
+    return;
+  }
+  if (d.erro) {
+    selo.textContent = '';
+    box.innerHTML = blocoErro('Não foi possível comparar', { message: d.erro }, rodaCompara);
+    return;
+  }
+  const amb = AMB[d.ambiente] || AMB.producao;
+  selo.innerHTML = `<span class="px-2 py-0.5 rounded-full text-xs ${amb.cls}">${escapeHtml(amb.label)}</span>
+    <span class="ml-2">${escapeHtml(d.environment || '')} · ${d.empresas.length} empresa(s) ·
+    lido ${new Date((d.lido_em_ts || 0) * 1000).toLocaleString('pt-BR')} em ${(d.duracao_ms / 1000).toFixed(1)}s</span>`;
+
+  box.innerHTML = `
+    ${cmpBlocoResumo(d)}
+    ${cmpBlocoX2(d)}
+    ${cmpBlocoX3(d)}
+    ${cmpBlocoX6(d)}`;
+  ligaCompara();
+}
+
+function cmpBlocoResumo(d) {
+  const faltaX2 = d.x2.filter(t => t.falta_em.length).length;
+  const modoX2 = d.x2.filter(t => t.modo_diverge).length;
+  const campos = d.x3.reduce((a, t) => a + t.ausentes + t.formatos, 0);
+  const parcial = (d.sufixos_parciais || []).length;
+  return `
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      ${kpi('Empresas', d.empresas.length, 'bg-totvs-blue text-totvs-petroleo')}
+      ${kpi('Tabelas em falta', faltaX2, faltaX2 ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800')}
+      ${kpi('Compart. divergente', modoX2, modoX2 ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-800')}
+      ${kpi('Campos divergentes', campos, campos ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-800')}
+      ${kpi('Parâmetros divergentes', d.x6.length, d.x6.length ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-800')}
+    </div>
+    <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+      <label class="flex items-center gap-2"><input id="cmp-so-div" type="checkbox" ${cmp.soDiverg ? 'checked' : ''} class="rounded">
+        <span>Só o que diverge</span></label>
+      <input id="cmp-busca" value="${escapeHtml(cmp.busca)}" placeholder="filtrar tabela, campo ou parâmetro"
+        class="px-2 py-1 text-sm border border-slate-300 rounded-md w-64">
+      <span class="text-xs text-slate-400">${d.empresas.map(e =>
+        `<b class="font-mono">${escapeHtml(e.sufixo)}</b> ${escapeHtml(cmpNomeEmpresa(e))}`).join(' · ')}</span>
+    </div>
+    ${parcial ? `<div class="mb-4 px-4 py-2 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
+      Sufixos ignorados por não terem os três dicionários (SX2, SX3 e SX6):
+      <b class="font-mono">${d.sufixos_parciais.map(escapeHtml).join(', ')}</b>.
+      Normalmente é sobra de migração — mas confira antes de concluir que a empresa não existe.</div>` : ''}`;
+}
+
+/** Cabeçalho comum: uma coluna por empresa, sempre na mesma ordem. */
+function cmpTh(d, antes) {
+  return `<tr>${antes.map(t => `<th class="px-3 py-2 text-left">${t}</th>`).join('')}
+    ${d.empresas.map(e => `<th class="px-2 py-2 text-center" title="${escapeHtml(cmpNomeEmpresa(e))}">
+      <span class="font-mono">${escapeHtml(e.codigo)}</span></th>`).join('')}</tr>`;
+}
+
+function cmpCaixa(titulo, sub, corpo) {
+  return `<div class="bg-white rounded-lg border border-slate-200 mb-6">
+    <div class="px-4 py-3 border-b border-slate-200">
+      <span class="font-totvs text-totvs-petroleo">${titulo}</span>
+      <span class="ml-2 text-xs text-slate-400">${sub}</span>
+    </div>
+    <div class="overflow-x-auto">${corpo}</div>
+  </div>`;
+}
+
+// ── SX2 · a tabela existe em quais empresas ────────────────────────────────
+function cmpBlocoX2(d) {
+  const linhas = d.x2.map(t => {
+    const diverge = t.falta_em.length || t.modo_diverge;
+    const chave = `${t.chave} ${t.nome} ${t.arquivo}`.toUpperCase();
+    const sit = t.falta_em.length
+      ? `só em ${t.presentes.map(s => s.slice(0, -1)).join(', ')}`
+      : (t.modo_diverge ? 'compartilhamento diferente' : 'igual');
+    return `<tr data-cmp-linha="${escapeHtml(chave)}" data-cmp-div="${diverge ? 1 : 0}"
+        class="border-t border-slate-100 hover:bg-slate-50/60 ${cmp.soDiverg && !diverge ? 'hidden' : ''}">
+      <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(t.chave)}</td>
+      <td class="px-3 py-1.5 text-slate-600">${escapeHtml(t.nome || '')}</td>
+      <td class="px-3 py-1.5 font-mono text-xs text-slate-400">${escapeHtml(t.arquivo || '')}</td>
+      ${d.empresas.map(e => {
+        const v = t.empresas[e.sufixo];
+        return `<td class="px-2 py-1.5 text-center">${v === undefined
+          ? '<span class="text-rose-500 font-semibold" title="não existe nesta empresa">—</span>'
+          : `<span class="font-mono text-xs ${t.modo_diverge ? 'text-amber-700 font-semibold' : 'text-slate-500'}">${escapeHtml(v)}</span>`}</td>`;
+      }).join('')}
+      <td class="px-3 py-1.5 text-xs ${t.falta_em.length ? 'text-rose-700 font-medium'
+        : t.modo_diverge ? 'text-amber-700' : 'text-slate-400'}">${escapeHtml(sit)}</td>
+    </tr>`;
+  }).join('');
+  return cmpCaixa('SX2 · Tabelas por empresa',
+    'a célula mostra o compartilhamento (empresa · unidade · filial); — é tabela ausente',
+    `<table class="w-full text-sm" data-cmp-tab="x2">
+      <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+        ${cmpTh(d, ['Tabela', 'Nome', 'Arquivo']).replace('</tr>', '<th class="px-3 py-2 text-left">Situação</th></tr>')}
+      </thead>
+      <tbody>${linhas || cmpVazio(d.empresas.length + 4)}</tbody></table>`);
+}
+
+function cmpVazio(cols) {
+  return `<tr><td colspan="${cols}" class="px-3 py-6 text-center text-slate-400 text-sm">
+    Nada a mostrar com este filtro.</td></tr>`;
+}
+
+// ── SX3 · campos por tabela (só o que diverge) ─────────────────────────────
+function cmpBlocoX3(d) {
+  const linhas = d.x3.map(t => {
+    const cab = `<tr data-cmp-grupo="${escapeHtml(t.arquivo)}" class="bg-slate-50/80 border-t border-slate-200">
+      <td colspan="${d.empresas.length + 2}" class="px-3 py-1.5">
+        <span class="font-mono font-semibold">${escapeHtml(t.arquivo)}</span>
+        <span class="ml-2 text-xs text-slate-500">${t.ausentes} campo(s) ausente(s) ·
+          ${t.formatos} com formato diferente</span></td></tr>`;
+    const corpo = t.campos.map(c => {
+      const chave = `${t.arquivo} ${c.campo} ${c.titulo || ''}`.toUpperCase();
+      return `<tr data-cmp-linha="${escapeHtml(chave)}" data-cmp-div="1"
+          class="border-t border-slate-100 hover:bg-slate-50/60">
+        <td class="px-3 py-1.5 pl-6 font-mono">${escapeHtml(c.campo)}</td>
+        <td class="px-3 py-1.5 text-slate-600 text-xs">${escapeHtml(c.titulo || '')}</td>
+        ${d.empresas.map(e => {
+          const v = c.empresas[e.sufixo];
+          return `<td class="px-2 py-1.5 text-center font-mono text-xs">${v
+            ? `<span class="${c.formato_diverge ? 'text-amber-700 font-semibold' : 'text-slate-500'}"
+                >${escapeHtml(`${v.tipo}/${v.tamanho}${Number(v.decimal) ? ',' + v.decimal : ''}`)}</span>`
+            : '<span class="text-rose-500 font-semibold" title="campo não existe nesta empresa">—</span>'}</td>`;
+        }).join('')}
+      </tr>`;
+    }).join('');
+    return cab + corpo;
+  }).join('');
+  return cmpCaixa('SX3 · Campos divergentes por tabela',
+    'a célula traz tipo/tamanho,decimal; — é campo que não existe naquela empresa. Só aparece o que diverge',
+    `<table class="w-full text-sm" data-cmp-tab="x3">
+      <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+        ${cmpTh(d, ['Campo', 'Título'])}
+      </thead>
+      <tbody>${linhas || cmpVazio(d.empresas.length + 2)}</tbody></table>`);
+}
+
+// ── SX6 · parâmetros: existe? compartilha igual? conteúdo igual? ───────────
+function cmpBlocoX6(d) {
+  const linhas = d.x6.map(x => {
+    const chave = `${x.param} ${x.descricao || ''}`.toUpperCase();
+    const marcas = [
+      x.falta_em.length ? '<span class="px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 text-[10px]">ausente</span>' : '',
+      x.compart_diverge ? '<span class="px-1.5 py-0.5 rounded bg-violet-100 text-violet-800 text-[10px]">compartilhamento</span>' : '',
+      x.conteudo_diverge ? '<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px]">conteúdo</span>' : '',
+    ].filter(Boolean).join(' ');
+    return `<tr data-cmp-linha="${escapeHtml(chave)}" data-cmp-div="1"
+        class="border-t border-slate-100 align-top hover:bg-slate-50/60">
+      <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(x.param)}
+        <span class="block font-sans font-normal text-[11px] text-slate-400">${escapeHtml(x.descricao || '')}</span></td>
+      ${d.empresas.map(e => {
+        const rs = x.empresas[e.sufixo];
+        if (!rs) return '<td class="px-2 py-1.5 text-center text-rose-500 font-semibold">—</td>';
+        return `<td class="px-2 py-1.5 text-xs">${rs.map(r => `
+          <div class="mb-0.5"><span class="font-mono px-1 rounded ${r.filial
+            ? 'bg-violet-100 text-violet-800' : 'bg-slate-100 text-slate-500'}"
+            title="${r.filial ? 'só nesta filial' : 'vale para todas as filiais'}"
+            >${escapeHtml(r.filial || 'todas')}</span>
+            <span class="ml-1 text-slate-700 break-all">${escapeHtml(r.conteudo || '(vazio)')}</span></div>`).join('')}</td>`;
+      }).join('')}
+      <td class="px-3 py-1.5 whitespace-nowrap">${marcas}</td>
+    </tr>`;
+  }).join('');
+  return cmpCaixa('SX6 · Parâmetros divergentes',
+    'o chip é o X6_FIL: "todas" = parâmetro global, código = só naquela filial. Ao lado, o conteúdo',
+    `<table class="w-full text-sm" data-cmp-tab="x6">
+      <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+        ${cmpTh(d, ['Parâmetro']).replace('</tr>', '<th class="px-3 py-2 text-left">Diverge em</th></tr>')}
+      </thead>
+      <tbody>${linhas || cmpVazio(d.empresas.length + 2)}</tbody></table>`);
+}
+
+function ligaCompara() {
+  const div = $('#cmp-so-div');
+  if (div) div.addEventListener('change', () => { cmp.soDiverg = div.checked; cmpFiltra(); });
+  const bus = $('#cmp-busca');
+  // Filtra ESCONDENDO linha, não redesenhando: redesenhar a cada tecla recria o
+  // input e o cursor volta para o começo da palavra.
+  if (bus) bus.addEventListener('input', () => { cmp.busca = bus.value; cmpFiltra(); });
+  cmpFiltra();
+}
+
+function cmpFiltra() {
+  const alvo = cmp.busca.trim().toUpperCase();
+  $$('#cmp-conteudo tr[data-cmp-linha]').forEach(tr => {
+    const casa = !alvo || tr.dataset.cmpLinha.includes(alvo);
+    const passa = casa && (!cmp.soDiverg || tr.dataset.cmpDiv === '1');
+    tr.classList.toggle('hidden', !passa);
+  });
+  // Cabeçalho de tabela do SX3 some junto quando não sobrou campo visível.
+  $$('#cmp-conteudo tr[data-cmp-grupo]').forEach(tr => {
+    let n = 0;
+    for (let x = tr.nextElementSibling; x && !x.dataset.cmpGrupo; x = x.nextElementSibling) {
+      if (!x.classList.contains('hidden')) n++;
+    }
+    tr.classList.toggle('hidden', n === 0);
+  });
+}
+
+$('#cmp-rodar-topo').addEventListener('click', rodaCompara);
+$('#cmp-rodar').addEventListener('click', rodaCompara);
+$('#cmp-ambiente').addEventListener('change', () => {
+  cmp.ambiente = $('#cmp-ambiente').value; cmp.dados = null; renderCompara();
+});
+// Atalho da Estrutura: leva para a aba já rodando — é de lá que a dúvida nasce.
+$('#est-comparar').addEventListener('click', () => { setTab('compara'); rodaCompara(); });
 
 $('#btn-acessos').addEventListener('click', abreAcessos);
 

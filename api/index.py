@@ -297,6 +297,7 @@ ABAS = [
     {"id": "cobertura", "label": "Cobertura",            "cliente": True},
     {"id": "empresas",  "label": "Empresas e Compartilhamento", "cliente": True},
     {"id": "estrutura", "label": "Estrutura de Empresas", "cliente": False},
+    {"id": "compara",   "label": "Compara (dicionário)",  "cliente": False},
     {"id": "prototipo", "label": "Protótipo",            "cliente": True},
     {"id": "transicao", "label": "Transição",            "cliente": True},
 ]
@@ -4921,14 +4922,113 @@ def _estrut_alertas(cfg, empresas, filiais, tabelas):
             al.append({"nivel": "erro", "onde": "regra", "chave": f"{r['tab_b']} x {r['tab_a']}",
                        "texto": f"{r['tab_b']} ({b['compart']}) está MAIS compartilhada que "
                                 f"{r['tab_a']} ({a['compart']}). {r['motivo']}",
-                       "fonte": r["fonte"]})
+                       "fonte": r["fonte"], "tabelas": [r["tab_a"], r["tab_b"]]})
         if r["tipo"] == "igual" and a["compart"] != b["compart"]:
             al.append({"nivel": "erro", "onde": "regra", "chave": f"{r['tab_a']} x {r['tab_b']}",
                        "texto": f"{r['tab_a']} ({a['compart']}) e {r['tab_b']} ({b['compart']}) "
                                 f"precisam ser iguais. {r['motivo']}",
-                       "fonte": r["fonte"]})
+                       "fonte": r["fonte"], "tabelas": [r["tab_a"], r["tab_b"]]})
     ordem = {"erro": 0, "aviso": 1, "info": 2}
     return sorted(al, key=lambda x: (ordem.get(x["nivel"], 9), x["onde"], str(x["chave"])))
+
+
+# ── Trilha de alterações e propostas (01/10/2026) ──────────────────────────
+# Spec: docs/specs/2026-10-01-estrutura-alteracoes-e-propostas.md
+# Dois consultores mexem na mesma definição. A trilha diz QUEM trocou o
+# compartilhamento (o ✓ da linha); a proposta deixa o segundo consultor
+# registrar a opinião dele SEM sobrescrever a do primeiro, e a conversa
+# acontece em cima do registro, não de memória.
+
+def _estrut_hist(tabela_id, customer, tabela, antes, depois, origem="edicao",
+                 proposta_id=None):
+    """Grava UMA troca real. Sem mudança, não grava: reabrir o modal e salvar
+    igual não pode virar 'alterado por fulano' e acusar quem só olhou."""
+    if (antes or None) == (depois or None):
+        return
+    execute("""insert into cockpit.estrut_tabelas_hist
+                 (tabela_id, customer, tabela, compart_antes, compart_depois, origem,
+                  proposta_id, alterado_por)
+               values (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (tabela_id, customer, tabela, antes or None, depois or None, origem,
+             proposta_id, current_user()))
+
+
+def _estrut_anexa_trilha(customer, tabelas):
+    """Pendura em cada tabela a trilha (mais nova primeiro) e as propostas.
+    Duas queries para o cliente inteiro — por linha seriam ~130 idas ao banco."""
+    hist, props = {}, {}
+    for h in q("""select id, tabela_id, compart_antes, compart_depois, origem,
+                         alterado_por, alterado_em
+                    from cockpit.estrut_tabelas_hist where customer=%s
+                   order by alterado_em desc""", (customer,)) or []:
+        hist.setdefault(h["tabela_id"], []).append(h)
+    for p in q("""select id, tabela_id, compart, compart_na_hora, motivo, autor, criado_em,
+                         status, resolvido_por, resolvido_em, resolucao
+                    from cockpit.estrut_propostas where customer=%s
+                   order by criado_em desc""", (customer,)) or []:
+        props.setdefault(p["tabela_id"], []).append(p)
+    for t in tabelas:
+        t["historico"] = hist.get(t["id"], [])
+        t["propostas"] = props.get(t["id"], [])
+
+
+@app.post("/api/estrutura/<customer>/proposta")
+def api_estrutura_proposta(customer):
+    """Abre, aplica ou descarta uma proposta de compartilhamento.
+      {tabela_id, compart, motivo}            -> abre
+      {id, acao: 'aplicar'|'descartar', resolucao} -> resolve
+    Aplicar troca a definição E grava a trilha com origem 'proposta', para o ✓
+    contar que a mudança saiu de uma discussão, não de um clique solto."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    if b.get("id"):
+        acao = b.get("acao")
+        if acao not in ("aplicar", "descartar"):
+            return _err(422, "Ação inválida: use aplicar ou descartar.")
+        p = q("""select * from cockpit.estrut_propostas
+                  where id=%s and customer=%s""", (b["id"], customer), one=True)
+        if not p:
+            return _err(404, "Proposta não encontrada.")
+        if p["status"] != "aberta":
+            return _err(409, f"Esta proposta já foi {p['status']}.")
+        resolucao = (b.get("resolucao") or "").strip() or None
+        if acao == "descartar" and not resolucao:
+            return _err(422, "Diga por que a proposta foi descartada — é o que fica para a ata.")
+        if acao == "aplicar":
+            t = q("select * from cockpit.estrut_tabelas where id=%s and customer=%s",
+                  (p["tabela_id"], customer), one=True)
+            if not t:
+                return _err(404, "A tabela da proposta não existe mais na definição.")
+            execute("""update cockpit.estrut_tabelas set compart=%s, definido_por=%s,
+                         definido_em=now() where id=%s""",
+                    (p["compart"], current_user(), t["id"]))
+            _estrut_hist(t["id"], customer, t["tabela"], t["compart"], p["compart"],
+                         "proposta", p["id"])
+        execute("""update cockpit.estrut_propostas set status=%s, resolvido_por=%s,
+                     resolvido_em=now(), resolucao=%s where id=%s""",
+                ("aplicada" if acao == "aplicar" else "descartada", current_user(),
+                 resolucao, p["id"]))
+        return _json({"ok": True})
+    compart = (b.get("compart") or "").strip().upper()
+    motivo = (b.get("motivo") or "").strip()
+    if not _estrut_compart_ok(compart):
+        return _err(422, "Proposta precisa de 3 posições E/C (Empresa·Unidade·Filial).")
+    if not motivo:
+        return _err(422, "Explique o motivo da proposta — sem ele não há o que discutir.")
+    t = q("select * from cockpit.estrut_tabelas where id=%s and customer=%s and ativo",
+          (b.get("tabela_id"), customer), one=True)
+    if not t:
+        return _err(404, "Tabela não encontrada na definição deste cliente.")
+    if compart == (t["compart"] or ""):
+        return _err(422, f"{t['tabela']} já está definida como {compart}.")
+    execute("""insert into cockpit.estrut_propostas
+                 (tabela_id, customer, tabela, compart, compart_na_hora, motivo, autor)
+               values (%s,%s,%s,%s,%s,%s,%s)""",
+            (t["id"], customer, t["tabela"], compart, t["compart"], motivo, current_user()))
+    return _json({"ok": True})
 
 
 @app.get("/api/estrutura/<customer>")
@@ -4950,6 +5050,7 @@ def api_estrutura(customer):
                 "order by modulo, tabela", (customer,))
     catalogo = q("select modulo, count(*) n from cockpit.estrut_catalogo "
                  "group by modulo order by min(ordem), modulo")
+    _estrut_anexa_trilha(customer, tabelas)
     # Referencia, so leitura: o que a aba Empresas ja leu da base do cliente
     # (monitemp_sm0). NAO alimenta a arvore acima - serve para o consultor ver
     # lado a lado o que foi combinado e o que a base tem. Producao na frente;
@@ -5178,16 +5279,24 @@ def api_estrutura_tabela(customer):
         return _err(422, "Compartilhamento deve ter 3 posições E/C (Empresa·Unidade·Filial), "
                          "por exemplo ECC ou CCC.")
     if b.get("id"):
+        antes = q("select tabela, compart from cockpit.estrut_tabelas where id=%s and customer=%s",
+                  (b["id"], customer), one=True)
+        if not antes:
+            return _err(404, "Tabela não encontrada.")
         execute("""update cockpit.estrut_tabelas set descricao=%s, tipo=%s, compart=%s,
                      observacao=%s, definido_por=%s, definido_em=now()
                    where id=%s and customer=%s""",
                 (_estrut_txt(b, "descricao"), b.get("tipo") or "cadastro", compart,
                  _estrut_txt(b, "observacao"), current_user(), b["id"], customer))
+        _estrut_hist(b["id"], customer, antes["tabela"], antes["compart"], compart)
         return _json({"ok": True})
     tabela = (b.get("tabela") or "").strip().upper()
     modulo = (b.get("modulo") or "").strip()
     if not tabela or not modulo:
         return _err(422, "Informe o módulo e o nome da tabela.")
+    antes = q("""select compart, ativo from cockpit.estrut_tabelas
+                  where customer=%s and modulo=%s and tabela=%s""",
+              (customer, modulo, tabela), one=True)
     execute("""insert into cockpit.estrut_tabelas
                  (customer, modulo, tabela, descricao, tipo, compart, origem,
                   observacao, definido_por, definido_em)
@@ -5199,7 +5308,264 @@ def api_estrutura_tabela(customer):
             (customer, modulo, tabela, _estrut_txt(b, "descricao"),
              b.get("tipo") or "cadastro", compart, _estrut_txt(b, "observacao"),
              current_user()))
+    # Inclusão nova não é "alteração" (ninguém tinha decidido antes); regravar
+    # por cima de uma existente com outro compartilhamento, é.
+    if antes and antes["compart"] and antes["compart"] != compart:
+        novo = q("""select id from cockpit.estrut_tabelas
+                     where customer=%s and modulo=%s and tabela=%s""",
+                 (customer, modulo, tabela), one=True)
+        _estrut_hist(novo["id"], customer, tabela, antes["compart"], compart, "manual")
     return _json({"ok": True})
+
+
+# ── Compara: dicionário (SX2/SX3/SX6) entre as empresas da MESMA base ───────
+# A pergunta desta tela é "as empresas desta base foram montadas iguais?". No
+# Protheus o dicionário é por GRUPO DE EMPRESAS: SX2010, SX2020 e SX2030 são
+# dicionários DIFERENTES, e é aí que mora a divergência que ninguém vê até o
+# cliente reclamar que o campo existe numa empresa e não na outra.
+#
+# Transporte: o /tscmonit/query que já existe (só leitura). A agregação do X3 e
+# do X6 roda NO BANCO de propósito — trazer o SX3 inteiro de três empresas são
+# ~90 mil linhas, acima do limite e do tempo da função da Vercel. Volta só o que
+# DIVERGE. O X2 vem inteiro porque "a tabela existe só na empresa 1 e 2" é uma
+# pergunta sobre AUSÊNCIA: sem a lista completa não dá para saber quem falta.
+CMP_RE_SUFIXO = re.compile(r"^SX([236])(\d{3})$")
+CMP_SQL_SUFIXOS = ("SELECT TABLE_NAME AS TABELA FROM ALL_TABLES "
+                   "WHERE TABLE_NAME LIKE 'SX2%' OR TABLE_NAME LIKE 'SX3%' "
+                   "OR TABLE_NAME LIKE 'SX6%' ORDER BY TABLE_NAME")
+
+
+def _cmp_union(sufixos, corpo):
+    return "\n  UNION ALL\n".join(corpo(s) for s in sufixos)
+
+
+def _cmp_sql_x2(sufixos):
+    corpo = lambda s: (
+        f"  SELECT '{s}' AS EMP, RTRIM(X2_CHAVE) AS CHAVE, RTRIM(X2_NOME) AS NOME, "
+        f"RTRIM(X2_ARQUIVO) AS ARQ, RTRIM(X2_MODOEMP) AS MODOEMP, "
+        f"RTRIM(X2_MODOUN) AS MODOUN, RTRIM(X2_MODO) AS MODO "
+        f"FROM SX2{s} WHERE D_E_L_E_T_ = ' '")
+    return ("WITH T AS (\n" + _cmp_union(sufixos, corpo) + "\n)\n"
+            "SELECT CHAVE, EMP, NOME, ARQ, MODOEMP, MODOUN, MODO FROM T "
+            "ORDER BY CHAVE, EMP")
+
+
+def _cmp_sql_x3(sufixos):
+    """Campos por tabela. Só volta (arquivo, campo) que falta em alguma empresa
+    OU que muda de tipo/tamanho/decimal entre elas — o resto é ruído."""
+    corpo = lambda s: (
+        f"  SELECT '{s}' AS EMP, RTRIM(X3_ARQUIVO) AS ARQ, RTRIM(X3_CAMPO) AS CAMPO, "
+        f"RTRIM(X3_TIPO) AS TIPO, TO_CHAR(X3_TAMANHO) AS TAM, "
+        f"TO_CHAR(X3_DECIMAL) AS DECIMAIS, RTRIM(SUBSTR(X3_TITULO, 1, 40)) AS TITULO "
+        f"FROM SX3{s} WHERE D_E_L_E_T_ = ' '")
+    return ("WITH T AS (\n" + _cmp_union(sufixos, corpo) + "\n),\n"
+            "A AS (SELECT ARQ, CAMPO, COUNT(DISTINCT EMP) AS EMPS, "
+            "COUNT(DISTINCT TIPO || '/' || TAM || '/' || DECIMAIS) AS VARI "
+            "FROM T GROUP BY ARQ, CAMPO)\n"
+            "SELECT T.ARQ, T.CAMPO, T.EMP, T.TIPO, T.TAM, T.DECIMAIS, T.TITULO "
+            "FROM T JOIN A ON A.ARQ = T.ARQ AND A.CAMPO = T.CAMPO "
+            f"WHERE A.EMPS < {len(sufixos)} OR A.VARI > 1 "
+            "ORDER BY T.ARQ, T.CAMPO, T.EMP")
+
+
+def _cmp_sql_x6(sufixos):
+    """Parâmetros. Divergência vem em três sabores, nesta ordem: o parâmetro não
+    existe na empresa; existe com compartilhamento diferente (X6_FIL em branco =
+    vale para todas as filiais, preenchido = só naquela); existe com conteúdo
+    diferente. O ';' do conteúdo vira ',' porque o transporte é CSV com ';'."""
+    cont = "RTRIM(REPLACE(REPLACE(SUBSTR(X6_CONTEUD, 1, 180), ';', ','), CHR(10), ' '))"
+    corpo = lambda s: (
+        f"  SELECT '{s}' AS EMP, RTRIM(X6_VAR) AS PARAM, RTRIM(X6_FIL) AS FIL, "
+        f"RTRIM(X6_TIPO) AS TIPO, {cont} AS CONTEUDO, "
+        f"RTRIM(SUBSTR(X6_DESCRIC, 1, 60)) AS DESCR "
+        f"FROM SX6{s} WHERE D_E_L_E_T_ = ' '")
+    return ("WITH T AS (\n" + _cmp_union(sufixos, corpo) + "\n),\n"
+            "A AS (SELECT PARAM, COUNT(DISTINCT EMP) AS EMPS, COUNT(DISTINCT FIL) AS FILS, "
+            "COUNT(DISTINCT CONTEUDO) AS CONTS FROM T GROUP BY PARAM)\n"
+            "SELECT T.PARAM, T.EMP, T.FIL, T.TIPO, T.CONTEUDO, T.DESCR "
+            "FROM T JOIN A ON A.PARAM = T.PARAM "
+            f"WHERE A.EMPS < {len(sufixos)} OR A.FILS > 1 OR A.CONTS > 1 "
+            "ORDER BY T.PARAM, T.EMP, T.FIL")
+
+
+def _cmp_cel(linha, i):
+    return (linha[i] if i < len(linha) and linha[i] is not None else "").strip()
+
+
+def _cmp_agrega_x2(linhas, sufixos):
+    itens = {}
+    for ln in linhas[1:]:
+        chave = _cmp_cel(ln, 0)
+        if not chave:
+            continue
+        it = itens.setdefault(chave, {"chave": chave, "nome": _cmp_cel(ln, 2),
+                                      "arquivo": _cmp_cel(ln, 3), "empresas": {}})
+        it["empresas"][_cmp_cel(ln, 1)] = (_cmp_cel(ln, 4) + _cmp_cel(ln, 5)
+                                           + _cmp_cel(ln, 6))
+        it["nome"] = it["nome"] or _cmp_cel(ln, 2)
+    saida = []
+    for it in itens.values():
+        presentes = [s for s in sufixos if s in it["empresas"]]
+        modos = {it["empresas"][s] for s in presentes}
+        it["presentes"] = presentes
+        it["falta_em"] = [s for s in sufixos if s not in it["empresas"]]
+        it["modo_diverge"] = len(modos) > 1
+        saida.append(it)
+    saida.sort(key=lambda x: x["chave"])
+    return saida
+
+
+def _cmp_agrega_x3(linhas, sufixos):
+    tab = {}
+    for ln in linhas[1:]:
+        arq, campo, emp = _cmp_cel(ln, 0), _cmp_cel(ln, 1), _cmp_cel(ln, 2)
+        if not arq or not campo:
+            continue
+        t = tab.setdefault(arq, {"arquivo": arq, "campos": {}})
+        c = t["campos"].setdefault(campo, {"campo": campo, "titulo": _cmp_cel(ln, 6),
+                                           "empresas": {}})
+        c["empresas"][emp] = {"tipo": _cmp_cel(ln, 3), "tamanho": _cmp_cel(ln, 4),
+                              "decimal": _cmp_cel(ln, 5)}
+        c["titulo"] = c["titulo"] or _cmp_cel(ln, 6)
+    saida = []
+    for t in tab.values():
+        campos = []
+        for c in t["campos"].values():
+            c["falta_em"] = [s for s in sufixos if s not in c["empresas"]]
+            fmts = {f"{v['tipo']}/{v['tamanho']}/{v['decimal']}" for v in c["empresas"].values()}
+            c["formato_diverge"] = len(fmts) > 1
+            campos.append(c)
+        campos.sort(key=lambda x: x["campo"])
+        t["campos"] = campos
+        t["ausentes"] = sum(1 for c in campos if c["falta_em"])
+        t["formatos"] = sum(1 for c in campos if c["formato_diverge"])
+        saida.append(t)
+    saida.sort(key=lambda x: x["arquivo"])
+    return saida
+
+
+def _cmp_agrega_x6(linhas, sufixos):
+    itens = {}
+    for ln in linhas[1:]:
+        param = _cmp_cel(ln, 0)
+        if not param:
+            continue
+        it = itens.setdefault(param, {"param": param, "descricao": _cmp_cel(ln, 5),
+                                      "empresas": {}})
+        it["empresas"].setdefault(_cmp_cel(ln, 1), []).append(
+            {"filial": _cmp_cel(ln, 2), "tipo": _cmp_cel(ln, 3),
+             "conteudo": _cmp_cel(ln, 4)})
+        it["descricao"] = it["descricao"] or _cmp_cel(ln, 5)
+    saida = []
+    for it in itens.values():
+        it["falta_em"] = [s for s in sufixos if s not in it["empresas"]]
+        # Compartilhamento = o CONJUNTO de filiais em que o parâmetro existe.
+        # Empresa com {''} tem o parâmetro global; {'0101'} tem só numa filial.
+        compart = {s: sorted({r["filial"] for r in rs})
+                   for s, rs in it["empresas"].items()}
+        it["compartilhamento"] = compart
+        it["compart_diverge"] = len({tuple(v) for v in compart.values()}) > 1
+        conteudos = {r["conteudo"] for rs in it["empresas"].values() for r in rs}
+        it["conteudo_diverge"] = len(conteudos) > 1
+        saida.append(it)
+    saida.sort(key=lambda x: x["param"])
+    return saida
+
+
+@app.post("/api/estrutura/<customer>/comparar")
+def api_estrutura_comparar(customer):
+    """Lê SX2/SX3/SX6 de todas as empresas da base e devolve as divergências.
+
+        POST /api/estrutura/TFEHXQ00/comparar?ambiente=producao
+    """
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if (d := deny_aba(customer, "compara")):
+        return d
+    amb = _amb_path(request.args.get("ambiente") or "producao")
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer} — "
+                         "preencha a REST em ⚙ Ambiente antes de comparar.")
+    if not cfg.get("ativo"):
+        return _err(409, f"Ambiente {amb} está inativo.")
+    banco = (cfg.get("banco") or "").lower()
+    if banco and banco != "oracle":
+        return _err(409, "A comparação de dicionário só tem SQL de Oracle por enquanto; "
+                         f"este ambiente está cadastrado como {banco}.")
+
+    ini = time.time()
+    try:
+        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+    except RuntimeError as e:
+        return _err(500, str(e))
+    if not tok:
+        return _err(409, "Sem token cadastrado para este ambiente — a REST da base "
+                         "recusa a chamada sem o X-TSC-Token.")
+    prazo = ini + min(int(cfg.get("timeout_s") or 45), TIMEOUT_TETO)
+
+    def roda(sql, rotulo):
+        resta = prazo - time.time()
+        if resta < 5:
+            raise RuntimeError(
+                f"Tempo esgotado antes de ler {rotulo}. A função da Vercel morre em 60s "
+                "— rode numa base com menos empresas ou fora do horário de pico.")
+        r = requests.post(f"{cfg['url_rest']}/query",
+                          json={"token": tok, "tipo": "cadastros", "sql": sql,
+                                "limite": int(cfg.get("limite_linhas") or 50000)},
+                          headers=heads, auth=auth,
+                          params={"empresa": cfg.get("empresa") or "01",
+                                  "filial": cfg.get("filial") or "01"},
+                          timeout=max(5, int(resta)))
+        dados = _json_da_resposta(r)
+        if r.status_code >= 400 or not dados.get("ok"):
+            raise RuntimeError(dados.get("erro")
+                               or f"HTTP {r.status_code} ao ler {rotulo}: {_trecho(r)}")
+        if dados.get("truncado"):
+            raise RuntimeError(f"{rotulo} bateu o limite de linhas — comparação truncada é "
+                               "comparação errada. Suba o limite no ⚙ Ambiente.")
+        return _proto_linhas_csv(dados.get("csv") or "")
+
+    try:
+        achados = roda(CMP_SQL_SUFIXOS, "a lista de dicionários")
+        por_dic = {"2": set(), "3": set(), "6": set()}
+        for ln in achados[1:]:
+            m = CMP_RE_SUFIXO.match(_cmp_cel(ln, 0).upper())
+            if m:
+                por_dic[m.group(1)].add(m.group(2))
+        # Só compara o sufixo que tem os TRÊS dicionários: um SX3 sem o SX2 do
+        # mesmo grupo é sobra de migração, não empresa.
+        sufixos = sorted(por_dic["2"] & por_dic["3"] & por_dic["6"])
+        parciais = sorted((por_dic["2"] | por_dic["3"] | por_dic["6"]) - set(sufixos))
+        if len(sufixos) < 2:
+            return _err(409, "Encontrei menos de dois dicionários completos nesta base "
+                             f"(SX2/SX3/SX6 por grupo de empresas): {sufixos or 'nenhum'}. "
+                             "Sem dois não há o que comparar.")
+        x2 = _cmp_agrega_x2(roda(_cmp_sql_x2(sufixos), "o SX2"), sufixos)
+        x3 = _cmp_agrega_x3(roda(_cmp_sql_x3(sufixos), "o SX3"), sufixos)
+        x6 = _cmp_agrega_x6(roda(_cmp_sql_x6(sufixos), "o SX6"), sufixos)
+    except requests.RequestException as e:
+        return _err(502, f"Falha ao chamar a base: {type(e).__name__}. "
+                         f"Timeout do ambiente = {cfg.get('timeout_s')}s.")
+    except RuntimeError as e:
+        return _err(502, str(e))
+
+    return _json({
+        "ok": True, "customer": customer, "ambiente": amb,
+        "url_rest": cfg.get("url_rest"), "environment": cfg.get("environment"),
+        # Epoch, não string: o servidor roda em UTC na Vercel e quem precisa da
+        # hora de Florianópolis é a tela — ela formata no fuso do navegador.
+        "lido_em_ts": int(time.time()),
+        "duracao_ms": int((time.time() - ini) * 1000),
+        # sufixo 010 = grupo de empresas 01; o nome vem do SM0 que a aba já tem.
+        "empresas": [{"sufixo": s, "codigo": s[:-1]} for s in sufixos],
+        "sufixos_parciais": parciais,
+        "x2": x2, "x3": x3, "x6": x6,
+    })
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────

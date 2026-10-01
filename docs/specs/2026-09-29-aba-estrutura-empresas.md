@@ -37,6 +37,12 @@ guarda quem decidiu e não conversa com a medição que vem depois.
    desmarca a anterior no servidor).
 3. **Tabelas e compartilhamento** — por módulo, com `Nome · Descrição ·
    Tipo · Compartilhamento`, editável direto na linha por três `select` E/C.
+   O seletor abre no primeiro módulo; a opção **Todos os módulos** (01/10/2026)
+   é opt-in, para a leitura transversal — conferir se a mesma tabela ficou
+   definida igual em dois módulos, achar o que ninguém classificou. Nesse modo
+   cada linha mostra o módulo embaixo do nome da tabela e o filtro de busca
+   passa a achar por módulo também. O padrão continua sendo um módulo por vez:
+   ~130 linhas de uma vez é rolagem, não leitura.
 4. **Inclusão manual** de tabela por módulo (e de módulo novo): tabela
    customizada `Z*` e alias fora do catálogo aparecem em todo projeto.
 5. **Conferência** — a lista de inconsistências, que é o que a planilha nunca fez.
@@ -190,3 +196,10 @@ sem ler linha por linha.
 
 Módulo sem nenhuma tabela do tipo escolhido diz isso em uma linha, em vez de
 mostrar tabela vazia.
+
+## Trilha de alterações, propostas e filtro de situação (01/10/2026)
+
+Colunas **Alterada** (✓ + hover com quem alterou) e **Discussão** (propostas de
+outro compartilhamento, aplicar/descartar) e a barra **Situação** (Não definidas ·
+Com conflito · Em discussão · Alteradas). Detalhe em
+`2026-10-01-estrutura-alteracoes-e-propostas.md`.
