@@ -358,3 +358,68 @@ from (values
 join pdi.grupos g on g.nome = 'Qualidade'
 on conflict (codigo) do update set nome = excluded.nome, sigla = excluded.sigla,
   grupo_id = excluded.grupo_id, ordem = excluded.ordem, ativo = true;
+
+-- ============================================================================
+--  Segunda rodada de aberturas (01/10/2026) — Contratos, Faturamento, TAF e
+--  Smart View. Mesma regra da Qualidade: o módulo vira GRUPO e as frentes dele
+--  viram os módulos. Nenhum dos quatro tinha avaliação lançada.
+--
+--  A faixa comercial/fiscal (Faturamento, Comercial & Fiscal, TAF) ficou numa
+--  família só de laranja/âmbar em valores diferentes: lado a lado na matriz,
+--  os três se leem como parentes sem virar a mesma cor.
+-- ============================================================================
+update pdi.modulos set ativo = false where codigo in ('TAF', 'CONTRATOS', 'RELATORIOS');
+
+insert into pdi.grupos (nome, cor, ordem) values
+  ('Suprimentos & Logística',    '#0891b2',  1),
+  ('Financeiro & Controladoria', '#7c3aed',  2),
+  ('Gestão de Contratos',        '#a855f7',  3),
+  ('Faturamento',                '#ea580c',  4),
+  ('Comercial & Fiscal',         '#d97706',  5),
+  ('TAF',                        '#b45309',  6),
+  ('Manufatura & Manutenção',    '#dc2626',  7),
+  ('Qualidade',                  '#be185d',  8),
+  ('Serviços & Projetos',        '#059669',  9),
+  ('Tecnologia & Plataforma',    '#475569', 10),
+  ('Smart View',                 '#0ea5e9', 11)
+on conflict (nome) do update set cor = excluded.cor, ordem = excluded.ordem, ativo = true;
+
+insert into pdi.modulos (grupo_id, codigo, nome, sigla, critico, ordem)
+select g.id, v.codigo, v.nome, v.sigla, false, 900 + row_number() over ()
+from (values
+  ('Gestão de Contratos', 'CTR_COMPRAS',    'Compras',             'SIGAGCT'),
+  ('Gestão de Contratos', 'CTR_VENDAS',     'Vendas',              'SIGAGCT'),
+  ('Faturamento',         'FAT_CENARIOS',   'Cenários Comerciais', 'SIGAFAT'),
+  ('Faturamento',         'FAT_APP',        'APP',                 'SIGAFAT'),
+  ('TAF',                 'TAF_CONFIG',     'Configuração',        'TAF'),
+  ('TAF',                 'TAF_REINF',      'Reinf',               'TAF'),
+  ('TAF',                 'TAF_EFD',        'EFD Contribuições',   'TAF'),
+  ('TAF',                 'TAF_SPED',       'Sped Fiscal',         'TAF'),
+  ('TAF',                 'TAF_INTEG',      'Integração',          'TAF'),
+  ('Smart View',          'SV_CONFIG',      'Configuração',        'Smart View'),
+  ('Smart View',          'SV_CAPACITACAO', 'Capacitação',         'Smart View'),
+  ('Smart View',          'SV_DESENV',      'Desenvolvimento',     'Smart View')
+) as v(grupo, codigo, nome, sigla)
+join pdi.grupos g on g.nome = v.grupo
+on conflict (codigo) do update set nome = excluded.nome, sigla = excluded.sigla,
+  grupo_id = excluded.grupo_id, ativo = true;
+
+-- O Faturamento que já existia passa a ser um item do próprio grupo.
+update pdi.modulos m set grupo_id = g.id
+from pdi.grupos g where g.nome = 'Faturamento' and m.codigo = 'FATURAMENTO';
+
+-- Ordem definitiva — blocos contíguos, um por grupo.
+update pdi.modulos m set ordem = v.ord
+from (values
+  ('COMPRAS',1),('ESTOQUE_CUSTOS',2),('IMPORTACAO',3),('GFE',4),('TMS',5),
+  ('FINANCEIRO',6),('CONTABILIDADE',7),('ATIVO_FIXO',8),
+  ('CTR_COMPRAS',9),('CTR_VENDAS',10),
+  ('FAT_CENARIOS',11),('FATURAMENTO',12),('FAT_APP',13),
+  ('FISCAL',14),
+  ('TAF_CONFIG',15),('TAF_REINF',16),('TAF_EFD',17),('TAF_SPED',18),('TAF_INTEG',19),
+  ('PCP',20),('CHAO_FABRICA',21),('MNT',22),
+  ('QUA_ENTRADA',23),('QUA_PROCESSO',24),('QUA_NAO_CONF',25),('QUA_OUTROS',26),
+  ('SERVICOS',27),('PMS',28),('TAE',29),
+  ('CONFIGURADOR',30),('ADVPL_TLPP',31),('FLUIG',32),('INTEGRACOES',33),
+  ('SV_CONFIG',34),('SV_CAPACITACAO',35),('SV_DESENV',36)
+) as v(cod, ord) where m.codigo = v.cod;
