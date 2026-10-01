@@ -119,6 +119,110 @@
     .rail-grupo { flex-direction: column; flex-wrap: nowrap; }
     .rail-btn { width: 100%; }
   }
+
+  /* ── Aba Raio X — escopo fechado em .rx para não vazar nas outras abas ───── */
+  .rx {
+    --rx0:#eef1f3; --rx1:#d4f3fa; --rx2:#a8e8f6; --rx3:#63d6ef; --rx4:#13b4d6; --rx5:#0a6e88;
+    --rx0t:#64748b; --rx1t:#0a4a5c; --rx2t:#0a4a5c; --rx3t:#06313d; --rx4t:#ffffff; --rx5t:#ffffff;
+    --rxvazio:#fbfdfe; --rxsinal:#b45309; --rxalerta:#be123c;
+  }
+  .rx .rx-v { padding:.5rem .75rem; font-size:.8125rem; font-weight:600; color:#64748b;
+              border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; }
+  .rx .rx-v:hover { color:var(--totvs-petroleo); }
+  .rx .rx-v.is-on { color:var(--totvs-petroleo); border-bottom-color:var(--totvs-blue); }
+  .rx .rx-seg { padding:.375rem .7rem; font-size:.78rem; font-weight:600; color:#64748b;
+                background:#fff; border-right:1px solid #cbd5e1; }
+  .rx .rx-seg:last-child { border-right:0; }
+  .rx .rx-seg.is-on { background:var(--totvs-petroleo); color:#fff; }
+  .rx .rx-f { display:flex; flex-direction:column; gap:.25rem; }
+  .rx .rx-f > span { font-size:.625rem; letter-spacing:.09em; text-transform:uppercase;
+                     font-weight:700; color:#94a3b8; }
+  .rx .rx-f input { width:100%; padding:.4rem .55rem; border:1px solid #cbd5e1; border-radius:.375rem; font-size:.8125rem; }
+
+  .rx table.rx-matrix { border-collapse:separate; border-spacing:0; font-size:12px; }
+  .rx .rx-corner { position:sticky; left:0; top:0; z-index:6; background:#fff;
+                   border-right:1px solid #cbd5e1; border-bottom:1px solid #cbd5e1; }
+  .rx .rx-ghead { position:sticky; top:0; z-index:4; background:#fff; border-bottom:1px solid #e2e8f0;
+                  padding:.35rem .5rem; font-size:9.5px; letter-spacing:.1em; text-transform:uppercase;
+                  font-weight:700; text-align:left; white-space:nowrap; color:#475569; }
+  .rx .rx-mhead { position:sticky; z-index:3; background:#fff; border-bottom:1px solid #cbd5e1;
+                  height:196px; vertical-align:bottom; padding:0; }
+  .rx .rx-mhead .rot { writing-mode:vertical-rl; transform:rotate(180deg); padding:.6rem 0 .75rem;
+                       margin:0 auto; display:block; font-size:11.5px; font-weight:500; white-space:nowrap;
+                       max-height:182px; overflow:hidden; text-overflow:ellipsis; color:#475569; }
+  .rx .rx-mhead.crit .rot { color:#0f172a; font-weight:700; }
+  .rx .rx-rowhead { position:sticky; left:0; z-index:2; background:#fff; border-right:1px solid #cbd5e1;
+                    border-bottom:1px solid #f1f5f9; padding:0 .75rem 0 .6rem; text-align:left;
+                    white-space:nowrap; min-width:196px; }
+  .rx .rx-rowhead .nm { font-weight:600; font-size:12.5px; display:block; line-height:1.25; color:#0f172a; }
+  .rx .rx-rowhead .cd { font-size:10.5px; color:#94a3b8; font-variant-numeric:tabular-nums; }
+  .rx tr:hover .rx-rowhead { background:#f8fafc; }
+  .rx .rx-fband th { position:sticky; left:0; z-index:5; background:#f1f5f9; border-top:1px solid #cbd5e1;
+                     border-bottom:1px solid #e2e8f0; padding:0; text-align:left; }
+  .rx .rx-fband .txt { position:sticky; left:0; display:inline-flex; align-items:baseline; gap:.55rem;
+                       padding:.4rem .6rem .35rem; font-size:10px; letter-spacing:.11em;
+                       text-transform:uppercase; font-weight:700; color:#475569; }
+  .rx .rx-fband .txt b { font-weight:500; font-size:11px; letter-spacing:.02em; text-transform:none; color:#94a3b8; }
+  .rx td.rx-cell { border-bottom:1px solid #f1f5f9; border-right:1px solid #f1f5f9; background:var(--rxvazio); padding:0; }
+  .rx .rx-sq { width:30px; height:30px; border:0; padding:0; display:block; position:relative; cursor:pointer;
+               font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; transition:transform .09s ease; }
+  .rx .rx-sq:hover { transform:scale(1.22); z-index:9; box-shadow:0 0 0 2px var(--totvs-petroleo); }
+  .rx .rx-sq[data-n="0"]{background:var(--rx0);color:var(--rx0t)} .rx .rx-sq[data-n="1"]{background:var(--rx1);color:var(--rx1t)}
+  .rx .rx-sq[data-n="2"]{background:var(--rx2);color:var(--rx2t)} .rx .rx-sq[data-n="3"]{background:var(--rx3);color:var(--rx3t)}
+  .rx .rx-sq[data-n="4"]{background:var(--rx4);color:var(--rx4t)} .rx .rx-sq[data-n="5"]{background:var(--rx5);color:var(--rx5t)}
+  .rx .rx-sq[data-n="-"]{background:var(--rxvazio);color:#cbd5e1}
+  .rx .rx-sq.diverge::after { content:""; position:absolute; top:0; right:0; border-width:0 8px 8px 0;
+                              border-style:solid; border-color:transparent var(--rxsinal) transparent transparent; }
+  .rx .rx-sq.abaixo::before { content:""; position:absolute; left:2px; right:2px; bottom:1px; height:2px;
+                              background:var(--rxalerta); border-radius:1px; }
+  .rx .rx-sw { width:20px; height:20px; display:inline-block; position:relative; background:var(--rx3); border-radius:2px; }
+  .rx .rx-sw-wedge::after { content:""; position:absolute; top:0; right:0; border-width:0 8px 8px 0;
+                            border-style:solid; border-color:transparent var(--rxsinal) transparent transparent; }
+  .rx .rx-sw-bar::before { content:""; position:absolute; left:2px; right:2px; bottom:2px; height:3px;
+                           background:var(--rxalerta); border-radius:2px; }
+  .rx .rx-esc b { width:26px; height:17px; display:inline-grid; place-items:center; font-size:10px;
+                  font-weight:600; font-variant-numeric:tabular-nums; }
+
+  .rx .rx-covrow { display:grid; grid-template-columns:minmax(150px,1.1fr) 1fr 112px; gap:.9rem;
+                   align-items:center; padding:.55rem 1rem; border-bottom:1px solid #f1f5f9; }
+  .rx .rx-covrow:last-child { border-bottom:0; }
+  .rx .rx-covrow:hover { background:#f8fafc; }
+  .rx .rx-bar { display:flex; height:20px; border-radius:3px; overflow:hidden; background:var(--rxvazio); border:1px solid #e2e8f0; }
+  .rx .rx-bar span { display:block; min-width:0; }
+  .rx .rx-bar span.vazio { background:repeating-linear-gradient(135deg,#fbfdfe 0 5px,#e2e8f0 5px 6px); }
+  .rx .rx-pill { padding:.1rem .5rem; border-radius:999px; font-size:10.5px; font-weight:700; white-space:nowrap; border:1px solid transparent; }
+  .rx .rx-pill.risco { color:#be123c; border-color:#fecdd3; background:#fff1f2; }
+  .rx .rx-pill.atencao { color:#b45309; border-color:#fde68a; background:#fffbeb; }
+  .rx .rx-pill.ok { color:#0f766e; border-color:#99f6e4; background:#f0fdfa; }
+
+  .rx .rx-skill { display:grid; grid-template-columns:minmax(130px,1.2fr) minmax(160px,2fr) auto;
+                  gap:.9rem; align-items:center; padding:.4rem 1rem; cursor:pointer; }
+  .rx .rx-skill:hover { background:#f8fafc; }
+  .rx .rx-track { position:relative; height:22px; background:var(--rxvazio); border:1px solid #e2e8f0; border-radius:3px; }
+  .rx .rx-track .fill { position:absolute; top:1px; bottom:1px; left:1px; border-radius:2px; }
+  .rx .rx-track .meta { position:absolute; top:-2px; bottom:-2px; width:2px; background:var(--rxalerta); }
+  .rx .rx-track .auto { position:absolute; top:50%; width:0; height:0; border-left:4px solid transparent;
+                        border-right:4px solid transparent; border-bottom:5px solid var(--rxsinal);
+                        transform:translate(-50%,-50%); }
+  .rx .rx-gt { padding:.45rem 1rem .3rem; display:flex; align-items:center; gap:.45rem; font-size:10px;
+               letter-spacing:.11em; text-transform:uppercase; font-weight:700; color:#475569; background:#f8fafc; }
+  .rx .rx-gt i { width:8px; height:8px; border-radius:2px; }
+  .rx .rx-tl { display:grid; grid-template-columns:96px 1fr auto; gap:.75rem; padding:.5rem 1rem;
+               border-bottom:1px solid #f1f5f9; font-size:12.5px; align-items:baseline; }
+  .rx .rx-eqrow { display:grid; grid-template-columns:minmax(150px,1fr) minmax(140px,1fr) 180px auto;
+                  gap:.9rem; align-items:center; padding:.5rem 1rem; border-bottom:1px solid #f1f5f9; }
+  .rx .rx-eqrow:last-child { border-bottom:0; }
+  .rx .rx-eqrow input { width:100%; padding:.35rem .5rem; border:1px solid #cbd5e1; border-radius:.375rem; font-size:.8125rem; }
+
+  /* Gaveta de edição da célula */
+  .rx-scrim { position:fixed; inset:0; background:rgba(0,34,51,.45); z-index:60; }
+  .rx-drawer { position:fixed; top:0; right:0; bottom:0; width:min(420px,100%); background:#fff;
+               border-left:1px solid #cbd5e1; z-index:61; display:flex; flex-direction:column;
+               box-shadow:-12px 0 40px -20px rgba(0,34,51,.5); }
+  .rx-drawer .chip { border:1px solid #cbd5e1; background:#fff; border-radius:.375rem; padding:.4rem .55rem;
+                     font-size:11.5px; font-weight:600; color:#475569; text-align:left; flex:1 1 auto; cursor:pointer; }
+  .rx-drawer .chip.is-on { border-color:var(--totvs-petroleo); background:#ecfeff; color:#0f172a; }
+
 </style>
 </head>
 <body class="bg-totvs-beige text-totvs-petroleo">
@@ -315,6 +419,7 @@
             <button data-tab="estrutura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Estrutura</button>
             <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
             <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
+            <button data-tab="raiox"     class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Raio X</button>
           </div>
         </div>
 
@@ -584,6 +689,150 @@
           <div id="tr-conteudo"></div>
           <div id="transicao-box" class="hidden -mx-5 -mb-5 border-t border-slate-200 overflow-hidden">
             <iframe id="frame-transicao" title="Painel de status do cliente" loading="lazy"></iframe>
+          </div>
+        </div>
+
+        <!-- Aba Raio X — maturidade da equipe por módulo (schema pdi).
+             É a única aba que NÃO segue o cliente do projeto aberto: a matriz é
+             da célula inteira. Dados e escrita por /api/raiox (require_interno). -->
+        <div id="tab-raiox" class="p-5 hidden">
+          <div class="rx">
+            <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+              <span class="text-xs text-slate-500">Célula</span>
+              <span class="font-medium">201 · Raio X de maturidade</span>
+              <span id="rx-readout" class="flex flex-wrap gap-2 text-xs"></span>
+              <button id="rx-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+            </div>
+
+            <div class="flex gap-1 border-b border-slate-200 mb-4 overflow-x-auto">
+              <button data-rxv="matriz"    class="rx-v">Matriz</button>
+              <button data-rxv="cobertura" class="rx-v">Cobertura</button>
+              <button data-rxv="consultor" class="rx-v">Consultor</button>
+              <button data-rxv="evolucao"  class="rx-v">Evolução</button>
+              <button data-rxv="cadastro"  class="rx-v">Cadastro</button>
+            </div>
+
+            <div id="rx-msg" class="hidden mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"></div>
+
+            <!-- MATRIZ -->
+            <section id="rxv-matriz">
+              <div class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+                <span class="text-xs text-slate-500">Cor mostra</span>
+                <div id="rx-lente" class="inline-flex rounded-md border border-slate-300 overflow-hidden">
+                  <button data-lente="gestor" class="rx-seg">Gestor</button>
+                  <button data-lente="auto"   class="rx-seg">Autoavaliação</button>
+                  <button data-lente="meta"   class="rx-seg">Meta</button>
+                </div>
+                <select id="rx-frente" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm"></select>
+                <select id="rx-grupo"  class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm"></select>
+                <input id="rx-busca" type="text" placeholder="Buscar consultor…" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm w-44">
+              </div>
+              <div class="border border-slate-200 rounded-lg bg-white overflow-auto" style="max-height:72vh">
+                <table id="rx-matriz" class="rx-matrix"></table>
+              </div>
+              <div class="mt-3 flex items-center gap-5 flex-wrap text-xs text-slate-600">
+                <span class="uppercase tracking-wide text-[10px] font-semibold text-slate-400">Escala</span>
+                <span id="rx-escala" class="inline-flex items-center"></span>
+                <span class="inline-flex items-center gap-1.5"><i class="rx-sw rx-sw-wedge"></i> autoavaliação diverge do gestor</span>
+                <span class="inline-flex items-center gap-1.5"><i class="rx-sw rx-sw-bar"></i> abaixo da meta</span>
+                <span class="inline-flex items-center gap-1.5"><b class="font-semibold text-slate-800">Compras</b> módulo crítico</span>
+              </div>
+            </section>
+
+            <!-- COBERTURA -->
+            <section id="rxv-cobertura" class="hidden">
+              <div class="mb-3 flex items-center gap-3 flex-wrap text-sm">
+                <span class="text-xs text-slate-500">Risco = menos de dois consultores que já implantaram (nível 4+)</span>
+                <div id="rx-covord" class="inline-flex rounded-md border border-slate-300 overflow-hidden ml-auto">
+                  <button data-ord="risco" class="rx-seg">Por risco</button>
+                  <button data-ord="grupo" class="rx-seg">Por grupo</button>
+                </div>
+              </div>
+              <div id="rx-cobertura" class="border border-slate-200 rounded-lg bg-white overflow-hidden"></div>
+            </section>
+
+            <!-- CONSULTOR -->
+            <section id="rxv-consultor" class="hidden">
+              <div class="mb-3 flex items-center gap-3 flex-wrap text-sm">
+                <span class="text-xs text-slate-500">Consultor</span>
+                <select id="rx-consultor" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm"></select>
+                <button id="rx-sogap" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-sm">Só onde há gap</button>
+              </div>
+              <div class="grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
+                <div id="rx-perfil" class="border border-slate-200 rounded-lg bg-white p-4"></div>
+                <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                  <div class="px-4 py-3 border-b border-slate-100">
+                    <h3 class="text-sm font-semibold text-slate-800">Trilha por módulo</h3>
+                    <p class="text-xs text-slate-500 mt-0.5">Barra = nota do gestor · ▲ = autoavaliação · ▮ = meta</p>
+                  </div>
+                  <div id="rx-trilha"></div>
+                </div>
+              </div>
+            </section>
+
+            <!-- EVOLUÇÃO -->
+            <section id="rxv-evolucao" class="hidden space-y-4">
+              <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-100">
+                  <h3 class="text-sm font-semibold text-slate-800">Maturidade média da equipe</h3>
+                  <p class="text-xs text-slate-500 mt-0.5">Reconstruída a partir do histórico de alterações.</p>
+                </div>
+                <div id="rx-grafico" class="px-4 pt-4 pb-2"></div>
+              </div>
+              <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-100">
+                  <h3 class="text-sm font-semibold text-slate-800">Últimas alterações</h3>
+                </div>
+                <div id="rx-timeline" class="overflow-auto" style="max-height:420px"></div>
+              </div>
+            </section>
+
+            <!-- CADASTRO -->
+            <section id="rxv-cadastro" class="hidden space-y-4">
+              <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-100">
+                  <h3 class="text-sm font-semibold text-slate-800">Incluir módulo</h3>
+                  <p class="text-xs text-slate-500 mt-0.5">Entra na matriz na hora. Grupo novo é criado junto.</p>
+                </div>
+                <div class="p-4 grid gap-3 items-end" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+                  <label class="rx-f"><span>Código</span><input type="text" id="rx-mcod" placeholder="WMS"></label>
+                  <label class="rx-f"><span>Nome</span><input type="text" id="rx-mnome" placeholder="Gestão de Armazenagem"></label>
+                  <label class="rx-f"><span>Sigla</span><input type="text" id="rx-msigla" placeholder="SIGAWMS"></label>
+                  <label class="rx-f"><span>Grupo</span><input type="text" id="rx-mgrupo" list="rx-grupos-list" placeholder="Suprimentos &amp; Logística"><datalist id="rx-grupos-list"></datalist></label>
+                  <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="rx-mcrit"><span>Módulo crítico</span></label>
+                  <button id="rx-addmod" class="px-3 py-2 rounded-md bg-totvs-petroleo text-white text-sm font-semibold hover:opacity-90">Incluir módulo</button>
+                </div>
+              </div>
+
+              <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-100">
+                  <h3 class="text-sm font-semibold text-slate-800">Incluir consultor</h3>
+                  <p class="text-xs text-slate-500 mt-0.5">Nova linha da matriz, sem nenhum nível preenchido.</p>
+                </div>
+                <div class="p-4 grid gap-3 items-end" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">
+                  <label class="rx-f"><span>Código</span><input type="text" id="rx-ccod" placeholder="TSCE77"></label>
+                  <label class="rx-f"><span>Nome</span><input type="text" id="rx-cnome" placeholder="Nome do consultor"></label>
+                  <label class="rx-f"><span>Função</span><input type="text" id="rx-cfunc" placeholder="1026-C. NEGOCIO PL I"></label>
+                  <label class="rx-f"><span>Frente</span><input type="text" id="rx-cfrente" list="rx-frentes-list" placeholder="Funcional"><datalist id="rx-frentes-list"></datalist></label>
+                  <button id="rx-addcons" class="px-3 py-2 rounded-md bg-totvs-petroleo text-white text-sm font-semibold hover:opacity-90">Incluir consultor</button>
+                </div>
+              </div>
+
+              <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-100">
+                  <h3 class="text-sm font-semibold text-slate-800">Equipe</h3>
+                  <p class="text-xs text-slate-500 mt-0.5">Mover de frente (texto livre: nome novo cria a frente) ou arquivar quem saiu.</p>
+                </div>
+                <div id="rx-equipe"></div>
+              </div>
+
+              <div class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+                <div class="px-4 py-3 border-b border-slate-100">
+                  <h3 class="text-sm font-semibold text-slate-800">Escala de maturidade</h3>
+                </div>
+                <div id="rx-escala-doc" class="px-4 py-2"></div>
+              </div>
+            </section>
           </div>
         </div>
       </div>
@@ -1717,7 +1966,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'prototipo', 'transicao', 'raiox'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -1779,6 +2028,7 @@ function setTab(nome) {
   if (nome === 'estrutura') initEstrutura();
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
+  if (nome === 'raiox') initRaioX();       // única aba que ignora o projeto aberto
 }
 
 function setSub(nome) {
@@ -7509,6 +7759,553 @@ $('#est-semear').addEventListener('click', estModalSemear);
 $('#est-tabela-nova').addEventListener('click', () => estModalTabela(null));
 
 $('#btn-acessos').addEventListener('click', abreAcessos);
+
+// ============================================================================
+//  ABA RAIO X — maturidade da equipe por módulo (schema pdi)
+// ----------------------------------------------------------------------------
+//  Única aba que NÃO segue o cliente do projeto aberto: a matriz é da célula
+//  inteira. Escala 0..5 (0 não conhece → 5 especialista). Toda escrita vai por
+//  /api/raiox/*, que chama as funções pdi.fn_* — a trigger grava o histórico.
+//  Tudo aqui vive dentro de uma IIFE: o arquivo já tem $ , $$ e state globais.
+// ============================================================================
+(function () {
+  const sel  = (s) => document.querySelector(s);
+  const sela = (s) => Array.from(document.querySelectorAll(s));
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  const RX = {
+    carregado: false, niveis: [], grupos: [], consultores: [], modulos: [],
+    avaliacoes: [], historico: [], cel: new Map(), grupoDe: new Map(),
+    vista: 'matriz', lente: 'gestor', frente: '', grupo: '', busca: '',
+    covOrd: 'risco', soGap: false, consultorSel: null, aberta: null,
+  };
+  const ch = (c, m) => c + '|' + m;
+  const av = (c, m) => RX.cel.get(ch(c, m)) || null;
+
+  async function api(rota, corpo) {
+    const r = await fetch('/api/raiox' + rota, corpo
+      ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }
+      : undefined);
+    const txt = await r.text();
+    let j = {}; try { j = JSON.parse(txt); } catch (_) {}
+    if (r.status === 401) { location.href = '/login'; throw new Error('sessão expirada'); }
+    if (!r.ok) throw new Error(j.error || `Falha ${r.status}`);
+    return j;
+  }
+
+  function erro(e) {
+    const box = sel('#rx-msg');
+    box.textContent = (e && e.message) || 'Falha ao falar com o servidor.';
+    box.classList.remove('hidden');
+    setTimeout(() => box.classList.add('hidden'), 6000);
+  }
+
+  function indexar() {
+    RX.cel = new Map();
+    RX.avaliacoes.forEach(a => RX.cel.set(ch(a.consultor_id, a.modulo_id), a));
+    const porId = new Map(RX.grupos.map(g => [g.id, g]));
+    RX.grupoDe = new Map();
+    RX.modulos.forEach(m => RX.grupoDe.set(m.id, porId.get(m.grupo_id) || { nome: 'Sem grupo', cor: '#64748b' }));
+    if (!RX.consultores.some(c => c.id === RX.consultorSel)) {
+      RX.consultorSel = RX.consultores[0] ? RX.consultores[0].id : null;
+    }
+  }
+
+  async function carregar() {
+    const s = await api('');
+    RX.niveis = s.niveis || []; RX.grupos = s.grupos || [];
+    RX.consultores = s.consultores || []; RX.modulos = s.modulos || [];
+    RX.avaliacoes = s.avaliacoes || []; RX.historico = s.historico || [];
+    indexar();
+  }
+
+  // ── recortes ──────────────────────────────────────────────────────────────
+  const naFrente = () => RX.consultores.filter(c => !RX.frente || (c.frente || 'Funcional') === RX.frente);
+  const modulosVis = () => RX.modulos.filter(m => !RX.grupo || (RX.grupoDe.get(m.id) || {}).nome === RX.grupo);
+  function consultoresVis() {
+    const q = RX.busca.trim().toLowerCase();
+    const base = naFrente();
+    return q ? base.filter(c => (c.nome + ' ' + c.codigo + ' ' + (c.funcao || '')).toLowerCase().includes(q)) : base;
+  }
+  function frentes(lista) {
+    const m = new Map();
+    (lista || RX.consultores).forEach(c => {
+      const f = c.frente || 'Funcional';
+      if (!m.has(f) || c.ordem < m.get(f)) m.set(f, c.ordem);
+    });
+    return Array.from(m.entries()).sort((a, b) => a[1] - b[1]).map(e => e[0]);
+  }
+  const aptos = id => naFrente().reduce((n, c) => { const a = av(c.id, id); return n + (a && a.nivel_gestor >= 4 ? 1 : 0); }, 0);
+
+  // ── topo ──────────────────────────────────────────────────────────────────
+  function pintaReadout() {
+    const equipe = naFrente();
+    const total = equipe.length * RX.modulos.length;
+    let n = 0, soma = 0;
+    equipe.forEach(c => RX.modulos.forEach(m => {
+      const a = av(c.id, m.id);
+      if (a && a.nivel_gestor != null) { n++; soma += a.nivel_gestor; }
+    }));
+    const risco = RX.modulos.filter(m => aptos(m.id) < 2).length;
+    const tag = (k, v, cor) => `<span class="px-2 py-0.5 rounded-full bg-slate-100 ${cor || 'text-slate-700'}">`
+      + `<b class="font-semibold">${v}</b> ${k}</span>`;
+    sel('#rx-readout').innerHTML =
+      tag('consultores', equipe.length) + tag('módulos', RX.modulos.length) +
+      tag('mapeado', (total ? Math.round(n / total * 100) : 0) + '%') +
+      tag('maturidade', n ? (soma / n).toFixed(1) : '–') +
+      tag('em risco', risco, risco ? 'text-rose-700' : 'text-emerald-700');
+  }
+
+  // ── matriz ────────────────────────────────────────────────────────────────
+  function pintaMatriz() {
+    const mods = modulosVis(), cons = consultoresVis(), t = sel('#rx-matriz');
+    if (!mods.length || !cons.length) {
+      t.innerHTML = '<tr><td class="p-6 text-sm text-slate-500">Nenhuma linha para esses filtros.</td></tr>';
+      return;
+    }
+    const blocos = [];
+    mods.forEach(m => {
+      const g = RX.grupoDe.get(m.id) || { nome: '—', cor: '#64748b' };
+      const u = blocos[blocos.length - 1];
+      if (u && u.nome === g.nome) u.n++; else blocos.push({ nome: g.nome, cor: g.cor, n: 1 });
+    });
+
+    let h = '<thead><tr><th class="rx-corner rx-ghead" style="min-width:196px">Grupo</th>';
+    blocos.forEach(b => {
+      h += `<th class="rx-ghead" colspan="${b.n}" style="box-shadow:inset 0 -3px 0 ${esc(b.cor)}">${esc(b.nome)}</th>`;
+    });
+    h += '</tr><tr><th class="rx-corner rx-rowhead" style="top:26px;z-index:7">'
+      + '<span class="text-[10px] uppercase tracking-wider text-slate-400 font-semibold">Consultor</span></th>';
+    mods.forEach(m => {
+      h += `<th class="rx-mhead${m.critico ? ' crit' : ''}" style="top:26px" title="${esc(m.nome)}${m.sigla ? ' · ' + esc(m.sigla) : ''}">`
+        + `<span class="rot">${esc(m.nome)}</span></th>`;
+    });
+    h += '</tr></thead><tbody>';
+
+    const linha = c => {
+      let l = `<tr><th class="rx-rowhead"><span class="nm">${esc(c.nome)}</span><span class="cd">${esc(c.codigo)}</span></th>`;
+      mods.forEach(m => {
+        const a = av(c.id, m.id);
+        const v = !a ? null : (RX.lente === 'gestor' ? a.nivel_gestor : RX.lente === 'auto' ? a.nivel_auto : a.meta);
+        const cls = ['rx-sq'];
+        if (a && a.nivel_auto != null && a.nivel_gestor != null && a.nivel_auto !== a.nivel_gestor) cls.push('diverge');
+        if (a && a.meta != null && (a.nivel_gestor == null || a.nivel_gestor < a.meta)) cls.push('abaixo');
+        const rot = v == null ? 'não avaliado' : ((RX.niveis[v] || {}).rotulo || v);
+        l += `<td class="rx-cell"><button class="${cls.join(' ')}" data-n="${v == null ? '-' : v}" `
+          + `data-c="${c.id}" data-m="${m.id}" title="${esc(c.nome + ' · ' + m.nome + ' — ' + rot)}" `
+          + `aria-label="${esc(c.nome + ', ' + m.nome + ': ' + rot)}">${v == null ? '' : v}</button></td>`;
+      });
+      return l + '</tr>';
+    };
+
+    const fs = frentes(cons);
+    if (fs.length > 1) {
+      fs.forEach(f => {
+        const grupo = cons.filter(c => (c.frente || 'Funcional') === f);
+        if (!grupo.length) return;
+        h += `<tr class="rx-fband"><th colspan="${mods.length + 1}"><span class="txt">${esc(f)}`
+          + ` <b>${grupo.length} ${grupo.length === 1 ? 'consultor' : 'consultores'}</b></span></th></tr>`;
+        grupo.forEach(c => { h += linha(c); });
+      });
+    } else {
+      cons.forEach(c => { h += linha(c); });
+    }
+    t.innerHTML = h + '</tbody>';
+
+    sel('#rx-escala').innerHTML = '<span class="rx-esc inline-flex">'
+      + RX.niveis.map(n => `<b style="background:var(--rx${n.nivel});color:var(--rx${n.nivel}t)" `
+        + `title="${esc(n.rotulo + ' — ' + (n.descricao || ''))}">${n.nivel}</b>`).join('')
+      + '</span><span class="ml-2 text-slate-400">0 não conhece → 5 especialista</span>';
+  }
+
+  // ── cobertura ─────────────────────────────────────────────────────────────
+  function pintaCobertura() {
+    const mods = modulosVis().slice();
+    if (RX.covOrd === 'risco') mods.sort((a, b) => aptos(a.id) - aptos(b.id) || (b.critico - a.critico) || a.nome.localeCompare(b.nome));
+    else mods.sort((a, b) => a.ordem - b.ordem);
+    const equipe = naFrente();
+    sel('#rx-cobertura').innerHTML = mods.map(m => {
+      const g = RX.grupoDe.get(m.id) || {};
+      const d = [0, 0, 0, 0, 0, 0]; let semNota = 0;
+      equipe.forEach(c => { const a = av(c.id, m.id); if (a && a.nivel_gestor != null) d[a.nivel_gestor]++; else semNota++; });
+      const n4 = aptos(m.id);
+      const segs = d.map((qt, i) => qt ? `<span style="flex:${qt};background:var(--rx${i})" title="${qt} no nível ${i}"></span>` : '').join('')
+        + (semNota ? `<span class="vazio" style="flex:${semNota}" title="${semNota} sem avaliação"></span>` : '');
+      const flag = n4 === 0 ? '<span class="rx-pill risco">sem quem implante</span>'
+        : n4 === 1 ? '<span class="rx-pill risco">ponto único</span>'
+        : n4 === 2 ? '<span class="rx-pill atencao">2 aptos</span>'
+        : `<span class="rx-pill ok">${n4} aptos</span>`;
+      return '<div class="rx-covrow"><div class="min-w-0">'
+        + `<div class="text-[12.5px] font-semibold text-slate-800 truncate">${esc(m.nome)}`
+        + (m.critico ? ' <span class="text-amber-600" title="Módulo crítico">◆</span>' : '') + '</div>'
+        + `<div class="text-[10.5px] text-slate-400 flex items-center gap-1.5"><i style="width:7px;height:7px;border-radius:2px;display:inline-block;background:${esc(g.cor || '#64748b')}"></i>`
+        + `${esc(g.nome || '—')}${m.sigla && m.sigla !== '—' ? ' · ' + esc(m.sigla) : ''}</div></div>`
+        + `<div class="rx-bar">${segs}</div><div class="flex justify-end">${flag}</div></div>`;
+    }).join('') || '<div class="p-6 text-sm text-slate-500">Nenhum módulo para esse filtro.</div>';
+  }
+
+  // ── perfil ────────────────────────────────────────────────────────────────
+  function pintaPerfil() {
+    const c = RX.consultores.find(x => x.id === RX.consultorSel);
+    if (!c) { sel('#rx-perfil').innerHTML = ''; sel('#rx-trilha').innerHTML = ''; return; }
+    let soma = 0, n = 0, implanta = 0, gaps = 0, diverg = 0;
+    RX.modulos.forEach(m => {
+      const a = av(c.id, m.id);
+      if (a && a.nivel_gestor != null) { soma += a.nivel_gestor; n++; if (a.nivel_gestor >= 4) implanta++; }
+      if (a && a.meta != null && (a.nivel_gestor == null || a.nivel_gestor < a.meta)) gaps++;
+      if (a && a.nivel_auto != null && a.nivel_gestor != null && a.nivel_auto !== a.nivel_gestor) diverg++;
+    });
+    const li = (k, v) => `<dt class="text-slate-400">${k}</dt><dd class="text-right font-semibold text-slate-700">${esc(v)}</dd>`;
+    sel('#rx-perfil').innerHTML =
+      `<h3 class="font-totvs text-lg text-totvs-petroleo">${esc(c.nome)}</h3>`
+      + `<div class="text-[11.5px] text-slate-400 tabular-nums">${esc(c.codigo)}</div>`
+      + '<dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 mt-4 text-[12.5px]">'
+      + li('Frente', c.frente || 'Funcional') + li('Função', c.funcao || '—') + li('Tipo', c.tipo || '—')
+      + li('Casa (anos)', c.tempo_anos != null ? Number(c.tempo_anos).toFixed(2) : '—')
+      + li('Produtividade 12m', c.prod_media != null ? Number(c.prod_media).toFixed(2) : '—')
+      + li('Módulos avaliados', n + '/' + RX.modulos.length) + '</dl>'
+      + '<div class="grid grid-cols-3 gap-px bg-slate-100 border-t border-slate-100 mt-4">'
+      + `<div class="bg-white p-3 text-center"><span class="block text-xl font-bold tabular-nums">${n ? (soma / n).toFixed(1) : '–'}</span><span class="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">Média</span></div>`
+      + `<div class="bg-white p-3 text-center"><span class="block text-xl font-bold tabular-nums">${implanta}</span><span class="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">Implanta</span></div>`
+      + `<div class="bg-white p-3 text-center"><span class="block text-xl font-bold tabular-nums ${gaps ? 'text-amber-600' : ''}">${gaps}</span><span class="text-[10px] uppercase tracking-wide text-slate-400 font-semibold">Gaps</span></div></div>`
+      + (diverg ? `<p class="mt-3 text-xs text-slate-500">${diverg} módulo(s) com autoavaliação diferente da sua nota.</p>` : '');
+
+    const porGrupo = new Map();
+    RX.modulos.forEach(m => {
+      const g = RX.grupoDe.get(m.id) || { nome: '—', cor: '#64748b' };
+      if (!porGrupo.has(g.nome)) porGrupo.set(g.nome, { cor: g.cor, mods: [] });
+      porGrupo.get(g.nome).mods.push(m);
+    });
+    let html = '';
+    porGrupo.forEach((v, nome) => {
+      const linhas = v.mods.filter(m => {
+        if (!RX.soGap) return true;
+        const a = av(c.id, m.id);
+        return a && a.meta != null && (a.nivel_gestor == null || a.nivel_gestor < a.meta);
+      });
+      if (!linhas.length) return;
+      html += `<div class="border-b border-slate-100"><div class="rx-gt"><i style="background:${esc(v.cor)}"></i>${esc(nome)}</div>`;
+      linhas.forEach(m => {
+        const a = av(c.id, m.id);
+        const g = a && a.nivel_gestor != null ? a.nivel_gestor : null;
+        const au = a && a.nivel_auto != null ? a.nivel_auto : null;
+        const mt = a && a.meta != null ? a.meta : null;
+        const pct = x => (x / 5 * 100);
+        html += `<div class="rx-skill" data-c="${c.id}" data-m="${m.id}" role="button" tabindex="0">`
+          + `<span class="text-[12.5px] truncate">${esc(m.nome)}</span><span class="rx-track">`
+          + (g != null && g > 0 ? `<span class="fill" style="width:calc(${pct(g)}% - 2px);background:var(--rx${g})"></span>` : '')
+          + (mt != null ? `<span class="meta" style="left:${pct(mt)}%" title="Meta ${mt}"></span>` : '')
+          + (au != null ? `<span class="auto" style="left:${pct(au)}%" title="Autoavaliação ${au}"></span>` : '')
+          + `</span><span class="text-[11px] text-slate-400 tabular-nums text-right whitespace-nowrap" style="min-width:104px">`
+          + (g != null ? 'G' + g : 'G–') + (au != null ? ' · A' + au : '') + (mt != null ? ' · M' + mt : '') + '</span></div>';
+      });
+      html += '</div>';
+    });
+    sel('#rx-trilha').innerHTML = html || '<div class="p-6 text-sm text-slate-500">Nenhum módulo com gap para este consultor.</div>';
+  }
+
+  // ── evolução ──────────────────────────────────────────────────────────────
+  function pintaEvolucao() {
+    const evs = RX.historico.filter(h => h.campo === 'gestor')
+      .slice().sort((a, b) => new Date(a.criado_em) - new Date(b.criado_em));
+    const cel = new Map(), porDia = new Map();
+    evs.forEach(h => {
+      const k = ch(h.consultor_id, h.modulo_id);
+      if (h.para == null) cel.delete(k); else cel.set(k, h.para);
+      let s = 0; cel.forEach(v => s += v);
+      porDia.set(String(h.criado_em).slice(0, 10), { media: cel.size ? s / cel.size : 0, n: cel.size });
+    });
+    const serie = Array.from(porDia.entries()).map(([dia, v]) => ({ dia, ...v }));
+    const box = sel('#rx-grafico');
+
+    if (serie.length < 2) {
+      box.innerHTML = '<p class="text-sm text-slate-500 pb-3">' + (serie.length
+        ? 'Só há um dia de registro até agora — a curva aparece quando houver alteração em outro dia.'
+        : 'Nenhum nível registrado ainda. Preencha a matriz e a evolução começa a ser desenhada.') + '</p>';
+    } else {
+      const W = 900, H = 240, P = { t: 14, r: 16, b: 26, l: 34 };
+      const x = i => P.l + i * (W - P.l - P.r) / (serie.length - 1);
+      const y = v => P.t + (1 - v / 5) * (H - P.t - P.b);
+      const pts = serie.map((s, i) => [x(i), y(s.media)]);
+      const linha = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+      const area = linha + ` L${pts[pts.length - 1][0].toFixed(1)} ${H - P.b} L${P.l} ${H - P.b} Z`;
+      let grid = '';
+      for (let v = 0; v <= 5; v++) {
+        grid += `<line x1="${P.l}" x2="${W - P.r}" y1="${y(v)}" y2="${y(v)}" stroke="#e2e8f0"></line>`
+          + `<text x="${P.l - 8}" y="${y(v) + 3}" text-anchor="end" fill="#94a3b8" font-size="10">${v}</text>`;
+      }
+      let ticks = ''; const passo = Math.max(1, Math.ceil(serie.length / 7));
+      serie.forEach((s, i) => {
+        if (i % passo === 0 || i === serie.length - 1) {
+          const p = s.dia.split('-');
+          ticks += `<text x="${x(i)}" y="${H - 8}" text-anchor="middle" fill="#94a3b8" font-size="10">${p[2]}/${p[1]}</text>`;
+        }
+      });
+      const u = serie[serie.length - 1];
+      box.innerHTML = `<svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block" role="img" `
+        + 'aria-label="Maturidade média da equipe ao longo do tempo">'
+        + '<defs><linearGradient id="rxEvo" x1="0" y1="0" x2="0" y2="1">'
+        + '<stop offset="0%" stop-color="#13b4d6" stop-opacity=".28"/><stop offset="100%" stop-color="#13b4d6" stop-opacity="0"/>'
+        + `</linearGradient></defs>${grid}<path d="${area}" fill="url(#rxEvo)"></path>`
+        + `<path d="${linha}" fill="none" stroke="#0a6e88" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>`
+        + `<circle cx="${pts[pts.length - 1][0]}" cy="${pts[pts.length - 1][1]}" r="4" fill="#0a6e88"></circle>${ticks}</svg>`
+        + `<p class="text-xs text-slate-500 mt-1">Última leitura: <b class="tabular-nums text-slate-800">${u.media.toFixed(2)}</b>`
+        + ` de média em <b class="tabular-nums text-slate-800">${u.n}</b> células avaliadas.</p>`;
+    }
+
+    const nc = new Map(RX.consultores.map(c => [c.id, c.nome]));
+    const nm = new Map(RX.modulos.map(m => [m.id, m.nome]));
+    const rot = { auto: 'autoavaliação', gestor: 'nota do gestor', meta: 'meta' };
+    const itens = RX.historico.slice(0, 200);
+    sel('#rx-timeline').innerHTML = itens.length ? itens.map(h => {
+      const d = new Date(h.criado_em);
+      const cor = h.de == null ? '' : (h.para > h.de ? 'text-emerald-600' : 'text-rose-600');
+      return '<div class="rx-tl"><span class="text-[11px] text-slate-400 tabular-nums">'
+        + d.toLocaleDateString('pt-BR') + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+        + `</span><span><b class="font-semibold">${esc(nc.get(h.consultor_id) || '—')}</b> · ${esc(nm.get(h.modulo_id) || '—')} `
+        + `<span class="text-slate-400">(${rot[h.campo] || h.campo})</span></span>`
+        + `<span class="font-bold text-[11.5px] tabular-nums ${cor}">`
+        + (h.de == null ? '→ ' + h.para : `${h.de} → ${h.para}`) + '</span></div>';
+    }).join('') : '<div class="p-6 text-sm text-slate-500">Nada registrado ainda.</div>';
+  }
+
+  // ── cadastro ──────────────────────────────────────────────────────────────
+  function pintaCadastro() {
+    sel('#rx-grupos-list').innerHTML = RX.grupos.map(g => `<option value="${esc(g.nome)}"></option>`).join('');
+    sel('#rx-frentes-list').innerHTML = frentes().map(f => `<option value="${esc(f)}"></option>`).join('');
+    sel('#rx-equipe').innerHTML = RX.consultores.map(c =>
+      '<div class="rx-eqrow"><div><div class="text-[12.5px] font-semibold text-slate-800">' + esc(c.nome) + '</div>'
+      + `<div class="text-[10.5px] text-slate-400 tabular-nums">${esc(c.codigo)}</div></div>`
+      + `<span class="text-xs text-slate-500 truncate">${esc(c.funcao || '—')}</span>`
+      + `<input type="text" list="rx-frentes-list" data-frente="${c.id}" value="${esc(c.frente || 'Funcional')}" aria-label="Frente de ${esc(c.nome)}">`
+      + `<button class="px-2.5 py-1 rounded-md border border-slate-300 text-xs hover:bg-rose-50 hover:border-rose-300 hover:text-rose-700" `
+      + `data-arquivar="${c.id}" data-nome="${esc(c.nome)}">Arquivar</button></div>`).join('');
+    sel('#rx-escala-doc').innerHTML = RX.niveis.map(n =>
+      '<div class="grid grid-cols-[34px_1fr] gap-3 items-start py-2 border-b border-slate-100 last:border-0">'
+      + `<span class="grid place-items-center h-6 rounded text-xs font-semibold tabular-nums" style="background:var(--rx${n.nivel});color:var(--rx${n.nivel}t)">${n.nivel}</span>`
+      + `<span><b class="text-[13px] text-slate-800">${esc(n.rotulo)}</b><br><span class="text-[12.5px] text-slate-500">${esc(n.descricao || '')}</span></span></div>`).join('');
+  }
+
+  // ── gaveta ────────────────────────────────────────────────────────────────
+  function fechaGaveta() {
+    sela('.rx-scrim, .rx-drawer').forEach(e => e.remove());
+    RX.aberta = null;
+    pintaMatriz();
+  }
+
+  function abreGaveta(cId, mId) {
+    const c = RX.consultores.find(x => x.id === cId), m = RX.modulos.find(x => x.id === mId);
+    if (!c || !m) return;
+    RX.aberta = { c: cId, m: mId };
+    const a = av(cId, mId) || {}, g = RX.grupoDe.get(mId) || {};
+    sela('.rx-scrim, .rx-drawer').forEach(e => e.remove());
+
+    const chips = (campo, atual) => '<div class="flex gap-1 flex-wrap">' + RX.niveis.map(n =>
+      `<button class="chip${atual === n.nivel ? ' is-on' : ''}" data-campo="${campo}" data-v="${n.nivel}">${n.nivel} ${esc(n.rotulo)}</button>`).join('')
+      + `<button class="chip${atual == null ? ' is-on' : ''}" data-campo="${campo}" data-v="" style="flex:0 0 auto">limpar</button></div>`;
+    const bloco = (titulo, corpo) =>
+      `<div><span class="block text-[10.5px] uppercase tracking-wider font-bold text-slate-400 mb-1.5">${titulo}</span>${corpo}</div>`;
+
+    const scrim = document.createElement('div'); scrim.className = 'rx-scrim';
+    const dw = document.createElement('aside');
+    dw.className = 'rx-drawer'; dw.setAttribute('role', 'dialog'); dw.setAttribute('aria-modal', 'true');
+    dw.innerHTML =
+      '<header class="px-4 py-4 border-b border-slate-100">'
+      + `<h3 class="font-totvs text-base text-totvs-petroleo">${esc(c.nome)}</h3>`
+      + `<div class="text-xs text-slate-500 mt-0.5">${esc(m.nome)}${m.sigla && m.sigla !== '—' ? ' · ' + esc(m.sigla) : ''}`
+      + ` · <span style="color:${esc(g.cor || '#64748b')}">■</span> ${esc(g.nome || '—')}</div></header>`
+      + '<div class="px-4 py-4 flex-1 overflow-auto flex flex-col gap-4" id="rx-dw-body">'
+      + bloco('Autoavaliação do consultor', chips('auto', a.nivel_auto == null ? null : a.nivel_auto))
+      + bloco('Nota do gestor', chips('gestor', a.nivel_gestor == null ? null : a.nivel_gestor))
+      + bloco('Meta', chips('meta', a.meta == null ? null : a.meta))
+      + bloco('Prazo da meta', `<input type="date" id="rx-dw-prazo" class="px-2.5 py-1.5 border border-slate-300 rounded-md text-sm" value="${esc(a.meta_prazo || '')}">`)
+      + bloco('Plano de ação / observação',
+        `<textarea id="rx-dw-obs" rows="3" class="w-full px-2.5 py-2 border border-slate-300 rounded-md text-[13px]" `
+        + `placeholder="Ex.: acompanhar a implantação do Fiscal na Digitro no 4º tri.">${esc(a.observacao || '')}</textarea>`
+        + '<div class="flex justify-end mt-2"><button id="rx-dw-salvar" class="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold hover:bg-slate-50">Salvar observação</button></div>')
+      + (a.atualizado_em ? `<p class="text-[11px] text-slate-400">Atualizado em ${new Date(a.atualizado_em).toLocaleString('pt-BR')}</p>` : '')
+      + '</div><footer class="px-4 py-3 border-t border-slate-100 flex justify-end">'
+      + '<button id="rx-dw-fechar" class="px-3 py-1.5 rounded-md border border-slate-300 text-sm font-semibold hover:bg-slate-50">Fechar</button></footer>';
+
+    document.body.append(scrim, dw);
+    scrim.addEventListener('click', fechaGaveta);
+    dw.querySelector('#rx-dw-fechar').addEventListener('click', fechaGaveta);
+    dw.addEventListener('click', async e => {
+      const b = e.target.closest('button[data-campo]');
+      if (b) return gravaNivel(b.dataset.campo, b.dataset.v);
+      if (e.target.id === 'rx-dw-salvar') return gravaDetalhe();
+    });
+    pintaMatriz();
+  }
+
+  function guardaLocal(cId, mId, r) {
+    const atual = RX.cel.get(ch(cId, mId)) || { consultor_id: cId, modulo_id: mId };
+    if (r) Object.assign(atual, {
+      nivel_auto: r.nivel_auto, nivel_gestor: r.nivel_gestor, meta: r.meta, atualizado_em: r.atualizado_em,
+    });
+    RX.cel.set(ch(cId, mId), atual);
+    if (!RX.avaliacoes.some(x => x.consultor_id === cId && x.modulo_id === mId)) RX.avaliacoes.push(atual);
+    return atual;
+  }
+
+  async function gravaNivel(campo, valor) {
+    if (!RX.aberta) return;
+    const { c, m } = RX.aberta;
+    try {
+      const r = await api('/nivel', { consultor: c, modulo: m, campo, valor: valor === '' ? null : Number(valor) });
+      guardaLocal(c, m, r);
+      RX.historico.unshift({ consultor_id: c, modulo_id: m, campo, de: null,
+        para: valor === '' ? null : Number(valor), criado_em: new Date().toISOString() });
+      abreGaveta(c, m);
+      pintaReadout(); pintaMatriz();
+    } catch (e) { erro(e); }
+  }
+
+  async function gravaDetalhe() {
+    if (!RX.aberta) return;
+    const { c, m } = RX.aberta;
+    const obs = sel('#rx-dw-obs').value, prazo = sel('#rx-dw-prazo').value;
+    try {
+      await api('/detalhe', { consultor: c, modulo: m, obs, prazo });
+      const atual = guardaLocal(c, m, null);
+      atual.observacao = obs || null; atual.meta_prazo = prazo || null;
+      const bt = sel('#rx-dw-salvar');
+      if (bt) { bt.textContent = 'Salvo'; setTimeout(() => { bt.textContent = 'Salvar observação'; }, 1500); }
+    } catch (e) { erro(e); }
+  }
+
+  // ── navegação interna ─────────────────────────────────────────────────────
+  function pinta() {
+    pintaReadout();
+    if (RX.vista === 'matriz') pintaMatriz();
+    if (RX.vista === 'cobertura') pintaCobertura();
+    if (RX.vista === 'consultor') pintaPerfil();
+    if (RX.vista === 'evolucao') pintaEvolucao();
+    if (RX.vista === 'cadastro') pintaCadastro();
+  }
+
+  function vista(v) {
+    RX.vista = v;
+    sela('#tab-raiox .rx-v').forEach(b => b.classList.toggle('is-on', b.dataset.rxv === v));
+    ['matriz', 'cobertura', 'consultor', 'evolucao', 'cadastro']
+      .forEach(k => sel('#rxv-' + k).classList.toggle('hidden', k !== v));
+    pinta();
+  }
+
+  function pintaSelects() {
+    const fs = frentes();
+    const f = sel('#rx-frente');
+    f.innerHTML = '<option value="">Todas as frentes</option>' + fs.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+    f.value = fs.includes(RX.frente) ? RX.frente : (RX.frente = '');
+    const g = sel('#rx-grupo');
+    g.innerHTML = '<option value="">Todos os grupos</option>' + RX.grupos.map(x => `<option value="${esc(x.nome)}">${esc(x.nome)}</option>`).join('');
+    g.value = RX.grupo;
+    const c = sel('#rx-consultor');
+    c.innerHTML = fs.length > 1
+      ? fs.map(fr => `<optgroup label="${esc(fr)}">` + RX.consultores.filter(x => (x.frente || 'Funcional') === fr)
+          .map(x => `<option value="${esc(x.id)}">${esc(x.nome + ' · ' + x.codigo)}</option>`).join('') + '</optgroup>').join('')
+      : RX.consultores.map(x => `<option value="${esc(x.id)}">${esc(x.nome + ' · ' + x.codigo)}</option>`).join('');
+    c.value = RX.consultorSel || '';
+  }
+
+  let ligado = false;
+  function ligaEventos() {
+    if (ligado) return; ligado = true;
+    sela('#tab-raiox .rx-v').forEach(b => b.addEventListener('click', () => vista(b.dataset.rxv)));
+    sel('#rx-reload').addEventListener('click', () => { RX.carregado = false; window.initRaioX(); });
+
+    sel('#rx-lente').addEventListener('click', e => {
+      const b = e.target.closest('button[data-lente]'); if (!b) return;
+      RX.lente = b.dataset.lente;
+      sela('#rx-lente button').forEach(x => x.classList.toggle('is-on', x === b));
+      pintaMatriz();
+    });
+    sel('#rx-covord').addEventListener('click', e => {
+      const b = e.target.closest('button[data-ord]'); if (!b) return;
+      RX.covOrd = b.dataset.ord;
+      sela('#rx-covord button').forEach(x => x.classList.toggle('is-on', x === b));
+      pintaCobertura();
+    });
+    sel('#rx-frente').addEventListener('change', e => { RX.frente = e.target.value; pinta(); });
+    sel('#rx-grupo').addEventListener('change', e => { RX.grupo = e.target.value; pintaMatriz(); pintaCobertura(); });
+    let t; sel('#rx-busca').addEventListener('input', e => {
+      clearTimeout(t); const v = e.target.value; t = setTimeout(() => { RX.busca = v; pintaMatriz(); }, 140);
+    });
+    sel('#rx-matriz').addEventListener('click', e => {
+      const b = e.target.closest('.rx-sq'); if (b) abreGaveta(b.dataset.c, b.dataset.m);
+    });
+    sel('#rx-consultor').addEventListener('change', e => { RX.consultorSel = e.target.value; pintaPerfil(); });
+    sel('#rx-sogap').addEventListener('click', e => {
+      RX.soGap = !RX.soGap;
+      e.currentTarget.textContent = RX.soGap ? 'Mostrar todos' : 'Só onde há gap';
+      pintaPerfil();
+    });
+    sel('#rx-trilha').addEventListener('click', e => {
+      const s = e.target.closest('.rx-skill'); if (s) abreGaveta(s.dataset.c, s.dataset.m);
+    });
+    sel('#rx-trilha').addEventListener('keydown', e => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const s = e.target.closest('.rx-skill'); if (!s) return;
+      e.preventDefault(); abreGaveta(s.dataset.c, s.dataset.m);
+    });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape' && RX.aberta) fechaGaveta(); });
+
+    sel('#rx-addmod').addEventListener('click', async () => {
+      try {
+        await api('/modulo', {
+          codigo: sel('#rx-mcod').value, nome: sel('#rx-mnome').value,
+          sigla: sel('#rx-msigla').value, grupo: sel('#rx-mgrupo').value,
+          critico: sel('#rx-mcrit').checked,
+        });
+        await carregar(); pintaSelects(); pinta();
+        ['#rx-mcod', '#rx-mnome', '#rx-msigla'].forEach(s => sel(s).value = '');
+        sel('#rx-mcrit').checked = false;
+      } catch (e) { erro(e); }
+    });
+    sel('#rx-addcons').addEventListener('click', async () => {
+      try {
+        await api('/consultor', {
+          codigo: sel('#rx-ccod').value, nome: sel('#rx-cnome').value,
+          funcao: sel('#rx-cfunc').value, frente: sel('#rx-cfrente').value,
+        });
+        await carregar(); pintaSelects(); pinta();
+        ['#rx-ccod', '#rx-cnome', '#rx-cfunc', '#rx-cfrente'].forEach(s => sel(s).value = '');
+      } catch (e) { erro(e); }
+    });
+    sel('#rx-equipe').addEventListener('change', async e => {
+      const i = e.target.closest('input[data-frente]'); if (!i) return;
+      const c = RX.consultores.find(x => x.id === i.dataset.frente); if (!c) return;
+      const nova = i.value.trim();
+      if (!nova || nova === c.frente) { i.value = c.frente || 'Funcional'; return; }
+      try { await api('/frente', { consultor: c.id, frente: nova }); c.frente = nova; pintaSelects(); pinta(); }
+      catch (err) { i.value = c.frente || 'Funcional'; erro(err); }
+    });
+    sel('#rx-equipe').addEventListener('click', async e => {
+      const b = e.target.closest('button[data-arquivar]'); if (!b) return;
+      if (!confirm(`Arquivar ${b.dataset.nome}? Ele sai da matriz, mas o histórico fica no banco.`)) return;
+      try { await api('/arquivar', { tipo: 'consultor', id: b.dataset.arquivar }); await carregar(); pintaSelects(); pinta(); }
+      catch (err) { erro(err); }
+    });
+  }
+
+  window.initRaioX = async function () {
+    if (RX.carregado) { pinta(); return; }
+    sel('#rx-matriz').innerHTML = '<tr><td class="p-6 text-sm text-slate-400">Carregando…</td></tr>';
+    try {
+      await carregar();
+      RX.carregado = true;
+      ligaEventos();
+      sela('#rx-lente button').forEach(b => b.classList.toggle('is-on', b.dataset.lente === RX.lente));
+      sela('#rx-covord button').forEach(b => b.classList.toggle('is-on', b.dataset.ord === RX.covOrd));
+      pintaSelects();
+      vista(RX.vista);
+    } catch (e) {
+      sel('#rx-matriz').innerHTML = '';
+      erro(e);
+    }
+  };
+})();
 
 carregaLista();
 </script>

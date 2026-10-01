@@ -796,6 +796,143 @@ def api_health():
     return _json(info)
 
 
+# ── Raio X · maturidade da equipe (schema pdi) ──────────────────────────────
+# Matriz consultor × módulo com escala 0..5 (0 não conhece → 5 especialista).
+# Toda escrita passa pelas funções pdi.fn_*, que validam a escala e deixam a
+# trigger registrar o histórico. É tela de gestão de pessoas: só equipe TOTVS,
+# nunca login de cliente — por isso require_interno() em todas as rotas.
+RX_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def _rx_uuid(v):
+    v = (str(v or "")).strip()
+    return v if RX_UUID.match(v) else None
+
+
+def _rx_nivel(v):
+    """None limpa a célula; fora de 0..5 é erro, não silêncio."""
+    if v in (None, ""):
+        return None, None
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return None, "nível precisa ser um número de 0 a 5."
+    if not 0 <= n <= 5:
+        return None, "nível fora da escala 0..5."
+    return n, None
+
+
+def _rx_par(b):
+    cons, mod = _rx_uuid(b.get("consultor")), _rx_uuid(b.get("modulo"))
+    if not cons or not mod:
+        return None, None, _err(400, "consultor e módulo precisam ser UUID.")
+    return cons, mod, None
+
+
+@app.get("/api/raiox")
+def api_raiox():
+    if (r := require_interno()):
+        return r
+    row = q("select pdi.fn_snapshot() as s", one=True)
+    return _json(row["s"] if row else {})
+
+
+@app.post("/api/raiox/nivel")
+def api_raiox_nivel():
+    if (r := require_interno()):
+        return r
+    b = request.get_json(silent=True) or {}
+    campo = (b.get("campo") or "").strip()
+    if campo not in ("auto", "gestor", "meta"):
+        return _err(400, "campo deve ser auto, gestor ou meta.")
+    nivel, erro = _rx_nivel(b.get("valor"))
+    if erro:
+        return _err(400, erro)
+    cons, mod, falha = _rx_par(b)
+    if falha:
+        return falha
+    row = q("select pdi.fn_set_nivel(%s::uuid, %s::uuid, %s, %s::smallint) as r",
+            (cons, mod, campo, nivel), one=True)
+    return _json(row["r"] if row else {"ok": True})
+
+
+@app.post("/api/raiox/detalhe")
+def api_raiox_detalhe():
+    if (r := require_interno()):
+        return r
+    b = request.get_json(silent=True) or {}
+    cons, mod, falha = _rx_par(b)
+    if falha:
+        return falha
+    prazo = (b.get("prazo") or "").strip() or None
+    row = q("select pdi.fn_set_detalhe(%s::uuid, %s::uuid, %s, %s::date) as r",
+            (cons, mod, (b.get("obs") or "").strip(), prazo), one=True)
+    return _json(row["r"] if row else {"ok": True})
+
+
+@app.post("/api/raiox/frente")
+def api_raiox_frente():
+    if (r := require_interno()):
+        return r
+    b = request.get_json(silent=True) or {}
+    cons = _rx_uuid(b.get("consultor"))
+    frente = (b.get("frente") or "").strip()
+    if not cons:
+        return _err(400, "consultor precisa ser UUID.")
+    if not frente:
+        return _err(400, "a frente não pode ficar vazia.")
+    row = q("select pdi.fn_set_frente(%s::uuid, %s) as r", (cons, frente), one=True)
+    return _json(row["r"] if row else {"ok": True})
+
+
+@app.post("/api/raiox/modulo")
+def api_raiox_modulo():
+    if (r := require_interno()):
+        return r
+    b = request.get_json(silent=True) or {}
+    codigo = re.sub(r"\s+", "_", (b.get("codigo") or "").strip()).upper()
+    nome = (b.get("nome") or "").strip()
+    grupo = (b.get("grupo") or "").strip()
+    if not codigo or not nome or not grupo:
+        return _err(400, "código, nome e grupo são obrigatórios.")
+    row = q("select pdi.fn_upsert_modulo(%s, %s, %s, %s, %s) as r",
+            (codigo, nome, (b.get("sigla") or "").strip(), grupo,
+             bool(b.get("critico"))), one=True)
+    return _json(row["r"] if row else {"ok": True})
+
+
+@app.post("/api/raiox/consultor")
+def api_raiox_consultor():
+    if (r := require_interno()):
+        return r
+    b = request.get_json(silent=True) or {}
+    codigo = (b.get("codigo") or "").strip().upper()
+    nome = (b.get("nome") or "").strip()
+    if not codigo or not nome:
+        return _err(400, "código e nome são obrigatórios.")
+    row = q("select pdi.fn_upsert_consultor(%s, %s, %s, %s, %s) as r",
+            (codigo, nome, (b.get("funcao") or "").strip(),
+             (b.get("celula") or "201").strip(),
+             (b.get("frente") or "Funcional").strip() or "Funcional"), one=True)
+    return _json(row["r"] if row else {"ok": True})
+
+
+@app.post("/api/raiox/arquivar")
+def api_raiox_arquivar():
+    if (r := require_interno()):
+        return r
+    b = request.get_json(silent=True) or {}
+    tipo = (b.get("tipo") or "").strip()
+    alvo = _rx_uuid(b.get("id"))
+    if tipo not in ("modulo", "consultor"):
+        return _err(400, "tipo deve ser modulo ou consultor.")
+    if not alvo:
+        return _err(400, "id precisa ser UUID.")
+    row = q("select pdi.fn_arquivar(%s, %s::uuid) as r", (tipo, alvo), one=True)
+    return _json(row["r"] if row else {"ok": True})
+
+
 # ── Dados ───────────────────────────────────────────────────────────────────
 @app.get("/api/clientes")
 def api_clientes():
