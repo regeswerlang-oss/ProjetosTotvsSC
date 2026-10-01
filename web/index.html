@@ -7848,7 +7848,13 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 
   // ── recortes ──────────────────────────────────────────────────────────────
   const naFrente = () => RX.consultores.filter(c => !RX.frente || (c.frente || 'Funcional') === RX.frente);
-  const modulosVis = () => RX.modulos.filter(m => !RX.grupo || (RX.grupoDe.get(m.id) || {}).nome === RX.grupo);
+  const fam = g => (g && (g.familia || g.nome)) || '';
+  const familias = () => {
+    const vistas = new Set(), fora = [];
+    RX.grupos.forEach(g => { const f = fam(g); if (f && !vistas.has(f)) { vistas.add(f); fora.push(f); } });
+    return fora;
+  };
+  const modulosVis = () => RX.modulos.filter(m => !RX.grupo || fam(RX.grupoDe.get(m.id)) === RX.grupo);
   function consultoresVis() {
     const q = RX.busca.trim().toLowerCase();
     const base = naFrente();
@@ -8247,8 +8253,10 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     f.innerHTML = '<option value="">Todas as frentes</option>' + fs.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
     f.value = fs.includes(RX.frente) ? RX.frente : (RX.frente = '');
     const g = sel('#rx-grupo');
-    g.innerHTML = '<option value="">Todos os grupos</option>' + RX.grupos.map(x => `<option value="${esc(x.nome)}">${esc(x.nome)}</option>`).join('');
-    g.value = RX.grupo;
+    const fs2 = familias();
+    g.innerHTML = '<option value="">Todos os grupos</option>'
+      + fs2.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('');
+    g.value = fs2.includes(RX.grupo) ? RX.grupo : (RX.grupo = '');
     const c = sel('#rx-consultor');
     c.innerHTML = fs.length > 1
       ? fs.map(fr => `<optgroup label="${esc(fr)}">` + RX.consultores.filter(x => (x.frente || 'Funcional') === fr)

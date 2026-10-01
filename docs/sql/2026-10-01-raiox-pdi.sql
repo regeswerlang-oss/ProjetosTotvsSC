@@ -423,3 +423,15 @@ from (values
   ('CONFIGURADOR',30),('ADVPL_TLPP',31),('FLUIG',32),('INTEGRACOES',33),
   ('SV_CONFIG',34),('SV_CAPACITACAO',35),('SV_DESENV',36)
 ) as v(cod, ord) where m.codigo = v.cod;
+
+-- ============================================================================
+--  Família de grupos (01/10/2026)
+--  Um rótulo ACIMA do grupo, usado só no FILTRO. No grid cada grupo continua
+--  sendo a sua própria faixa. É o que permite uma opção "Fiscal" na lista e
+--  duas bandas (Fiscal e TAF) na matriz, sem inventar um terceiro nível de
+--  cabeçalho. `familia` nula = o grupo é a própria família.
+-- ============================================================================
+alter table pdi.grupos add column if not exists familia text;
+
+update pdi.grupos set nome = 'Fiscal' where nome = 'Comercial & Fiscal';
+update pdi.grupos set familia = 'Fiscal' where nome in ('Fiscal', 'TAF');
