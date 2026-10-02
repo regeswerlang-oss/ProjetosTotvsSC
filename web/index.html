@@ -381,6 +381,7 @@
           <button id="est-leiaute"      class="rail-btn">⚙ Leiaute<span class="rail-sub">EEFF · FF · EEUUFF</span></button>
           <button id="est-grupo-novo"   class="rail-btn">＋ Grupo</button>
           <button id="est-empresa-nova" class="rail-btn">＋ Empresa</button>
+          <button id="est-unidade-nova" class="rail-btn">＋ Unidade<span class="rail-sub">de negócio</span></button>
           <button id="est-filial-nova"  class="rail-btn">＋ Filial</button>
           <button id="est-semear"       class="rail-btn rail-sep rail-btn-cta">📚 Trazer módulos<span class="rail-sub">catálogo de tabelas</span></button>
           <button id="est-tabela-nova"  class="rail-btn">＋ Tabela<span class="rail-sub">inclusão manual</span></button>
@@ -7423,6 +7424,11 @@ function modulosDefinidos() {
 }
 
 function estCfg() { return est.dados?.config || { leiaute: 'EEFF' }; }
+// Ordem em que os niveis aparecem na tela. O VALOR continua gravado na posicao
+// canonica da SX2 (empresa, unidade, filial) - o data-pos de cada select carrega
+// o indice canonico, nao a posicao visual. Trocar isso faria o painel comparar
+// com a medicao da aba Empresas confrontando niveis diferentes.
+function estOrdemNiveis() { return est.dados?.ordem_niveis || [0, 1, 2]; }
 
 /** Exemplo de código montado com os tamanhos definidos — vale mais que a
  *  explicação: o consultor confere "0101" com o cliente em dois segundos. */
@@ -7480,6 +7486,18 @@ function estBlocoLeiaute(cfg, d) {
         <p class="text-[11px] uppercase tracking-wide text-slate-400">Tamanhos</p>
         <p class="text-sm mt-1">Empresa <b>${cfg.tam_empresa || 0}</b> ·
            Unidade <b>${cfg.tam_unidade || 0}</b> · Filial <b>${cfg.tam_filial || 0}</b></p>
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Ordem das entidades</p>
+        <p class="text-sm mt-1">${estOrdemNiveis().map(i => EST_NIVEL_TIT[i]).join(' · ')}</p>
+        ${(d.ordem || 'EUF') !== (d.ordem_padrao || 'EUF')
+          ? '<p class="text-[11px] text-amber-800 mt-0.5">fora do padrão TOTVS (E·U·F)</p>' : ''}
+      </div>
+      <div>
+        <p class="text-[11px] uppercase tracking-wide text-slate-400">Unidade de negócio</p>
+        <p class="text-sm mt-1">${cfg.usa_unidade
+          ? `<b>em uso</b> · ${(d.unidades || []).length} cadastrada(s)`
+          : '<span class="text-slate-400">não utilizada</span>'}</p>
       </div>
       <div>
         <p class="text-[11px] uppercase tracking-wide text-slate-400">Exemplo de código</p>
@@ -7556,6 +7574,14 @@ function estBlocoArvore(d) {
               ${e.uf ? `<span class="text-xs text-slate-400">${escapeHtml(e.uf)}</span>` : ''}
               <button data-est-empresa="${e.id}" class="text-xs text-slate-400 hover:text-totvs-petroleo">editar</button>
             </div>
+            ${estCfg().usa_unidade ? `<div class="mt-1 flex flex-wrap items-center gap-1 text-xs">
+              <span class="text-slate-400">Unidades:</span>
+              ${(d.unidades || []).filter(u => u.empresa_id === e.id).map(u =>
+                `<button data-est-unidade="${u.id}" class="px-1.5 py-0.5 rounded bg-slate-100
+                   hover:bg-slate-200"><b class="font-mono">${escapeHtml(u.codigo)}</b>
+                   ${escapeHtml(u.nome || '')}</button>`).join('')
+                || '<span class="text-slate-400">nenhuma — use <b>＋ Unidade</b></span>'}
+            </div>` : ''}
             <table class="w-full text-sm mt-1.5 table-fixed">
               <tbody>
               ${(porEmpresa[e.id] || []).map(f => `
@@ -7672,7 +7698,7 @@ function estBlocoTabelas(d) {
       <input id="est-busca" value="${escapeHtml(est.busca)}" placeholder="filtrar tabela ou descrição"
         class="px-2 py-1 text-sm border border-slate-300 rounded-md w-56">
       <span class="ml-auto text-xs text-slate-400">
-        ${EST_NIVEL_TIT.filter((_, i) => niveis.includes(i)).join(' · ')} ·
+        ${estOrdemNiveis().filter(i => niveis.includes(i)).map(i => EST_NIVEL_TIT[i]).join(' · ')} ·
         <b>E</b> exclusiva, <b>C</b> compartilhada</span>
     </div>
     <div class="overflow-x-auto">
@@ -7682,7 +7708,7 @@ function estBlocoTabelas(d) {
             <th class="px-3 py-2 text-left">Tabela</th>
             <th class="px-3 py-2 text-left">Descrição</th>
             <th class="px-3 py-2 text-left">Tipo</th>
-            ${EST_NIVEL_TIT.map((t, i) => `<th class="px-2 py-2 text-center ${niveis.includes(i) ? '' : 'opacity-40'}">${t}</th>`).join('')}
+            ${estOrdemNiveis().map(i => `<th class="px-2 py-2 text-center ${niveis.includes(i) ? '' : 'opacity-40'}">${EST_NIVEL_TIT[i]}</th>`).join('')}
             <th class="px-3 py-2 text-center">Sugestão</th>
             <th class="px-2 py-2 text-center" title="✓ = o compartilhamento foi alterado depois de semeado. Passe o mouse para ver quem alterou.">Alterada</th>
             <th class="px-2 py-2 text-center" title="Propostas de outro compartilhamento, para discutir antes de mudar.">Discussão</th>
@@ -7709,7 +7735,7 @@ function estBlocoTabelas(d) {
             <td class="px-3 py-1.5"><span class="text-[10px] px-1.5 py-0.5 rounded ${
               t.tipo === 'movimento' ? 'bg-amber-100 text-amber-900' : 'bg-sky-100 text-sky-900'}">
               ${t.tipo === 'movimento' ? 'movimento' : 'cadastro'}</span></td>
-            ${[0, 1, 2].map(i => `<td class="px-2 py-1.5 text-center">
+            ${estOrdemNiveis().map(i => `<td class="px-2 py-1.5 text-center">
               <select data-est-mode="${t.id}" data-pos="${i}" ${niveis.includes(i) ? '' : 'disabled'}
                 class="px-1 py-0.5 text-xs border border-slate-300 rounded ${niveis.includes(i) ? '' : 'opacity-40'}">
                 <option value="" ${c[i] ? '' : 'selected'}>—</option>
@@ -7900,7 +7926,7 @@ function estModalDiscussao(t) {
     <div class="border-t border-slate-200 pt-3">
       <p class="text-[11px] uppercase tracking-wide text-slate-400 mb-1">Nova proposta</p>
       <div class="flex items-end gap-3">
-        ${[0, 1, 2].map(i => `<label class="text-xs text-slate-500 ${niveis.includes(i) ? '' : 'opacity-40'}">
+        ${estOrdemNiveis().map(i => `<label class="text-xs text-slate-500 ${niveis.includes(i) ? '' : 'opacity-40'}">
           ${EST_NIVEL_TIT[i]}
           <select data-prop-pos="${i}" ${niveis.includes(i) ? '' : 'disabled'}
             class="block mt-1 px-2 py-1 border border-slate-300 rounded text-sm">
@@ -8025,6 +8051,8 @@ function ligaEstrutura() {
     () => estModalGrupo(est.dados.grupos.find(g => g.id === b.dataset.estGrupo))));
   $$('#est-conteudo [data-est-empresa]').forEach(b => b.addEventListener('click',
     () => estModalEmpresa(est.dados.empresas.find(e => e.id === b.dataset.estEmpresa))));
+  $$('#est-conteudo [data-est-unidade]').forEach(b => b.addEventListener('click',
+    () => estModalUnidade(est.dados.unidades.find(u => u.id === b.dataset.estUnidade))));
   $$('#est-conteudo [data-est-filial]').forEach(b => b.addEventListener('click',
     () => estModalFilial(est.dados.filiais.find(f => f.id === b.dataset.estFilial))));
 }
@@ -8056,25 +8084,54 @@ function estModalLeiaute() {
         ${(est.dados.leiautes || []).map(l => `<option value="${l.id}" ${l.id === cfg.leiaute ? 'selected' : ''}>
           ${escapeHtml(l.label)}</option>`).join('')}
       </select></label>
+    <label class="flex items-center gap-2 text-sm">
+      <input id="est-cfg-un" type="checkbox" class="accent-totvs-blue" ${cfg.usa_unidade ? 'checked' : ''}>
+      <span>Este cliente usa <b>Unidade de Negócio</b></span></label>
     <div class="grid grid-cols-3 gap-2">
       ${campo('est-cfg-te', 'Tam. empresa', String(cfg.tam_empresa ?? 2), 'number')}
       ${campo('est-cfg-tu', 'Tam. unidade', String(cfg.tam_unidade ?? 0), 'number')}
       ${campo('est-cfg-tf', 'Tam. filial',  String(cfg.tam_filial  ?? 2), 'number')}
     </div>
+    <label class="block"><span class="text-xs text-slate-500">Ordem das entidades no código</span>
+      <select id="est-cfg-ordem" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+        ${(est.dados.ordens || []).map(o => `<option value="${o.id}" ${
+          o.id === (cfg.ordem || 'EUF') ? 'selected' : ''}>${escapeHtml(o.label)}</option>`).join('')}
+      </select></label>
+    <p id="est-cfg-aviso" class="text-xs hidden rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+      A TOTVS documenta o código corporativo como <b>EEEUUUFFF</b> (Empresa, Unidade de Negócio
+      e Filial): o que varia é o tamanho de cada nível, não a ordem. Fora disso, confirme com a
+      fábrica antes da carga — a conferência vai manter esse aviso.</p>
     ${campo('est-cfg-obs', 'Observação', cfg.observacao || '')}
     <p class="text-xs text-slate-500">Trocar o leiaute depois da carga é retrabalho de base
       inteira — confirme com o cliente antes de gravar.</p>`, 'Gravar');
   // Trocar o leiaute repõe os tamanhos padrão: quem escolhe FF não quer
   // continuar com 2 caracteres de empresa no campo ao lado.
   const padrao = { FF: [0, 0, 2], EEFF: [2, 0, 2], EEUUFF: [2, 2, 2] };
-  m.campo('est-cfg-leiaute').addEventListener('change', ev => {
-    const p = padrao[ev.target.value] || padrao.EEFF;
+  const poeTam = (lei) => {
+    const p = padrao[lei] || padrao.EEFF;
     m.campo('est-cfg-te').value = p[0];
     m.campo('est-cfg-tu').value = p[1];
     m.campo('est-cfg-tf').value = p[2];
+  };
+  m.campo('est-cfg-leiaute').addEventListener('change', ev => {
+    poeTam(ev.target.value);
+    // Leiaute e a marcacao sao a MESMA decisao: escolher EEUUFF marca, sair dele
+    // desmarca. Sem isso a tela diria que usa unidade com o codigo sem espaco.
+    m.campo('est-cfg-un').checked = ev.target.value === 'EEUUFF';
   });
+  m.campo('est-cfg-un').addEventListener('change', ev => {
+    const lei = ev.target.checked ? 'EEUUFF' : 'EEFF';
+    m.campo('est-cfg-leiaute').value = lei;
+    poeTam(lei);
+  });
+  const vigia = () => m.campo('est-cfg-aviso').classList
+    .toggle('hidden', m.campo('est-cfg-ordem').value === (est.dados.ordem_padrao || 'EUF'));
+  m.campo('est-cfg-ordem').addEventListener('change', vigia);
+  vigia();
   estSalvar(m, 'config', () => ({
     leiaute: m.campo('est-cfg-leiaute').value,
+    usa_unidade: m.campo('est-cfg-un').checked,
+    ordem: m.campo('est-cfg-ordem').value,
     tam_empresa: +m.campo('est-cfg-te').value, tam_unidade: +m.campo('est-cfg-tu').value,
     tam_filial: +m.campo('est-cfg-tf').value, observacao: m.campo('est-cfg-obs').value,
   }), 'Gravar');
@@ -8092,6 +8149,32 @@ function estModalGrupo(g) {
   estSalvar(m, 'grupo', () => ({
     id: g?.id, codigo: m.campo('est-g-cod').value, nome: m.campo('est-g-nome').value,
     observacao: m.campo('est-g-obs').value, excluir: !!m.campo('est-g-excluir')?.checked,
+  }), 'Gravar');
+}
+
+function estModalUnidade(u) {
+  if (!estGuarda()) return;
+  const cfg = estCfg();
+  if (!cfg.usa_unidade) {
+    alert('Este cliente não usa unidade de negócio. Marque a opção em "⚙ Leiaute" antes de cadastrar unidades.');
+    return;
+  }
+  const m = modal(u ? 'Unidade de negócio' : 'Nova unidade de negócio',
+    `<label class="block"><span class="text-xs text-slate-500">Empresa</span>
+      <select id="est-u-emp" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+        ${est.dados.empresas.map(e => `<option value="${e.id}" ${u?.empresa_id === e.id ? 'selected' : ''}>
+          ${escapeHtml(e.codigo)} · ${escapeHtml(e.nome)}</option>`).join('')}
+      </select></label>` +
+    campo('est-u-cod', `Código (${cfg.tam_unidade || 0} caracteres)`, u?.codigo || '') +
+    campo('est-u-nome', 'Nome da unidade', u?.nome || '') +
+    campo('est-u-obs', 'Observação', u?.observacao || '') +
+    (u ? `<label class="flex items-center gap-2 text-sm text-rose-700">
+      <input id="est-u-excluir" type="checkbox"> Remover esta unidade</label>` : ''),
+    'Gravar');
+  estSalvar(m, 'unidade', () => ({
+    id: u?.id, empresa_id: m.campo('est-u-emp').value,
+    codigo: m.campo('est-u-cod').value, nome: m.campo('est-u-nome').value,
+    observacao: m.campo('est-u-obs').value, excluir: !!m.campo('est-u-excluir')?.checked,
   }), 'Gravar');
 }
 
@@ -8212,6 +8295,7 @@ $('#est-reload').addEventListener('click', () => carregaEstrutura(est.customer))
 $('#est-leiaute').addEventListener('click', estModalLeiaute);
 $('#est-grupo-novo').addEventListener('click', () => estModalGrupo(null));
 $('#est-empresa-nova').addEventListener('click', () => estModalEmpresa(null));
+$('#est-unidade-nova').addEventListener('click', () => estModalUnidade(null));
 $('#est-filial-nova').addEventListener('click', () => estModalFilial(null));
 $('#est-semear').addEventListener('click', estModalSemear);
 $('#est-tabela-nova').addEventListener('click', () => estModalTabela(null));

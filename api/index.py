@@ -4825,7 +4825,48 @@ ESTRUT_LEIAUTES = {
                "ajuda": "Empresa + unidade de negócio + filial (ex.: 01 + 01 + 02 = 010102)."},
 }
 # Índice de cada nível dentro da string de 3 posições do compartilhamento.
+# ATENÇÃO: esta ordem é CANÔNICA e não muda nunca — é a da SX2
+# (X2_MODOEMP | X2_MODOUN | X2_MODO). A ordem escolhida pelo cliente muda como o
+# CÓDIGO da filial é montado e como a tela EXIBE, jamais como o compartilhamento
+# é gravado. Trocar a gravação faria a comparação com a medição da aba Empresas
+# confrontar níveis diferentes achando que são o mesmo.
 ESTRUT_NIVEL = {"empresa": 0, "unidade": 1, "filial": 2}
+
+# Ordem das entidades dentro do código da filial. A TOTVS documenta o código
+# corporativo como "EEEUUUFFF (Empresa, Unidade de Negócio e Filial)": a ordem é
+# fixa, o que varia é o tamanho de cada nível. As outras permutações existem a
+# pedido do projeto (01/10/2026) e a conferência avisa quando saem do padrão.
+ESTRUT_ORDEM_PADRAO = "EUF"
+ESTRUT_ORDENS = {
+    "EUF": "Empresa · Unidade · Filial (padrão TOTVS)",
+    "EFU": "Empresa · Filial · Unidade",
+    "UEF": "Unidade · Empresa · Filial",
+    "UFE": "Unidade · Filial · Empresa",
+    "FEU": "Filial · Empresa · Unidade",
+    "FUE": "Filial · Unidade · Empresa",
+}
+ESTRUT_LETRA = {"E": 0, "U": 1, "F": 2}
+
+
+def _estrut_ordem(cfg):
+    """Ordem escolhida, validada. Qualquer coisa fora das permutações volta ao
+    padrão: ordem inválida gravada é melhor ignorar do que propagar."""
+    o = (cfg.get("ordem") or ESTRUT_ORDEM_PADRAO).upper()
+    return o if o in ESTRUT_ORDENS else ESTRUT_ORDEM_PADRAO
+
+
+def _estrut_fatias(cfg):
+    """Onde cada nível começa dentro do código da filial, na ordem escolhida.
+    Devolve {nivel: (inicio, tamanho)} — é isso que permite conferir o código
+    sem assumir que a empresa vem primeiro."""
+    tam = {0: cfg.get("tam_empresa") or 0, 1: cfg.get("tam_unidade") or 0,
+           2: cfg.get("tam_filial") or 0}
+    pos, ini = {}, 0
+    for letra in _estrut_ordem(cfg):
+        i = ESTRUT_LETRA[letra]
+        pos[i] = (ini, tam[i])
+        ini += tam[i]
+    return pos
 ESTRUT_NIVEL_LABEL = ("Empresa", "Unidade de Negócio", "Filial")
 
 
@@ -4864,6 +4905,7 @@ def _estrut_cfg(customer):
         return dict(r)
     return {"customer": customer, "leiaute": "EEFF", "tam_empresa": 2,
             "tam_unidade": 0, "tam_filial": 2, "observacao": None,
+            "usa_unidade": False, "ordem": ESTRUT_ORDEM_PADRAO,
             "definido_por": None, "definido_em": None, "novo": True}
 
 
@@ -4887,7 +4929,17 @@ def _estrut_alertas(cfg, empresas, filiais, tabelas):
     niveis = _estrut_niveis(cfg["leiaute"])
     tam = _estrut_tam_esperado(cfg)
     tam_emp = cfg.get("tam_empresa") or 0
+    fatias = _estrut_fatias(cfg)
     al = []
+    # Sair de E-U-F é decisão do projeto, não erro de digitação - entra como
+    # aviso para a ata, com a fonte, e não como bloqueio.
+    if _estrut_ordem(cfg) != ESTRUT_ORDEM_PADRAO:
+        al.append({"nivel": "aviso", "onde": "leiaute", "chave": _estrut_ordem(cfg),
+                   "texto": "A ordem das entidades no código foge do padrão. A TOTVS "
+                            "documenta o código corporativo como EEEUUUFFF (Empresa, "
+                            "Unidade de Negócio e Filial) - o que varia é o tamanho de "
+                            "cada nível, não a ordem. Confirme com a fábrica antes da carga.",
+                   "fonte": "Central de Atendimento - SIGAFIN - gestão corporativa (ex.: EEUUFF)"})
     emp_por_id = {e["id"]: e for e in empresas}
 
     for e in empresas:
@@ -4901,11 +4953,15 @@ def _estrut_alertas(cfg, empresas, filiais, tabelas):
             al.append({"nivel": "erro", "onde": "filial", "chave": cod,
                        "texto": f"Código da filial com {len(cod)} caractere(s); "
                                 f"o leiaute {cfg['leiaute']} espera {tam}."})
+        # Onde o pedaço da empresa cai depende da ORDEM escolhida: com UEF ele
+        # não está no começo. Conferir por posição em vez de startswith é o que
+        # faz a regra continuar valendo fora do padrão.
         dona = emp_por_id.get(f["empresa_id"])
-        if tam_emp and dona and not cod.startswith(dona["codigo"] or ""):
+        ini, n = fatias.get(ESTRUT_NIVEL["empresa"], (0, 0))
+        if n and dona and len(cod) >= ini + n and cod[ini:ini + n] != (dona["codigo"] or ""):
             al.append({"nivel": "erro", "onde": "filial", "chave": cod,
-                       "texto": f"A filial é da empresa {dona['codigo']} mas o código não "
-                                f"começa por {dona['codigo']}."})
+                       "texto": f"A filial é da empresa {dona['codigo']}, mas a posição "
+                                f"{ini + 1}-{ini + n} do código traz '{cod[ini:ini + n]}'."})
     if not any(f.get("matriz") for f in filiais) and filiais:
         al.append({"nivel": "aviso", "onde": "filial", "chave": "—",
                    "texto": "Nenhuma filial marcada como matriz."})
@@ -5052,6 +5108,8 @@ def api_estrutura(customer):
                  "order by ordem, codigo", (customer,))
     filiais = q("select * from cockpit.estrut_filiais where customer=%s and ativo "
                 "order by ordem, codigo", (customer,))
+    unidades = q("select * from cockpit.estrut_unidades where customer=%s and ativo "
+                 "order by ordem, codigo", (customer,))
     tabelas = q("select * from cockpit.estrut_tabelas where customer=%s and ativo "
                 "order by modulo, tabela", (customer,))
     catalogo = q("select modulo, count(*) n from cockpit.estrut_catalogo "
@@ -5076,7 +5134,15 @@ def api_estrutura(customer):
                                for k, v in ESTRUT_LEIAUTES.items()],
                   "niveis": _estrut_niveis(cfg["leiaute"]),
                   "niveis_label": list(ESTRUT_NIVEL_LABEL),
+                  "ordem": _estrut_ordem(cfg),
+                  "ordem_padrao": ESTRUT_ORDEM_PADRAO,
+                  # Índices dos níveis NA ORDEM DE EXIBIÇÃO. A tela percorre esta
+                  # lista para desenhar as colunas; o valor continua gravado na
+                  # posição canônica da SX2.
+                  "ordem_niveis": [ESTRUT_LETRA[c] for c in _estrut_ordem(cfg)],
+                  "ordens": [{"id": k, "label": v} for k, v in ESTRUT_ORDENS.items()],
                   "grupos": grupos, "empresas": empresas, "filiais": filiais,
+                  "unidades": unidades,
                   "tabelas": tabelas, "catalogo": catalogo,
                   "alertas": _estrut_alertas(cfg, empresas, filiais, tabelas),
                   "interno": eh_interno()})
@@ -5099,21 +5165,36 @@ def api_estrutura_config(customer):
         return d
     b = request.get_json(silent=True) or {}
     leiaute = (b.get("leiaute") or "EEFF").upper()
+    # O campo "usa unidade de negócio" e o leiaute são a MESMA decisão vista de
+    # dois lugares: marcar liga o nível, desmarcar derruba. Um só dono evita a
+    # tela dizer que usa unidade enquanto o código não reserva espaço para ela.
+    usa_un = bool(b.get("usa_unidade"))
+    if "usa_unidade" in b:
+        if usa_un and leiaute != "EEUUFF":
+            leiaute = "EEUUFF"
+        elif not usa_un and leiaute == "EEUUFF":
+            leiaute = "EEFF"
+    else:
+        usa_un = leiaute == "EEUUFF"
     if leiaute not in ESTRUT_LEIAUTES:
         return _err(422, "Leiaute inválido.")
+    ordem = (b.get("ordem") or ESTRUT_ORDEM_PADRAO).upper()
+    if ordem not in ESTRUT_ORDENS:
+        return _err(422, "Ordem inválida — use uma permutação de E, U e F.")
     t = ESTRUT_LEIAUTES[leiaute]["tam"]
     execute("""insert into cockpit.estrut_config
                  (customer, leiaute, tam_empresa, tam_unidade, tam_filial,
-                  observacao, definido_por, definido_em)
-               values (%s,%s,%s,%s,%s,%s,%s, now())
+                  usa_unidade, ordem, observacao, definido_por, definido_em)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s, now())
                on conflict (customer) do update
                   set leiaute=excluded.leiaute, tam_empresa=excluded.tam_empresa,
                       tam_unidade=excluded.tam_unidade, tam_filial=excluded.tam_filial,
+                      usa_unidade=excluded.usa_unidade, ordem=excluded.ordem,
                       observacao=excluded.observacao, definido_por=excluded.definido_por,
                       definido_em=now()""",
             (customer, leiaute,
              int(b.get("tam_empresa") or t[0]), int(b.get("tam_unidade") or t[1]),
-             int(b.get("tam_filial") or t[2]),
+             int(b.get("tam_filial") or t[2]), usa_un, ordem,
              (b.get("observacao") or "").strip() or None, current_user()))
     return _json({"ok": True, "config": _estrut_cfg(customer)})
 
@@ -5186,6 +5267,51 @@ def api_estrutura_empresa(customer):
                    on conflict (customer, codigo) do update
                       set grupo_id=excluded.grupo_id, nome=excluded.nome, cnpj=excluded.cnpj,
                           uf=excluded.uf, observacao=excluded.observacao, ativo=true""",
+                (customer,) + campos + (current_user(),))
+    return _json({"ok": True})
+
+
+@app.post("/api/estrutura/<customer>/unidade")
+def api_estrutura_unidade(customer):
+    """Codificação da unidade de negócio. Pendura na empresa porque é assim que
+    o código da filial se compõe; a ORDEM escolhida muda onde o pedaço da
+    unidade cai dentro do código, não de quem ela é filha."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "estrutura")):
+        return d
+    b = request.get_json(silent=True) or {}
+    if b.get("excluir") and b.get("id"):
+        execute("update cockpit.estrut_unidades set ativo=false where id=%s and customer=%s",
+                (b["id"], customer))
+        return _json({"ok": True})
+    if not b.get("empresa_id"):
+        return _err(422, "A unidade precisa pertencer a uma empresa.")
+    try:
+        codigo, nome = _estrut_txt(b, "codigo", True), _estrut_txt(b, "nome", True)
+    except ValueError as e:
+        return _err(422, str(e))
+    cfg = _estrut_cfg(customer)
+    tam_un = cfg.get("tam_unidade") or 0
+    if not cfg.get("usa_unidade"):
+        return _err(409, "Este cliente não usa unidade de negócio. Marque a opção no "
+                         "Leiaute antes de cadastrar unidades.")
+    if tam_un and len(codigo) != tam_un:
+        return _err(422, f"O código da unidade tem {len(codigo)} caractere(s); o leiaute "
+                         f"reserva {tam_un}.")
+    campos = (b["empresa_id"], codigo, nome, _estrut_txt(b, "observacao"),
+              int(b.get("ordem") or 0))
+    if b.get("id"):
+        execute("""update cockpit.estrut_unidades set empresa_id=%s, codigo=%s, nome=%s,
+                     observacao=%s, ordem=%s
+                   where id=%s and customer=%s""", campos + (b["id"], customer))
+    else:
+        execute("""insert into cockpit.estrut_unidades
+                     (customer, empresa_id, codigo, nome, observacao, ordem, created_by)
+                   values (%s,%s,%s,%s,%s,%s,%s)
+                   on conflict (customer, empresa_id, codigo) do update
+                      set nome=excluded.nome, observacao=excluded.observacao,
+                          ordem=excluded.ordem, ativo=true""",
                 (customer,) + campos + (current_user(),))
     return _json({"ok": True})
 
