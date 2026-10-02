@@ -5700,7 +5700,7 @@ $('#mov-coletar').addEventListener('click', () => coletaAgora('movimentos'));
 //  Spec: docs/specs/2026-09-18-aba-empresas-compartilhamento.md
 // ============================================================================
 const emp = { customer: null, ambiente: 'producao', dados: null, data: null,
-              tipo: 'TODOS', soAlerta: false, sel: null };
+              tipo: 'TODOS', soAlerta: false, soDados: false, sel: null };
 
 // Consistências que NÃO são problema — o resto acende o alerta da célula
 const EMP_OK = new Set(['OK', 'VAZIA', 'TABELA NAO EXISTE', 'SEM CAMPO FILIAL']);
@@ -5743,11 +5743,22 @@ async function carregaEmpresas(customer, data = null) {
 }
 
 /** Agrupa os itens em tabela → empresa → {situacao, sx2, total, linhas, alertas}. */
+// Modulo de cada tabela medida. Vem do escopo definido na aba Estrutura - e la
+// que o modulo e decidido. Tabela medida que nao esta mais no escopo cai em
+// "Outros" em vez de sumir da matriz.
+function empModulos() {
+  const m = new Map();
+  (emp.dados?.escopo || []).forEach(r => m.set((r.tabela || '').toUpperCase(), r.modulo || 'Outros'));
+  return m;
+}
+
 function empMatriz(itens) {
+  const mods = empModulos();
   const tabs = new Map();
   itens.forEach(i => {
     if (emp.tipo !== 'TODOS' && i.tipo !== emp.tipo) return;
-    if (!tabs.has(i.tabela)) tabs.set(i.tabela, { tabela: i.tabela, descricao: i.descricao, tipo: i.tipo, emps: {} });
+    if (!tabs.has(i.tabela)) tabs.set(i.tabela, { tabela: i.tabela, descricao: i.descricao,
+      tipo: i.tipo, modulo: mods.get((i.tabela || '').toUpperCase()) || 'Outros', emps: {} });
     const t = tabs.get(i.tabela);
     const c = t.emps[i.empresa] || (t.emps[i.empresa] = {
       situacao: i.situacao, sx2: i.sx2, fisica: i.tabela_fisica, total: 0, linhas: [], alertas: 0 });
@@ -5757,8 +5768,22 @@ function empMatriz(itens) {
   });
   let lista = [...tabs.values()];
   if (emp.soAlerta) lista = lista.filter(t => Object.values(t.emps).some(c => c.alertas));
+  // "Com dados" = alguma empresa mediu registro. Com 332 tabelas inexistentes na
+  // Acosul, a matriz inteira e ruido e o que importa some no meio.
+  if (emp.soDados) lista = lista.filter(t => Object.values(t.emps).some(c => c.total > 0));
   const ordem = { CADASTRO: 0, MOVIMENTO: 1 };
-  return lista.sort((a, b) => (ordem[a.tipo] ?? 9) - (ordem[b.tipo] ?? 9) || a.tabela.localeCompare(b.tabela));
+  return lista.sort((a, b) => (a.modulo || '').localeCompare(b.modulo || '')
+    || (ordem[a.tipo] ?? 9) - (ordem[b.tipo] ?? 9) || a.tabela.localeCompare(b.tabela));
+}
+
+/** Titulo da faixa: o modulo, e o tipo so quando aquele modulo tem cadastro e
+ *  movimento ao mesmo tempo - repetir "Cadastros" em modulo que so tem cadastro
+ *  e ruido de leitura. */
+function empFaixa(matriz, t) {
+  const doMod = matriz.filter(x => x.modulo === t.modulo);
+  const misto = doMod.some(x => x.tipo !== doMod[0].tipo);
+  const tipo = t.tipo === 'MOVIMENTO' ? 'Movimentos / histórico' : 'Cadastros';
+  return misto ? `${t.modulo} · ${tipo}` : t.modulo;
 }
 
 function empSM0Html(sm0) {
@@ -5895,6 +5920,8 @@ function pintaEmpresas() {
             class="cad-visao-btn ${k ? 'border-l border-slate-300' : ''} ${emp.tipo === t ? 'is-on' : ''}">${
             { TODOS: 'Todas', CADASTRO: 'Cadastros', MOVIMENTO: 'Movimentos' }[t]}</button>`).join('')}
       </div>
+      <label class="inline-flex items-center gap-1 text-xs"><input id="emp-so-dados" type="checkbox"
+        ${emp.soDados ? 'checked' : ''} class="accent-totvs-blue"> só tabelas com dados</label>
       <label class="inline-flex items-center gap-1 text-xs"><input id="emp-so-alerta" type="checkbox"
         ${emp.soAlerta ? 'checked' : ''} class="accent-totvs-blue"> só tabelas com alerta</label>
     </div>`;
@@ -5914,8 +5941,8 @@ function pintaEmpresas() {
           ${empresas.map(e => `<th class="px-2 py-2 text-center"><span class="font-mono font-semibold text-slate-700">${escapeHtml(e)}</span>
             <div class="font-normal text-[10px] truncate max-w-[9rem]">${escapeHtml(nomeEmp[e] || '')}</div></th>`).join('')}</tr>
         </thead>
-        <tbody>${matriz.map((t, k) => `${k === 0 || matriz[k - 1].tipo !== t.tipo
-            ? `<tr><td colspan="${empresas.length + 1}" class="px-3 pt-3 pb-1 text-[11px] uppercase tracking-wide text-slate-400">${escapeHtml(t.tipo === 'MOVIMENTO' ? 'Movimentos / histórico' : 'Cadastros')}</td></tr>` : ''}
+        <tbody>${matriz.map((t, k) => `${k === 0 || matriz[k - 1].modulo !== t.modulo || matriz[k - 1].tipo !== t.tipo
+            ? `<tr><td colspan="${empresas.length + 1}" class="px-3 pt-3 pb-1 text-[11px] uppercase tracking-wide text-slate-400">${escapeHtml(empFaixa(matriz, t))}</td></tr>` : ''}
             <tr class="border-t border-slate-100">
               <td class="px-3 py-1.5"><b class="font-mono">${escapeHtml(t.tabela)}</b>
                 <span class="text-xs text-slate-500">${escapeHtml(t.descricao || '')}</span></td>
@@ -5947,6 +5974,7 @@ function pintaEmpresas() {
   $('#emp-data')?.addEventListener('change', ev => { emp.sel = null; carregaEmpresas(emp.customer, ev.target.value); });
   $$('[data-emptipo]', box).forEach(b => b.addEventListener('click', () => { emp.tipo = b.dataset.emptipo; pintaEmpresas(); }));
   $('#emp-so-alerta')?.addEventListener('change', ev => { emp.soAlerta = ev.target.checked; pintaEmpresas(); });
+  $('#emp-so-dados')?.addEventListener('change', ev => { emp.soDados = ev.target.checked; emp.sel = null; pintaEmpresas(); });
   $$('[data-emptab]', box).forEach(td => td.addEventListener('click', () => {
     emp.sel = { tabela: td.dataset.emptab, empresa: td.dataset.empemp };
     pintaEmpresas();
