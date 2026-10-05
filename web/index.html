@@ -167,6 +167,26 @@
   .cp tr[data-cpcli].is-on td:first-child { box-shadow:inset 3px 0 0 var(--totvs-blue); }
   .cp tfoot td { padding:.4rem .5rem; border-top:1px solid #e2e8f0; background:#f8fafc;
                  font-weight:700; color:#0f172a; }
+  /* Barra de estado da leitura. Era um texto cinza espremido entre os botoes e
+     passava batido justamente quando mais importa: enquanto carrega, e quando
+     a janela volta truncada (= o numero na tela esta INCOMPLETO). */
+  .cp .cp-status { display:flex; align-items:center; gap:.6rem; padding:.6rem .9rem;
+                   border-radius:.6rem; font-size:.8125rem; line-height:1.35;
+                   border:1px solid; margin-bottom:1rem; }
+  .cp .cp-status b { font-weight:700; }
+  .cp .cp-status.st-ok   { background:#f8fafc; border-color:#e2e8f0; color:#475569; }
+  .cp .cp-status.st-load { background:#eff6ff; border-color:#bfdbfe; color:#1e40af; }
+  .cp .cp-status.st-warn { background:#fffbeb; border-color:#fcd34d; color:#92400e; }
+  .cp .cp-status .cp-sino { margin-left:auto; font-size:.72rem; font-weight:700;
+                            text-transform:uppercase; letter-spacing:.06em; }
+  .cp .cp-spin { width:1.05rem; height:1.05rem; border:2px solid #bfdbfe; flex:0 0 auto;
+                 border-top-color:#1d4ed8; border-radius:50%; animation:cp-giro .7s linear infinite; }
+  @keyframes cp-giro { to { transform:rotate(360deg); } }
+  .cp .cp-ponto { width:.5rem; height:.5rem; border-radius:50%; background:#94a3b8; flex:0 0 auto; }
+  .cp .st-warn .cp-ponto { background:#d97706; }
+  /* Enquanto carrega, o conteudo velho fica APAGADO: numero antigo com cara de
+     numero novo e pior do que tela vazia. */
+  .cp .cp-apaga { opacity:.3; pointer-events:none; filter:grayscale(.5); transition:opacity .15s; }
   .rx .rx-f { display:flex; flex-direction:column; gap:.25rem; }
   .rx .rx-f > span { font-size:.625rem; letter-spacing:.09em; text-transform:uppercase;
                      font-weight:700; color:#94a3b8; }
@@ -951,11 +971,11 @@
                    class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm w-56">
             <button id="cp-expandir" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⊞ Expandir tudo</button>
             <button id="cp-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
-            <span id="cp-readout" class="text-xs text-slate-500"></span>
           </div>
 
           <div id="cp-msg" class="hidden mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"></div>
           <div id="cp-aviso" class="hidden mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"></div>
+          <div id="cp-readout" class="cp-status st-ok"></div>
           <div id="cp-kpis" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-5"></div>
           <div id="cp-resumo" class="grid gap-3 lg:grid-cols-2 mb-5"></div>
           <div id="cp-blocos" class="space-y-4"></div>
@@ -9409,6 +9429,23 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     return `${d}/${m}/${y.slice(2)}`;
   }
 
+  // UM lugar só decide o que a barra diz. Antes o estado era escrito em três
+  // pontos diferentes (carregando, erro, pronto) e cada um com um formato.
+  function estado(tipo, html, selo) {
+    const b = el('#cp-readout');
+    if (!b) return;
+    b.className = 'cp-status st-' + tipo;
+    b.classList.toggle('hidden', !html);
+    const icone = tipo === 'load' ? '<i class="cp-spin"></i>' : '<i class="cp-ponto"></i>';
+    b.innerHTML = html ? icone + '<span>' + html + '</span>'
+      + (selo ? `<span class="cp-sino">${esc(selo)}</span>` : '') : '';
+  }
+
+  function apaga(ligado) {
+    ['#cp-kpis', '#cp-resumo', '#cp-blocos'].forEach(k =>
+      el(k) && el(k).classList.toggle('cp-apaga', !!ligado));
+  }
+
   function msg(texto, qual) {
     const box = el(qual === 'aviso' ? '#cp-aviso' : '#cp-msg');
     if (!box) return;
@@ -9478,9 +9515,13 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     if (cp.carregando) return;
     cp.carregando = true;
     msg('');
-    el('#cp-readout').textContent = 'lendo a agenda na API Totvs SC…';
-    el('#cp-blocos').innerHTML =
-      '<div class="text-slate-400 text-sm py-10 text-center">Carregando…</div>';
+    estado('load', 'Lendo a agenda <b>ao vivo</b> na API Totvs SC — a célula inteira '
+      + `dos últimos <b>${cp.dias} dias</b>. Pode levar alguns segundos.`, 'carregando');
+    apaga(true);
+    if (!cp.lanc) {
+      el('#cp-blocos').innerHTML =
+        '<div class="text-slate-400 text-sm py-10 text-center">Carregando…</div>';
+    }
     try {
       if (!cp.ctx) await carregaContexto();
       const qs = `coord=${encodeURIComponent(cp.coord)}`
@@ -9497,9 +9538,11 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       el('#cp-kpis').innerHTML = '';
       el('#cp-resumo').innerHTML = '';
       msg(`<b>Não foi possível montar o painel.</b> ${esc(e.message || e)}`);
-      el('#cp-readout').textContent = '';
+      estado('warn', 'A leitura da agenda falhou — os números abaixo foram limpos '
+        + 'para não mostrar dado velho como se fosse novo.', 'erro');
     } finally {
       cp.carregando = false;
+      apaga(false);
     }
   }
 
@@ -9529,11 +9572,23 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       ? new Date(cp.lanc.lido_em_ts * 1000).toLocaleTimeString('pt-BR',
           { hour: '2-digit', minute: '2-digit' })
       : '';
-    el('#cp-readout').innerHTML = lido
-      ? `agenda lida ${esc(lido)} · ${esc(cp.lanc.de)} a ${esc(cp.lanc.ate)}`
+    // TRUNCADO não é detalhe de diagnóstico: quer dizer que a leitura parou no
+    // meio e os números acima estão INCOMPLETOS. Isso muda a barra inteira de
+    // cor e vem antes de qualquer outra informação.
+    const comum = lido
+      ? `Agenda lida <b>ao vivo</b> às <b>${esc(lido)}</b> · <b>${dt(cp.lanc.de)} a ${dt(cp.lanc.ate)}</b>`
         + ` · ${plural(d.recursos || 0, 'consultor', 'consultores')} na célula`
-        + (d.truncado ? ' · <b class="text-amber-700">janela truncada pelo tempo</b>' : '')
+        + (cp.cliente ? ' · recorte de 1 cliente' : '')
       : '';
+    if (!lido) {
+      estado('ok', '');
+    } else if (d.truncado) {
+      estado('warn', `<b>Leitura incompleta.</b> A API não devolveu a célula inteira `
+        + `dentro do tempo, então os totais acima estão <b>por baixo</b>. Escolha um `
+        + `cliente ou reduza a janela e atualize. — ${comum}`, 'incompleto');
+    } else {
+      estado('ok', comum, 'atualizado');
+    }
 
     // O sincronismo do aceite é de outro processo (cron do Cockpit). Se ele
     // está velho, o CP tem de saber ANTES de cobrar alguém por uma OS que já

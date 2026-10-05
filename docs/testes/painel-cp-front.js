@@ -170,11 +170,46 @@ const ACE = {
   await pg.selectOption('#cp-cliente', '');
   await pg.waitForTimeout(400);
 
+  // QUADROS POR CLIENTE (lente 'tudo' para ver os dois clientes)
+  await pg.click('#cp-lente [data-cpl="tudo"]');
+  await pg.waitForTimeout(150);
+  const quadros = await pg.$$eval('#cp-resumo .cp-quadro', ns => ns.map(n => ({
+    titulo: n.querySelector('h4').textContent.trim(),
+    linhas: Array.from(n.querySelectorAll('tbody tr')).map(tr =>
+      Array.from(tr.querySelectorAll('td')).map(td => td.textContent.replace(/\s+/g, ' ').trim())),
+    rodape: Array.from(n.querySelectorAll('tfoot td')).map(td => td.textContent.trim()),
+  })));
+  t('dois quadros por cliente', quadros.length === 2, quadros.length);
+  t('quadro 1 é o de lançamento', /lançamento por cliente/.test(quadros[0].titulo), quadros[0].titulo);
+  t('quadro 2 é o de aceite', /aceite por cliente/.test(quadros[1].titulo), quadros[1].titulo);
+  t('lançamento: 2 clientes', quadros[0].linhas.length === 2, JSON.stringify(quadros[0].linhas));
+  t('lançamento: maior atraso primeiro', /TTS RS/.test(quadros[0].linhas[0][0]) && quadros[0].linhas[0][1] === '3',
+     JSON.stringify(quadros[0].linhas[0]));
+  t('lançamento: dias da mais antiga', /30 d/.test(quadros[0].linhas[0][3]), quadros[0].linhas[0][3]);
+  t('lançamento: rodapé soma tudo', quadros[0].rodape[1] === '4' && quadros[0].rodape[3] === '30 d',
+     JSON.stringify(quadros[0].rodape));
+  t('aceite: 2 clientes com a quantidade', quadros[1].linhas.length === 2
+     && quadros[1].linhas[0][1] === '2' && quadros[1].linhas[1][1] === '1',
+     JSON.stringify(quadros[1].linhas));
+  t('aceite: mais antiga do cliente', /34 d/.test(quadros[1].linhas[0][3]), quadros[1].linhas[0][3]);
+  t('aceite: rodapé com 3 OS', quadros[1].rodape[1] === '3', JSON.stringify(quadros[1].rodape));
+
+  const antesCli = pedidosIniciais.length;
+  await pg.click('#cp-resumo tr[data-cpcli]');
+  await pg.waitForTimeout(400);
+  const pedCli = pedidosIniciais.slice(antesCli).find(u => u.includes('/api/cp/lancamento')) || '';
+  t('clicar no cliente do quadro filtra', /cliente=10028400/.test(pedCli), pedCli);
+  t('e o select acompanha', (await pg.$eval('#cp-cliente', n => n.value)) === '10028400');
+  t('linha fica marcada', (await pg.$$('#cp-resumo tr[data-cpcli].is-on')).length >= 1);
+  await pg.click('#cp-resumo tr[data-cpcli].is-on');
+  await pg.waitForTimeout(400);
+  t('clicar de novo volta para Todos', (await pg.$eval('#cp-cliente', n => n.value)) === '');
+
   t('botão oferece expandir', (await pg.$eval('#cp-expandir', n => n.textContent)).includes('Expandir tudo'));
   await pg.click('#cp-expandir');
   await pg.waitForTimeout(200);
   t('expandir tudo abre blocos e grupos',
-    (await pg.$$('#cp-blocos tbody tr')).length === 5
+    (await pg.$$('#cp-blocos tbody tr')).length === 7
     && (await pg.$$('#cp-blocos details[open]')).length === 4,
     (await pg.$$('#cp-blocos tbody tr')).length + ' linhas / '
     + (await pg.$$('#cp-blocos details[open]')).length + ' grupos abertos');
