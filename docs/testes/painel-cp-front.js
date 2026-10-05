@@ -1,4 +1,5 @@
-// Teste do PAINEL CP (bloco de lançamento + bloco de aceite).
+// Teste do PAINEL CP (bloco de lançamento + bloco de aceite) e do subtítulo da
+// lista de projetos.
 //
 // Como rodar, da raiz do repo:
 //   cd web && python3 -m http.server 8731 --bind 127.0.0.1 &
@@ -7,8 +8,8 @@
 // Serve por HTTP e NAO por file:// — o fetch do navegador recusa o esquema
 // file: e o painel cairia em "Failed to fetch" sem nunca renderizar.
 // As rotas /api/* sao interceptadas: o Playwright casa na ordem INVERSA do
-// registro, por isso a generica entra primeiro e as especificas depois.
-const { chromium } = require('playwright');
+// registro, por isso a generica entra primeiro e as especificas depois. As
+// rotas que levam querystring precisam do * no fim do padrao, senao nao casam.
 const { chromium } = require('playwright');
 
 const CTX = {

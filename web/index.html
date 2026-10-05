@@ -157,6 +157,16 @@
   .cp tbody td { padding:.38rem .5rem; border-bottom:1px solid #f1f5f9; color:#334155; vertical-align:top; }
   .cp tbody tr:hover { background:#f8fafc; }
   .cp .num { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,monospace; }
+  .cp .cp-quadro { border:1px solid #e2e8f0; border-radius:.75rem; background:#fff; overflow:hidden; }
+  .cp .cp-quadro > header { padding:.7rem 1rem .6rem; border-bottom:1px solid #f1f5f9; }
+  .cp .cp-quadro h4 { font-size:.8125rem; font-weight:700; color:#0f172a; }
+  .cp .cp-quadro p { font-size:.6875rem; color:#94a3b8; margin-top:.1rem; }
+  .cp .cp-quadro .rolo { max-height:16rem; overflow:auto; }
+  .cp tr[data-cpcli] { cursor:pointer; }
+  .cp tr[data-cpcli].is-on { background:#ecfeff; }
+  .cp tr[data-cpcli].is-on td:first-child { box-shadow:inset 3px 0 0 var(--totvs-blue); }
+  .cp tfoot td { padding:.4rem .5rem; border-top:1px solid #e2e8f0; background:#f8fafc;
+                 font-weight:700; color:#0f172a; }
   .rx .rx-f { display:flex; flex-direction:column; gap:.25rem; }
   .rx .rx-f > span { font-size:.625rem; letter-spacing:.09em; text-transform:uppercase;
                      font-weight:700; color:#94a3b8; }
@@ -947,6 +957,7 @@
           <div id="cp-msg" class="hidden mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"></div>
           <div id="cp-aviso" class="hidden mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"></div>
           <div id="cp-kpis" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-5"></div>
+          <div id="cp-resumo" class="grid gap-3 lg:grid-cols-2 mb-5"></div>
           <div id="cp-blocos" class="space-y-4"></div>
         </div>
       </div>
@@ -9484,6 +9495,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     } catch (e) {
       el('#cp-blocos').innerHTML = '';
       el('#cp-kpis').innerHTML = '';
+      el('#cp-resumo').innerHTML = '';
       msg(`<b>Não foi possível montar o painel.</b> ${esc(e.message || e)}`);
       el('#cp-readout').textContent = '';
     } finally {
@@ -9537,6 +9549,12 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       }
     }
 
+    el('#cp-resumo').innerHTML =
+      quadro('Pendentes de lançamento por cliente',
+             'agenda realizada e sem OS gerada', L, 'Agendas')
+      + quadro('Pendentes de aceite por cliente',
+               'OS lançada, aguardando o aceite do cliente', A, 'OS');
+
     el('#cp-expandir').textContent = cp.expandido ? '⊟ Recolher tudo' : '⊞ Expandir tudo';
     el('#cp-blocos').innerHTML = caixa('lanc',
         '1 · Ordens de Serviço pendentes de lançamento',
@@ -9547,6 +9565,56 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
         'OS lançada e assinada, aguardando o aceite do cliente',
         A.length, () => blocoAceite(A));
     liga();
+  }
+
+  // RESUMO POR CLIENTE — a fila detalhada agrupa por quem EXECUTA a ação
+  // (consultor no lançamento, responsável no aceite), mas a conversa de
+  // acompanhamento é cliente a cliente. Por isso o resumo tem outro eixo, e não
+  // é um recorte do mesmo agrupamento.
+  function porCliente(lista) {
+    const m = new Map();
+    for (const r of lista) {
+      const cod = (r.cliente || r.customer || '').trim();
+      const g = m.get(cod) || { codigo: cod, nome: '', qtd: 0, horas: 0, dias: 0 };
+      g.qtd += 1;
+      g.horas += r.horas || 0;
+      g.dias = Math.max(g.dias, r.dias || 0);   // a MAIS ANTIGA é quem dá o tom
+      if (!g.nome && r.cliente_nome) g.nome = r.cliente_nome;
+      m.set(cod, g);
+    }
+    // Ordena pela mais antiga, não pela quantidade: dez OS de ontem incomodam
+    // menos que uma parada há 34 dias.
+    return Array.from(m.values()).sort((a, b) => b.dias - a.dias || b.qtd - a.qtd);
+  }
+
+  function quadro(titulo, sub, lista, unidade) {
+    const linhas = porCliente(lista);
+    if (!linhas.length) {
+      return `<section class="cp-quadro"><header><h4>${esc(titulo)}</h4>`
+        + `<p>${esc(sub)}</p></header>`
+        + '<p class="px-4 py-5 text-sm text-slate-500">Nada pendente com o recorte atual.</p></section>';
+    }
+    const tQtd = linhas.reduce((n, l) => n + l.qtd, 0);
+    const tHs = linhas.reduce((n, l) => n + l.horas, 0);
+    const pior = linhas.reduce((n, l) => Math.max(n, l.dias), 0);
+    return `<section class="cp-quadro">
+      <header><h4>${esc(titulo)}</h4><p>${esc(sub)} · clique no cliente para filtrar</p></header>
+      <div class="rolo"><table><thead><tr>
+        <th>Cliente</th><th class="num">${esc(unidade)}</th>
+        <th class="num">Horas</th><th class="num">Mais antiga</th>
+      </tr></thead><tbody>
+      ${linhas.map(l => `<tr data-cpcli="${esc(l.codigo)}"${l.codigo === cp.cliente ? ' class="is-on"' : ''}>
+        <td><span class="block">${esc(l.nome || l.codigo || '(sem cliente)')}</span>
+            <span class="text-[10.5px] text-slate-400 font-mono">${esc(l.codigo)}</span></td>
+        <td class="num">${l.qtd}</td>
+        <td class="num">${h1(l.horas)}</td>
+        <td class="num"><span class="${faixaCls(l.dias < 4 ? '0-3' : l.dias < 6 ? '4-5' : l.dias < 11 ? '6-10' : l.dias < 16 ? '11-15' : '16+')}">${l.dias} d</span></td>
+      </tr>`).join('')}
+      </tbody><tfoot><tr>
+        <td>${plural(linhas.length, 'cliente', 'clientes')}</td>
+        <td class="num">${tQtd}</td><td class="num">${h1(tHs)}</td><td class="num">${pior} d</td>
+      </tr></tfoot></table></div>
+    </section>`;
   }
 
   function kpi(rotulo, valor, sub, extra) {
@@ -9682,6 +9750,16 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       const id = b.dataset.cpcx;
       cp.abertas.has(id) ? cp.abertas.delete(id) : cp.abertas.add(id);
       render();
+    }));
+    // Clicar no cliente do resumo é o mesmo que escolhê-lo no filtro — e clicar
+    // de novo no que já está escolhido volta para Todos, senão só o <select>
+    // desfaria o que a tabela fez.
+    els('#cp-resumo tr[data-cpcli]').forEach(tr => tr.addEventListener('click', () => {
+      const cod = tr.dataset.cpcli;
+      cp.cliente = (cp.cliente === cod) ? '' : cod;
+      const sl = el('#cp-cliente');
+      if (sl) sl.value = cp.cliente;
+      carrega();
     }));
   }
 
