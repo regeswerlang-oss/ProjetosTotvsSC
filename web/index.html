@@ -134,6 +134,29 @@
                 background:#fff; border-right:1px solid #cbd5e1; }
   .rx .rx-seg:last-child { border-right:0; }
   .rx .rx-seg.is-on { background:var(--totvs-petroleo); color:#fff; }
+  /* Painel CP */
+  .cp .cp-seg { padding:.375rem .7rem; font-size:.78rem; font-weight:600; color:#64748b;
+                background:#fff; border-right:1px solid #cbd5e1; }
+  .cp .cp-seg:last-child { border-right:0; }
+  .cp .cp-seg.is-on { background:var(--totvs-petroleo); color:#fff; }
+  .cp .cp-kpi { border:1px solid #e2e8f0; border-radius:.75rem; background:#fff; padding:.85rem 1rem; }
+  .cp .cp-kpi b { display:block; font-size:1.5rem; line-height:1.15; color:#0f172a; font-variant-numeric:tabular-nums; }
+  .cp .cp-kpi span { display:block; font-size:.625rem; letter-spacing:.09em; text-transform:uppercase;
+                     font-weight:700; color:#94a3b8; margin-bottom:.15rem; }
+  .cp .cp-kpi em { display:block; font-style:normal; font-size:.72rem; color:#64748b; margin-top:.2rem; }
+  .cp .cp-faixa { font-size:.68rem; font-weight:700; padding:.1rem .35rem; border-radius:.25rem; border:1px solid; }
+  .cp .f-0-3   { background:#f0fdf4; color:#15803d; border-color:#bbf7d0; }
+  .cp .f-4-5   { background:#eff6ff; color:#1d4ed8; border-color:#bfdbfe; }
+  .cp .f-6-10  { background:#fffbeb; color:#b45309; border-color:#fde68a; }
+  .cp .f-11-15 { background:#fff7ed; color:#c2410c; border-color:#fed7aa; }
+  .cp .f-16    { background:#fef2f2; color:#b91c1c; border-color:#fecaca; }
+  .cp table { width:100%; border-collapse:collapse; font-size:.78rem; }
+  .cp thead th { text-align:left; font-size:.625rem; letter-spacing:.07em; text-transform:uppercase;
+                 color:#94a3b8; font-weight:700; padding:.4rem .5rem; border-bottom:1px solid #e2e8f0;
+                 background:#f8fafc; position:sticky; top:0; }
+  .cp tbody td { padding:.38rem .5rem; border-bottom:1px solid #f1f5f9; color:#334155; vertical-align:top; }
+  .cp tbody tr:hover { background:#f8fafc; }
+  .cp .num { text-align:right; font-variant-numeric:tabular-nums; font-family:ui-monospace,monospace; }
   .rx .rx-f { display:flex; flex-direction:column; gap:.25rem; }
   .rx .rx-f > span { font-size:.625rem; letter-spacing:.09em; text-transform:uppercase;
                      font-weight:700; color:#94a3b8; }
@@ -890,6 +913,40 @@
             </section>
           </div>
         </div>
+      <!-- CP — as duas filas que travam o faturamento do coordenador.
+           Painel INTERNO (menu "Interno" do topo) e não aba de projeto: a
+           pergunta atravessa a carteira inteira dela, não um projeto só. -->
+      <div id="tab-cp" data-painel-interno="cp" class="p-5 hidden">
+        <div class="cp">
+          <div class="mb-4 flex items-center gap-2.5 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Coordenador</span>
+            <select id="cp-coord" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm max-w-[18rem]"></select>
+            <span class="text-xs text-slate-500 ml-1">O que é dela</span>
+            <div id="cp-lente" class="inline-flex rounded-md border border-slate-300 overflow-hidden">
+              <button data-cpl="tudo"  class="cp-seg" title="Agenda dela OU projeto sob coordenação dela">Tudo</button>
+              <button data-cpl="owner" class="cp-seg" title="Agendas em que ela é a responsável (owner)">Agenda dela</button>
+              <button data-cpl="coord" class="cp-seg" title="Agendas de projetos que ela coordena, marcadas por qualquer um">Projeto dela</button>
+            </div>
+            <span class="text-xs text-slate-500 ml-1">Janela</span>
+            <select id="cp-dias" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm">
+              <option value="15">15 dias</option>
+              <option value="30">30 dias</option>
+              <option value="60" selected>60 dias</option>
+              <option value="90">90 dias</option>
+              <option value="180">180 dias</option>
+            </select>
+            <input id="cp-busca" type="text" placeholder="Buscar cliente, consultor, projeto…"
+                   class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm w-56">
+            <button id="cp-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+            <span id="cp-readout" class="text-xs text-slate-500"></span>
+          </div>
+
+          <div id="cp-msg" class="hidden mb-4 rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"></div>
+          <div id="cp-aviso" class="hidden mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-900"></div>
+          <div id="cp-kpis" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 mb-5"></div>
+          <div id="cp-blocos" class="space-y-4"></div>
+        </div>
+      </div>
     </div>
   </section>
 </main>
@@ -9276,11 +9333,346 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
   };
 })();
 
+// ============================================================================
+//  PAINEL CP — as duas filas que travam o faturamento do coordenador
+// ============================================================================
+// DUAS FILAS, DOIS DONOS DA AÇÃO. Por isso dois blocos e nunca um total único:
+//   LANÇAMENTO → a agenda aconteceu e não existe OS. Quem destrava é o
+//                CONSULTOR. Lido AO VIVO da API Totvs SC a cada abertura.
+//   ACEITE     → a OS existe, foi assinada, e o cliente não aceitou. Quem
+//                destrava é o RESPONSÁVEL no cliente. Vem de cockpit.os_aceites
+//                e por isso a tela mostra a idade do sincronismo: a OS não para
+//                de envelhecer porque o cron não rodou.
+//
+// DUAS LENTES de "é dela", e misturá-las dá número errado:
+//   owner → a AGENDA é dela (ela marcou / responde por ela)
+//   coord → o PROJETO é dela, mesmo que outro tenha marcado a agenda
+(function () {
+  const cp = {
+    coord: '', lente: 'tudo', dias: 60, busca: '',
+    ctx: null, lanc: null, aceite: null, carregando: false,
+    abertas: new Set(['lanc', 'ace']),
+  };
+  const el = (s) => document.querySelector(s);
+  const els = (s) => Array.from(document.querySelectorAll(s));
+  const esc = (s) => escapeHtml(String(s == null ? '' : s));
+  const h1 = (v) => (Math.round((v || 0) * 100) / 100).toLocaleString('pt-BR',
+    { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  const plural = (n, um, muitos) => `${n} ${n === 1 ? um : muitos}`;
+  const faixaCls = (f) => 'cp-faixa f-' + String(f || '').replace('+', '');
+
+  function dt(iso) {
+    if (!iso) return '—';
+    const [y, m, d] = String(iso).slice(0, 10).split('-');
+    return `${d}/${m}/${y.slice(2)}`;
+  }
+
+  function msg(texto, qual) {
+    const box = el(qual === 'aviso' ? '#cp-aviso' : '#cp-msg');
+    if (!box) return;
+    box.classList.toggle('hidden', !texto);
+    box.innerHTML = texto || '';
+  }
+
+  // A lente filtra no CLIENTE porque o servidor já devolve, por linha, QUAIS
+  // regras casaram (`por`). Trocar a lente não refaz a chamada à API.
+  function naLente(r) {
+    if (cp.lente === 'tudo') return true;
+    if (cp.lente === 'owner') return (r.por || []).includes('owner');
+    return (r.por || []).includes('coord') || (r.por || []).includes('coord_os');
+  }
+
+  function naBusca(r) {
+    const t = cp.busca.trim().toLowerCase();
+    if (!t) return true;
+    return [r.cliente_nome, r.cliente, r.consultor, r.projeto, r.projeto_nome,
+            r.titulo, r.modulo, r.atividade, r.owner_nome, r.resp_nome,
+            r.numero_os, r.servico]
+      .some(v => String(v || '').toLowerCase().includes(t));
+  }
+
+  const filtra = (lista) => (lista || []).filter(r => naLente(r) && naBusca(r));
+
+  // ── carga ─────────────────────────────────────────────────────────────────
+  async function carregaContexto() {
+    cp.ctx = await api('/api/cp/contexto');
+    const sl = el('#cp-coord');
+    const lista = cp.ctx.coordenadores || [];
+    if (!cp.coord) cp.coord = cp.ctx.palpite || (lista[0] && lista[0].chave) || '';
+    sl.innerHTML = lista.map(c =>
+      `<option value="${esc(c.chave)}"${c.chave === cp.coord ? ' selected' : ''}>`
+      + `${esc(c.nome)} — ${c.ativos} ativo${c.ativos === 1 ? '' : 's'}</option>`).join('')
+      || '<option value="">(nenhum coordenador em cockpit.projetos)</option>';
+    if (!cp.ctx.palpite && cp.ctx.eu) {
+      msg(`Não consegui casar <b>${esc(cp.ctx.eu.nome || cp.ctx.eu.email)}</b> com um `
+        + 'coordenador de <code>cockpit.projetos</code> — escolha na lista acima. '
+        + 'O nome do login precisa ter os mesmos sobrenomes do cadastro do Protheus.', 'aviso');
+    }
+  }
+
+  async function carrega() {
+    if (cp.carregando) return;
+    cp.carregando = true;
+    msg('');
+    el('#cp-readout').textContent = 'lendo a agenda na API Totvs SC…';
+    el('#cp-blocos').innerHTML =
+      '<div class="text-slate-400 text-sm py-10 text-center">Carregando…</div>';
+    try {
+      if (!cp.ctx) await carregaContexto();
+      const qs = `coord=${encodeURIComponent(cp.coord)}`;
+      const [lanc, ace] = await Promise.all([
+        api(`/api/cp/lancamento?${qs}&dias=${cp.dias}`),
+        api(`/api/cp/aceite?${qs}`),
+      ]);
+      cp.lanc = lanc;
+      cp.aceite = ace;
+      render();
+    } catch (e) {
+      el('#cp-blocos').innerHTML = '';
+      el('#cp-kpis').innerHTML = '';
+      msg(`<b>Não foi possível montar o painel.</b> ${esc(e.message || e)}`);
+      el('#cp-readout').textContent = '';
+    } finally {
+      cp.carregando = false;
+    }
+  }
+
+  // ── render ────────────────────────────────────────────────────────────────
+  function render() {
+    const L = filtra(cp.lanc && cp.lanc.pendentes);
+    const A = filtra(cp.aceite && cp.aceite.pendentes);
+
+    const hL = L.reduce((s, r) => s + (r.horas || 0), 0);
+    const hA = A.reduce((s, r) => s + (r.horas || 0), 0);
+    const velhaL = L.reduce((m, r) => Math.max(m, r.dias || 0), 0);
+    const velhaA = A.reduce((m, r) => Math.max(m, r.dias || 0), 0);
+    const consultores = new Set(L.map(r => r.consultor || r.consultor_cod)).size;
+    const unidades = new Set(A.map(r => `${r.customer}|${r.resp_nome}`)).size;
+
+    el('#cp-kpis').innerHTML = [
+      kpi('Pendentes de lançamento', L.length, `${h1(hL)} h · consultor gera a OS`,
+          velhaL ? `mais antiga: ${plural(velhaL, 'dia', 'dias')}` : ''),
+      kpi('Consultores a cobrar', consultores, 'agenda feita sem OS', ''),
+      kpi('Pendentes de aceite', A.length, `${h1(hA)} h · cliente precisa aceitar`,
+          velhaA ? `mais antiga: ${plural(velhaA, 'dia', 'dias')}` : ''),
+      kpi('Responsáveis a cobrar', unidades, 'cliente × responsável', ''),
+    ].join('');
+
+    const d = (cp.lanc && cp.lanc.diag) || {};
+    const lido = cp.lanc && cp.lanc.lido_em_ts
+      ? new Date(cp.lanc.lido_em_ts * 1000).toLocaleTimeString('pt-BR',
+          { hour: '2-digit', minute: '2-digit' })
+      : '';
+    el('#cp-readout').innerHTML = lido
+      ? `agenda lida ${esc(lido)} · ${esc(cp.lanc.de)} a ${esc(cp.lanc.ate)}`
+        + ` · ${plural(d.recursos || 0, 'consultor', 'consultores')} na célula`
+        + (d.truncado ? ' · <b class="text-amber-700">janela truncada pelo tempo</b>' : '')
+      : '';
+
+    // O sincronismo do aceite é de outro processo (cron do Cockpit). Se ele
+    // está velho, o CP tem de saber ANTES de cobrar alguém por uma OS que já
+    // pode ter sido aceita.
+    const sincro = cp.aceite && cp.aceite.sincronizado_em;
+    if (sincro) {
+      const horas = (Date.now() - new Date(sincro).getTime()) / 36e5;
+      if (horas > 24) {
+        msg(`A fila de aceite vem de <code>cockpit.os_aceites</code>, sincronizada pela `
+          + `última vez em <b>${esc(new Date(sincro).toLocaleString('pt-BR'))}</b> `
+          + `(${Math.floor(horas / 24)} dia(s) atrás). A idade das OS está recalculada `
+          + 'para hoje, mas uma OS aceita depois disso ainda aparece aqui.', 'aviso');
+      }
+    }
+
+    el('#cp-blocos').innerHTML = caixa('lanc',
+        '1 · Ordens de Serviço pendentes de lançamento',
+        'Agenda realizada e sem OS gerada — quem destrava é o consultor',
+        L.length, () => blocoLanc(L))
+      + caixa('ace',
+        '2 · Ordens de Serviço pendentes de aceite',
+        'OS lançada e assinada, aguardando o aceite do cliente',
+        A.length, () => blocoAceite(A));
+    liga();
+  }
+
+  function kpi(rotulo, valor, sub, extra) {
+    return `<div class="cp-kpi"><span>${esc(rotulo)}</span><b>${valor}</b>`
+      + `<em>${esc(sub)}</em>${extra ? `<em>${esc(extra)}</em>` : ''}</div>`;
+  }
+
+  // O corpo é uma FUNÇÃO: bloco recolhido não gera DOM nenhum. Com 200 linhas
+  // em cada fila isso é a diferença entre abrir na hora e travar a aba.
+  function caixa(id, titulo, sub, conta, corpo) {
+    const aberta = cp.abertas.has(id);
+    return `<section class="border border-slate-200 rounded-lg bg-white overflow-hidden">
+      <button data-cpcx="${id}" class="w-full text-left px-4 py-3 hover:bg-slate-50 flex items-center gap-3">
+        <span class="text-slate-300">${aberta ? '▼' : '▶'}</span>
+        <span class="flex-1 min-w-0">
+          <span class="block text-sm font-semibold text-slate-800">${esc(titulo)}</span>
+          <span class="block text-[11.5px] text-slate-500">${esc(sub)}</span>
+        </span>
+        <span class="shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${
+          conta ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}">${conta}</span>
+      </button>
+      ${aberta ? `<div class="px-4 pb-4">${corpo()}</div>` : ''}
+    </section>`;
+  }
+
+  function vazio(txt) {
+    return `<p class="text-sm text-slate-500 py-4">${esc(txt)}</p>`;
+  }
+
+  // ── bloco 1: lançamento, agrupado por CONSULTOR (é dele a ação) ───────────
+  function blocoLanc(L) {
+    if (!L.length) return vazio('Nada pendente de lançamento nesta janela.');
+    const grupos = new Map();
+    for (const r of L) {
+      const k = r.consultor || r.consultor_cod || '(sem consultor)';
+      (grupos.get(k) || grupos.set(k, []).get(k)).push(r);
+    }
+    const ordenados = Array.from(grupos.entries()).sort((a, b) =>
+      (b[1].reduce((s, r) => s + r.horas, 0)) - (a[1].reduce((s, r) => s + r.horas, 0)));
+    return ordenados.map(([nome, rs]) => {
+      const hs = rs.reduce((s, r) => s + (r.horas || 0), 0);
+      const pior = rs.reduce((m, r) => Math.max(m, r.dias || 0), 0);
+      const mail = (rs.find(r => r.consultor_email) || {}).consultor_email || '';
+      return `<details class="border border-slate-200 rounded-md mb-2" open>
+        <summary class="px-3 py-2 hover:bg-slate-50 flex items-center gap-3 rounded-md cursor-pointer">
+          <span class="chev text-slate-300">▶</span>
+          <span class="flex-1 min-w-0">
+            <span class="text-sm font-medium text-slate-800">${esc(nome)}</span>
+            ${mail ? `<span class="ml-2 text-[11px] text-slate-400">${esc(mail)}</span>` : ''}
+          </span>
+          <span class="${faixaCls(pior < 4 ? '0-3' : pior < 6 ? '4-5' : pior < 11 ? '6-10' : pior < 16 ? '11-15' : '16+')}">${pior} d</span>
+          <span class="text-xs text-slate-500 shrink-0">${plural(rs.length, 'agenda', 'agendas')} · ${h1(hs)} h</span>
+        </summary>
+        <div class="px-3 pb-3 overflow-auto" style="max-height:52vh">
+          <table><thead><tr>
+            <th>Data</th><th class="num">Dias</th><th>Cliente</th><th>Projeto</th>
+            <th>Agenda</th><th>Módulo</th><th class="num">Horas</th>
+            <th>Status</th><th>Lente</th>
+          </tr></thead><tbody>
+          ${rs.map(r => `<tr>
+            <td class="whitespace-nowrap">${dt(r.data)}<br><span class="text-[10.5px] text-slate-400">${esc(r.hora_inicio)}–${esc(r.hora_fim)}</span></td>
+            <td class="num"><span class="${faixaCls(r.faixa)}">${r.dias}</span></td>
+            <td><span class="block">${esc(r.cliente_nome || r.cliente)}</span>
+                <span class="text-[10.5px] text-slate-400 font-mono">${esc(r.cliente)}</span></td>
+            <td><span class="block">${esc(r.projeto_nome || '—')}</span>
+                <span class="text-[10.5px] text-slate-400 font-mono">${esc(r.projeto)}</span></td>
+            <td><span class="block">${esc(r.titulo)}</span>
+                ${r.observacao ? `<span class="text-[10.5px] text-slate-400">${esc(r.observacao.slice(0, 90))}</span>` : ''}</td>
+            <td class="text-[11px]">${esc(r.modulo || r.atividade || '—')}</td>
+            <td class="num">${h1(r.horas)}${r.realizada ? `<br><span class="text-[10.5px] text-amber-700">apt ${h1(r.realizada)}</span>` : ''}</td>
+            <td class="text-[11px] whitespace-nowrap">${esc(r.status_label)}</td>
+            <td class="text-[10.5px] text-slate-400">${(r.por || []).map(p => p === 'owner' ? 'agenda' : 'projeto').join(' + ')}</td>
+          </tr>`).join('')}
+          </tbody></table>
+        </div>
+      </details>`;
+    }).join('');
+  }
+
+  // ── bloco 2: aceite, agrupado por CLIENTE × RESPONSÁVEL ───────────────────
+  // Não por cliente: um cliente com três responsáveis são três cobranças
+  // diferentes, cada uma com o seu e-mail e o seu relógio.
+  function blocoAceite(A) {
+    if (!A.length) return vazio('Nenhuma OS aguardando aceite do cliente.');
+    const grupos = new Map();
+    for (const r of A) {
+      const k = `${r.cliente_nome || r.customer} — ${r.resp_nome || '(sem responsável)'}`;
+      (grupos.get(k) || grupos.set(k, []).get(k)).push(r);
+    }
+    const ordenados = Array.from(grupos.entries()).sort((a, b) =>
+      b[1].reduce((s, r) => Math.max(s, r.dias), 0) - a[1].reduce((s, r) => Math.max(s, r.dias), 0));
+    return ordenados.map(([nome, rs]) => {
+      const hs = rs.reduce((s, r) => s + (r.horas || 0), 0);
+      const pior = rs.reduce((m, r) => Math.max(m, r.dias || 0), 0);
+      const mail = (rs.find(r => r.resp_email) || {}).resp_email || '';
+      const cargo = (rs.find(r => r.resp_cargo) || {}).resp_cargo || '';
+      return `<details class="border border-slate-200 rounded-md mb-2" open>
+        <summary class="px-3 py-2 hover:bg-slate-50 flex items-center gap-3 rounded-md cursor-pointer">
+          <span class="chev text-slate-300">▶</span>
+          <span class="flex-1 min-w-0">
+            <span class="text-sm font-medium text-slate-800">${esc(nome)}</span>
+            ${mail ? `<span class="ml-2 text-[11px] text-slate-400">${esc(mail)}${cargo ? ' · ' + esc(cargo) : ''}</span>` : ''}
+          </span>
+          <span class="${faixaCls(pior < 4 ? '0-3' : pior < 6 ? '4-5' : pior < 11 ? '6-10' : pior < 16 ? '11-15' : '16+')}">${pior} d</span>
+          <span class="text-xs text-slate-500 shrink-0">${plural(rs.length, 'OS', 'OS')} · ${h1(hs)} h</span>
+        </summary>
+        <div class="px-3 pb-3 overflow-auto" style="max-height:52vh">
+          <table><thead><tr>
+            <th>Nº OS</th><th>Data</th><th class="num">Dias</th><th>Consultor</th>
+            <th>Projeto</th><th>Serviço</th><th class="num">Horas</th><th>Situação</th>
+          </tr></thead><tbody>
+          ${rs.map(r => `<tr>
+            <td class="font-mono text-[10.5px]">${esc(r.numero_os)}</td>
+            <td class="whitespace-nowrap">${dt(r.data_os)}</td>
+            <td class="num"><span class="${faixaCls(r.faixa)}">${r.dias}</span></td>
+            <td>${esc(r.consultor_nome || r.consultor_cod)}</td>
+            <td><span class="block">${esc(r.projeto_nome || '—')}</span>
+                <span class="text-[10.5px] text-slate-400 font-mono">${esc(r.projeto)}</span></td>
+            <td class="text-[11px]">${esc(r.servico || r.modulo || '—')}</td>
+            <td class="num">${h1(r.horas)}</td>
+            <td class="text-[11px] whitespace-nowrap">${esc(r.zo2_status || '—')}
+              ${r.contestada ? '<span class="ml-1 cp-faixa f-16">contestada</span>' : ''}</td>
+          </tr>`).join('')}
+          </tbody></table>
+        </div>
+      </details>`;
+    }).join('');
+  }
+
+  // ── eventos ───────────────────────────────────────────────────────────────
+  function liga() {
+    els('#tab-cp [data-cpcx]').forEach(b => b.addEventListener('click', () => {
+      const id = b.dataset.cpcx;
+      cp.abertas.has(id) ? cp.abertas.delete(id) : cp.abertas.add(id);
+      render();
+    }));
+  }
+
+  function pintaLente() {
+    els('#tab-cp [data-cpl]').forEach(b =>
+      b.classList.toggle('is-on', b.dataset.cpl === cp.lente));
+  }
+
+  let iniciado = false;
+  window.initCP = async function () {
+    if (!iniciado) {
+      iniciado = true;
+      el('#cp-coord').addEventListener('change', e => {
+        cp.coord = e.target.value;   // o catálogo continua válido: muda só o recorte
+        carrega();
+      });
+      el('#cp-dias').addEventListener('change', e => {
+        cp.dias = Number(e.target.value) || 60;
+        carrega();
+      });
+      els('#tab-cp [data-cpl]').forEach(b => b.addEventListener('click', () => {
+        cp.lente = b.dataset.cpl;
+        pintaLente();
+        if (cp.lanc) render();
+      }));
+      let t = null;
+      el('#cp-busca').addEventListener('input', e => {
+        cp.busca = e.target.value;
+        clearTimeout(t);
+        t = setTimeout(() => { if (cp.lanc) render(); }, 180);
+      });
+      el('#cp-reload').addEventListener('click', () => { cp.ctx = null; carrega(); });
+      pintaLente();
+      await carrega();
+      return;
+    }
+    if (!cp.lanc) await carrega();
+  };
+})();
+
 // ── Menu "Interno" — porta de entrada dos painéis que não são do cliente ────
 //  Acrescentar um painel aqui é: uma entrada em PAINEIS_INTERNOS, uma <div>
 //  com data-painel-interno dentro de #view-interno, e a função que a preenche.
 (function () {
   const PAINEIS_INTERNOS = [
+    { id: 'cp', label: 'CP', desc: 'Pendências de lançamento e de aceite dos meus projetos', init: () => window.initCP && window.initCP() },
     { id: 'raiox', label: 'Raio X', desc: 'Maturidade da equipe por módulo', init: () => window.initRaioX && window.initRaioX() },
   ];
   const btn = document.querySelector('#btn-interno');

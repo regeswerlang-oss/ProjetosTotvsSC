@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64, csv, email.message, hashlib, hmac, imaplib, io, json, os, re, secrets, \
     time, unicodedata, urllib.parse
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg2, psycopg2.extras, requests
@@ -5803,6 +5804,366 @@ def api_estrutura_comparar(customer):
         "sufixos_parciais": parciais,
         "x2": x2, "x3": x3, "x6": x6,
     })
+
+
+# ============================================================================
+#  PAINEL CP — as duas filas que travam o faturamento do coordenador
+# ============================================================================
+# A PERGUNTA é "o que está parado na minha mão e na da minha equipe?", e ela
+# tem DUAS filas que não se misturam:
+#
+#   LANÇAMENTO → a agenda aconteceu e ninguém gerou a OS. Quem destrava é o
+#                CONSULTOR (ou o CP, lançando por ele). Fonte: a agenda da
+#                célula na API Totvs SC, lida AO VIVO.
+#   ACEITE     → a OS existe, foi assinada, e o CLIENTE não aceitou. Quem
+#                destrava é o RESPONSÁVEL no cliente. Fonte: cockpit.os_aceites,
+#                que o cockpit-unico-tsc sincroniza do tspace/TConecta.
+#
+# Confundi-las esconde o problema: uma OS pendente de aceite JÁ foi lançada, e
+# uma agenda pendente de lançamento ainda não tem OS para ninguém aceitar. Por
+# isso são dois blocos, duas fontes e dois donos da ação — nunca um total só.
+#
+# POR QUE A AGENDA E NÃO O CRONOGRAMA: o cronograma
+# (/PCITConectaProjetos/cronograma) também traz as agendas, mas é UMA CHAMADA
+# POR PROJETO — o CP com mais carteira aqui tem 211 projetos ativos, o que
+# estoura os 60s da Vercel em uma ordem de grandeza. O endpoint de agenda
+# devolve a célula inteira do período em duas ou três páginas e cada registro
+# já responde `service_order_exist`: exatamente "a OS foi gerada?". Não
+# inferimos isso do status — status conta o ciclo da agenda, não o da OS.
+
+# A rota da agenda no host do Tasks não está documentada e pode mudar de nome
+# entre releases. Tentamos os candidatos em ordem, guardamos o que respondeu na
+# instância quente e deixamos TASKS_AGENDA_PATH para fixar sem deploy de código.
+CP_AGENDA_PATHS = tuple(dict.fromkeys(p for p in (
+    os.environ.get("TASKS_AGENDA_PATH", "").strip(),
+    "/PCITConectaResourceSchedule",
+    "/PCITConectaProjetos/agenda",
+) if p))
+_cp_agenda_path = None            # candidato que funcionou nesta instância
+
+CP_STATUS_LABEL = {"P": "Planejado", "C": "Confirmado", "S": "Em espera",
+                   "ZA": "Apontado", "ZV": "Cancelado"}
+# ZV = cancelada: não é pendência de ninguém. ZA = já apontada.
+CP_STATUS_FORA = {"ZV", "ZA"}
+CP_PAGESIZE = 100
+CP_MAX_PAGINAS = 12
+CP_TETO_S = 40                    # a função morre em 60s; sai antes e avisa
+CP_FAIXAS = (("0-3", 0, 3), ("4-5", 4, 5), ("6-10", 6, 10),
+             ("11-15", 11, 15), ("16+", 16, 10 ** 6))
+TZ_SP = timezone(timedelta(hours=-3))
+
+
+def _cp_hoje():
+    """Hoje em Florianópolis. A função roda em UTC na Vercel: depois das 21h
+    locais já é o dia seguinte em UTC e a agenda de HOJE apareceria atrasada."""
+    return datetime.now(TZ_SP).date()
+
+
+def _cp_dia(s):
+    try:
+        return date.fromisoformat(str(s)[:10])
+    except Exception:
+        return None
+
+
+def _cp_faixa(dias):
+    for nome, lo, hi in CP_FAIXAS:
+        if lo <= dias <= hi:
+            return nome
+    return "16+"
+
+
+def _cp_norm(s):
+    """Nome comparável. Duas sujeiras reais do cadastro do Protheus:
+    o prefixo '(*)' (marca matrícula inativa, NÃO é outro coordenador) e o
+    acento, que vem de três encodings diferentes dependendo do endpoint."""
+    s = re.sub(r"^\(\*\)\s*", "", (s or "").strip())
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", s).strip().upper()
+
+
+def _cp_coordenadores():
+    """Catálogo de CPs a partir de cockpit.projetos, agrupado pelo nome
+    normalizado: o mesmo coordenador aparece como 'ALESSANDRA TATIANA VITI' e
+    '(*) ALESSANDRA TATIANA VITI', e com matrículas diferentes quando trocou de
+    código — guardamos TODOS os códigos, senão a lente por `owner` perde a
+    agenda criada com a matrícula antiga."""
+    rows = q("""select nome_coordenador_projeto nome,
+                       raw->>'codigo_coordenador_projeto' cod,
+                       codigo_cliente_projeto cli, codigo_projeto cod_proj,
+                       nome_cliente_projeto cli_nome,
+                       descricao_projeto desc_proj, status_projeto st
+                from cockpit.projetos""")
+    out = {}
+    for r in rows:
+        k = _cp_norm(r["nome"])
+        if not k:
+            continue
+        c = out.setdefault(k, {"chave": k, "nome": _cp_norm(r["nome"]).title(),
+                               "codigos": set(), "clientes": set(),
+                               "projetos": {}, "ativos": 0})
+        if (r["cod"] or "").strip():
+            c["codigos"].add(r["cod"].strip())
+        if r["cli"]:
+            c["clientes"].add(r["cli"])
+        if r["cod_proj"]:
+            c["projetos"][r["cod_proj"]] = {
+                "cliente": r["cli"], "cliente_nome": r["cli_nome"],
+                "descricao": r["desc_proj"], "status": r["st"]}
+        if (r["st"] or "") not in ("Finalizado", "Cancelado"):
+            c["ativos"] += 1
+    return out
+
+
+def _cp_palpite(coords, nome_login):
+    """Casa 'Reges Werlang' (nome do login) com 'REGES PAULO WERLANG' (nome do
+    Protheus): TODO token do login tem de estar no nome do CP. O nome do meio
+    não é exigido porque o login quase nunca o traz. Se dois CPs casarem, não
+    adivinhamos — devolve None e a tela pede para escolher."""
+    toks = [t for t in _cp_norm(nome_login).split(" ") if len(t) > 1]
+    if not toks:
+        return None
+    casa = [k for k in coords if all(t in k.split(" ") for t in toks)]
+    return casa[0] if len(casa) == 1 else None
+
+
+def _cp_agenda_pagina(params):
+    """GET na agenda tentando os candidatos de rota. 400/404/405 = a rota não
+    existe NESTE host, então passa para o próximo; qualquer outro erro sobe."""
+    global _cp_agenda_path
+    ordem = ([_cp_agenda_path] if _cp_agenda_path else [])
+    ordem += [p for p in CP_AGENDA_PATHS if p != _cp_agenda_path]
+    erros = []
+    for p in ordem:
+        try:
+            d = pci_get(f"{TASKS_BASE}{p}", params)
+        except requests.exceptions.HTTPError as ex:
+            cod = getattr(ex.response, "status_code", 0)
+            if cod in (400, 404, 405):
+                erros.append(f"{p} -> HTTP {cod}")
+                _cp_agenda_path = None
+                continue
+            raise
+        _cp_agenda_path = p
+        return d, p
+    raise PCIUnavailable(
+        "Não encontrei o endpoint de agenda na API Totvs SC (" + "; ".join(erros)
+        + "). Configure TASKS_AGENDA_PATH com a rota correta.")
+
+
+def _cp_agenda(de, ate, regiao=""):
+    """Agenda da célula no período. Pagina por RECURSO: a resposta é
+    items[] = {resource, scheduleData[]}, uma entrada por consultor com todos
+    os compromissos dele na janela."""
+    ini = time.time()
+    itens, pagina, rota, truncado = [], 0, None, False
+    while pagina < CP_MAX_PAGINAS:
+        pagina += 1
+        d, rota = _cp_agenda_pagina({
+            "dateStart": de, "dateEnd": ate, "resource": "", "region": regiao,
+            "customer": "", "project": "", "owner": "", "team": "false",
+            "view": "", "page": pagina, "pagesize": CP_PAGESIZE,
+            "filterCustomer": "false"})
+        lote = d.get("items") if isinstance(d, dict) else None
+        if not isinstance(lote, list) or not lote:
+            break
+        itens.extend(lote)
+        if len(lote) < CP_PAGESIZE:
+            break
+        if time.time() - ini > CP_TETO_S:
+            truncado = True
+            break
+    return itens, {"rota": rota, "paginas": pagina, "recursos": len(itens),
+                   "truncado": truncado}
+
+
+def _cp_pendentes(itens, hoje, coord, coords, allowed):
+    """Achata a agenda e separa o que está PENDENTE DE LANÇAMENTO.
+
+    Pendente = a data já passou (ou é hoje) E não existe OS. `service_order_exist`
+    é o campo da própria API; status só tira o que morreu (ZV) ou já foi
+    apontado (ZA). Agenda futura não é atraso — é plano."""
+    c = coords.get(coord) or {}
+    cod_cp = {x.upper() for x in (c.get("codigos") or set())}
+    projetos_cp = c.get("projetos") or {}
+    out = []
+    for it in itens:
+        res = (it.get("resource") or {}) if isinstance(it, dict) else {}
+        for a in (it.get("scheduleData") or []):
+            if not isinstance(a, dict):
+                continue
+            dia = _cp_dia(a.get("date"))
+            if not dia or dia > hoje:
+                continue
+            st = (a.get("status") or "").strip().upper()
+            if st in CP_STATUS_FORA or a.get("service_order_exist"):
+                continue
+            cliente = (a.get("customer") or "").strip()
+            if allowed is not None and cliente and cliente not in allowed:
+                continue
+            proj = a.get("project")
+            proj = (proj[0] if isinstance(proj, list) and proj else proj) or ""
+            proj = str(proj).strip()
+            pnome = a.get("project_name")
+            pnome = (pnome[0] if isinstance(pnome, list) and pnome else pnome) or ""
+            owner = (a.get("owner") or "").strip()
+            # DUAS LENTES, e a tela deixa o CP escolher: 'owner' = a agenda é
+            # dela (ela marcou / responde por ela); 'coord' = o projeto é dela,
+            # mesmo que outro tenha marcado a agenda.
+            por = []
+            if coord and (owner.upper() in cod_cp
+                          or _cp_norm(a.get("owner_name")) == coord):
+                por.append("owner")
+            if coord and proj in projetos_cp:
+                por.append("coord")
+            if coord and not por:
+                continue
+            mods = a.get("modulo") or []
+            atvs = a.get("activities") or []
+            out.append({
+                "id": a.get("id"),
+                "data": dia.isoformat(),
+                "dias": (hoje - dia).days,
+                "faixa": _cp_faixa((hoje - dia).days),
+                "consultor_cod": (a.get("resource") or res.get("code") or "").strip(),
+                "consultor": (res.get("nome") or a.get("nome") or "").strip(),
+                "consultor_email": (res.get("email") or "").strip(),
+                "owner": owner,
+                "owner_nome": (a.get("owner_name") or "").strip(),
+                "cliente": cliente,
+                "cliente_nome": (a.get("customer_name") or "").strip(),
+                "regiao": (a.get("customer_region") or "").strip(),
+                "projeto": proj,
+                "projeto_nome": str(pnome).strip(),
+                "titulo": (a.get("title") or "").strip(),
+                "modulo": ", ".join(str(m).strip() for m in mods if str(m).strip())
+                          if isinstance(mods, list) else str(mods).strip(),
+                "atividade": ", ".join(str(x).strip() for x in atvs if str(x).strip())
+                             if isinstance(atvs, list) else str(atvs).strip(),
+                "hora_inicio": (a.get("hourStart") or "").strip(),
+                "hora_fim": (a.get("hourEnd") or "").strip(),
+                "horas": float(a.get("estimativa") or 0),
+                "realizada": float(a.get("realizada") or 0),
+                "local": (a.get("local") or "").strip(),
+                "observacao": (a.get("observacao") or "").strip(),
+                "status": st,
+                "status_label": CP_STATUS_LABEL.get(st, st or "—"),
+                "por": por,
+            })
+    out.sort(key=lambda r: (-r["dias"], r["consultor"], r["cliente_nome"]))
+    return out
+
+
+@app.get("/api/cp/contexto")
+def api_cp_contexto():
+    """Quem são os CPs, quantos projetos cada um tem e qual deles é o usuário."""
+    if (r := require_interno()):
+        return r
+    allowed = allowed_customers()
+    coords = _cp_coordenadores()
+    eu = effective_user() or ""
+    rl = q("select nome from cockpit.usuarios_login where lower(email)=%s",
+           (eu.lower(),), one=True) if eu else None
+    nome = (rl or {}).get("nome") or (read_session() or {}).get("n") or ""
+    lista = []
+    for k, c in coords.items():
+        if allowed is not None and not (c["clientes"] & allowed):
+            continue
+        lista.append({"chave": k, "nome": c["nome"], "ativos": c["ativos"],
+                      "projetos": len(c["projetos"]), "clientes": len(c["clientes"]),
+                      "codigos": sorted(c["codigos"])})
+    lista.sort(key=lambda x: (-x["ativos"], x["nome"]))
+    return _json({"ok": True, "eu": {"email": eu, "nome": nome},
+                  "palpite": _cp_palpite(coords, nome),
+                  "hoje": _cp_hoje().isoformat(), "coordenadores": lista})
+
+
+@app.get("/api/cp/lancamento")
+def api_cp_lancamento():
+    """BLOCO 1 — agendas realizadas sem OS gerada, ao vivo na API Totvs SC."""
+    if (r := require_interno()):
+        return r
+    coord = _cp_norm(request.args.get("coord") or "")
+    regiao = (request.args.get("regiao") or "").strip()
+    try:
+        dias = int(request.args.get("dias") or 60)
+    except ValueError:
+        dias = 60
+    dias = max(1, min(dias, 365))
+    hoje = _cp_hoje()
+    de = (hoje - timedelta(days=dias)).isoformat()
+    ate = hoje.isoformat()
+    coords = _cp_coordenadores()
+    if coord and coord not in coords:
+        return _err(404, f"Não encontrei o coordenador '{coord}' em cockpit.projetos.")
+    itens, diag = _cp_agenda(de, ate, regiao)
+    pend = _cp_pendentes(itens, hoje, coord, coords, allowed_customers())
+    return _json({"ok": True, "coord": coord, "de": de, "ate": ate,
+                  "hoje": hoje.isoformat(), "dias": dias,
+                  "total": len(pend),
+                  "horas": round(sum(r["horas"] for r in pend), 2),
+                  "pendentes": pend, "diag": diag,
+                  "lido_em_ts": int(time.time())})
+
+
+@app.get("/api/cp/aceite")
+def api_cp_aceite():
+    """BLOCO 2 — OS pendentes de aceite do cliente (cockpit.os_aceites).
+
+    `dias_sem_aceite` e `faixa` da tabela são do dia da sincronização: a OS não
+    para de envelhecer porque o cron não rodou. Recalculamos pelo data_os e
+    devolvemos a idade do sincronismo para a tela poder avisar."""
+    if (r := require_interno()):
+        return r
+    coord = _cp_norm(request.args.get("coord") or "")
+    allowed = allowed_customers()
+    coords = _cp_coordenadores()
+    projetos_cp = (coords.get(coord) or {}).get("projetos") or {}
+    hoje = _cp_hoje()
+    rows = q("""select zo2recno, numero_os, customer, cliente_nome, tipo_cliente,
+                       consultor_cod, consultor_nome, consultor_email,
+                       coord_nome, coord_email, resp_nome, resp_email,
+                       resp_cargo, resp_setor, data_os, hora_inicio, hora_fim,
+                       hora_total, horas, competencia, projeto, servico, modulo,
+                       atividade, historico, contestada, zo2_status, synced_at
+                from cockpit.os_aceites
+                where coalesce(aceite_status, 0) = 0
+                order by data_os, numero_os""")
+    out, sync = [], None
+    for r in rows or []:
+        cli = (r["customer"] or "").strip()
+        if allowed is not None and cli and cli not in allowed:
+            continue
+        # projeto vem como "TFESR00001 Servico de Implantacao": os 10 primeiros
+        # caracteres são o codigo_projeto, o resto é a descrição.
+        pcod = (r["projeto"] or "")[:10].strip()
+        por = []
+        if coord and _cp_norm(r["coord_nome"]) == coord:
+            por.append("coord_os")
+        if coord and pcod and pcod in projetos_cp:
+            por.append("coord")
+        if coord and not por:
+            continue
+        d = _cp_dia(r["data_os"])
+        idade = (hoje - d).days if d else 0
+        if r["synced_at"] and (sync is None or r["synced_at"] > sync):
+            sync = r["synced_at"]
+        out.append({**{k: r[k] for k in (
+            "zo2recno", "numero_os", "customer", "cliente_nome", "tipo_cliente",
+            "consultor_cod", "consultor_nome", "consultor_email", "coord_nome",
+            "coord_email", "resp_nome", "resp_email", "resp_cargo", "resp_setor",
+            "hora_inicio", "hora_fim", "hora_total", "competencia", "servico",
+            "modulo", "atividade", "historico", "contestada", "zo2_status")},
+            "data_os": d.isoformat() if d else None,
+            "horas": float(r["horas"] or 0),
+            "projeto": pcod,
+            "projeto_nome": (r["projeto"] or "")[10:].strip(),
+            "dias": idade, "faixa": _cp_faixa(idade), "por": por})
+    out.sort(key=lambda x: (-x["dias"], x["cliente_nome"] or "", x["numero_os"] or ""))
+    return _json({"ok": True, "coord": coord, "hoje": hoje.isoformat(),
+                  "total": len(out), "horas": round(sum(x["horas"] for x in out), 2),
+                  "sincronizado_em": sync, "pendentes": out,
+                  "lido_em_ts": int(time.time())})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────
