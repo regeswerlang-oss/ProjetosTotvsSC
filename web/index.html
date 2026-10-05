@@ -937,6 +937,7 @@
             </select>
             <input id="cp-busca" type="text" placeholder="Buscar cliente, consultor, projeto…"
                    class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm w-56">
+            <button id="cp-expandir" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⊞ Expandir tudo</button>
             <button id="cp-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
             <span id="cp-readout" class="text-xs text-slate-500"></span>
           </div>
@@ -9351,10 +9352,13 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
   // DEFAULTS escolhidos pelo CP no uso real: a lente 'coord' (o projeto é dela,
   // tenha ela marcado a agenda ou não) e a janela de 15 dias — a cobrança de
   // lançamento é semanal, 60 dias trazia atraso que já virou outro assunto.
+  // Abre TUDO RECOLHIDO: os KPIs já respondem "quanto" sem custo de DOM, e o
+  // CP desce ao detalhe do bloco que lhe interessa. `expandido` é o estado do
+  // botão de expandir tudo e também decide se os grupos nascem abertos.
   const cp = {
     coord: '', lente: 'coord', dias: 15, busca: '',
     ctx: null, lanc: null, aceite: null, carregando: false,
-    abertas: new Set(['lanc', 'ace']),
+    abertas: new Set(), expandido: false,
   };
   const el = (s) => document.querySelector(s);
   const els = (s) => Array.from(document.querySelectorAll(s));
@@ -9486,6 +9490,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       }
     }
 
+    el('#cp-expandir').textContent = cp.expandido ? '⊟ Recolher tudo' : '⊞ Expandir tudo';
     el('#cp-blocos').innerHTML = caixa('lanc',
         '1 · Ordens de Serviço pendentes de lançamento',
         'Agenda realizada e sem OS gerada — quem destrava é o consultor',
@@ -9538,7 +9543,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       const hs = rs.reduce((s, r) => s + (r.horas || 0), 0);
       const pior = rs.reduce((m, r) => Math.max(m, r.dias || 0), 0);
       const mail = (rs.find(r => r.consultor_email) || {}).consultor_email || '';
-      return `<details class="border border-slate-200 rounded-md mb-2" open>
+      return `<details class="border border-slate-200 rounded-md mb-2"${cp.expandido ? ' open' : ''}>
         <summary class="px-3 py-2 hover:bg-slate-50 flex items-center gap-3 rounded-md cursor-pointer">
           <span class="chev text-slate-300">▶</span>
           <span class="flex-1 min-w-0">
@@ -9591,7 +9596,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       const pior = rs.reduce((m, r) => Math.max(m, r.dias || 0), 0);
       const mail = (rs.find(r => r.resp_email) || {}).resp_email || '';
       const cargo = (rs.find(r => r.resp_cargo) || {}).resp_cargo || '';
-      return `<details class="border border-slate-200 rounded-md mb-2" open>
+      return `<details class="border border-slate-200 rounded-md mb-2"${cp.expandido ? ' open' : ''}>
         <summary class="px-3 py-2 hover:bg-slate-50 flex items-center gap-3 rounded-md cursor-pointer">
           <span class="chev text-slate-300">▶</span>
           <span class="flex-1 min-w-0">
@@ -9660,6 +9665,13 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
         cp.busca = e.target.value;
         clearTimeout(t);
         t = setTimeout(() => { if (cp.lanc) render(); }, 180);
+      });
+      el('#cp-expandir').addEventListener('click', () => {
+        cp.expandido = !cp.expandido;
+        // Expandir abre os dois blocos E os grupos dentro deles; recolher fecha
+        // tudo de volta, senão o botão só desfaz metade do que fez.
+        cp.abertas = cp.expandido ? new Set(['lanc', 'ace']) : new Set();
+        if (cp.lanc) render();
       });
       el('#cp-reload').addEventListener('click', () => { cp.ctx = null; carrega(); });
       pintaLente();
