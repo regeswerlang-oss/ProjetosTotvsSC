@@ -6085,10 +6085,12 @@ def api_cp_lancamento():
         return r
     coord = _cp_norm(request.args.get("coord") or "")
     regiao = (request.args.get("regiao") or "").strip()
+    # 15 dias é o padrão: a cobrança de lançamento é semanal e uma janela larga
+    # devolve atraso antigo, que já é outro assunto (e não some ao ser cobrado).
     try:
-        dias = int(request.args.get("dias") or 60)
+        dias = int(request.args.get("dias") or 15)
     except ValueError:
-        dias = 60
+        dias = 15
     dias = max(1, min(dias, 365))
     hoje = _cp_hoje()
     de = (hoje - timedelta(days=dias)).isoformat()
