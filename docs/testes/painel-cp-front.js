@@ -9,12 +9,19 @@
 // As rotas /api/* sao interceptadas: o Playwright casa na ordem INVERSA do
 // registro, por isso a generica entra primeiro e as especificas depois.
 const { chromium } = require('playwright');
+const { chromium } = require('playwright');
 
 const CTX = {
   ok: true,
   eu: { email: 'reges.werlang@totvs.com.br', nome: 'Reges Werlang' },
   palpite: 'REGES PAULO WERLANG',
+  coord: 'REGES PAULO WERLANG',
   hoje: '2026-10-05',
+  clientes: [
+    { codigo: '10028400', nome: 'TTS RS', projetos: 4, ativos: 2 },
+    { codigo: 'TFEGN200', nome: 'OLIM AGRO CEREAIS', projetos: 3, ativos: 1 },
+    { codigo: 'TFESR000', nome: 'ACOSUL COMERCIO', projetos: 2, ativos: 0 },
+  ],
   coordenadores: [
     { chave: 'REGES PAULO WERLANG', nome: 'Reges Paulo Werlang', ativos: 211, projetos: 526, clientes: 188, codigos: ['TSC623'] },
     { chave: 'TIAGO NARDI', nome: 'Tiago Nardi', ativos: 20, projetos: 141, clientes: 53, codigos: ['TSCA92'] },
@@ -89,16 +96,45 @@ const ACE = {
   await pg.route('**/api/**', r => r.fulfill({ json: { ok: true } }));
   await pg.route('**/api/me', r => r.fulfill({ json: { ok: true, email: CTX.eu.email, nome: CTX.eu.nome, perfil: 'admin', is_admin: true, interno: true } }));
   await pg.route('**/api/clientes', r => r.fulfill({ json: { ok: true, clientes: [] } }));
-  await pg.route('**/api/projetos*', r => r.fulfill({ json: { ok: true, total: 0, projetos: [], sincronizado_em: null } }));
-  await pg.route('**/api/cp/contexto', r => r.fulfill({ json: CTX }));
+  const PROJ = [
+    { codigo_projeto: 'A1', codigo_cliente_projeto: 'TFESR000', nome_cliente_projeto: 'ACOSUL',
+      _nome_cliente_local: 'ACOSUL', descricao_projeto: 'IMPLANTACAO', status_projeto: 'Em Execução',
+      tipo_projeto: 'Implantação', nome_coordenador_projeto: 'VIVIANI CAROLINA RAMOS' },
+    { codigo_projeto: 'A2', codigo_cliente_projeto: 'TFESR000', nome_cliente_projeto: 'ACOSUL',
+      _nome_cliente_local: 'ACOSUL', descricao_projeto: 'RH', status_projeto: 'Finalizado',
+      tipo_projeto: 'Implantação', nome_coordenador_projeto: 'TIAGO NARDI' },
+    { codigo_projeto: 'B1', codigo_cliente_projeto: '000348D0', nome_cliente_projeto: 'DIGITRO',
+      _nome_cliente_local: 'DIGITRO', descricao_projeto: 'SERVICOS', status_projeto: 'Em Execução',
+      tipo_projeto: 'Implantação', nome_coordenador_projeto: 'CASSIO DA LUZ GULARTE' },
+    { codigo_projeto: 'B2', codigo_cliente_projeto: '000348D0', nome_cliente_projeto: 'DIGITRO',
+      _nome_cliente_local: 'DIGITRO', descricao_projeto: 'EVENTUAL', status_projeto: 'Em Execução',
+      tipo_projeto: 'Atendimento', nome_coordenador_projeto: 'CASSIO DA LUZ GULARTE' },
+  ];
+  await pg.route('**/api/projetos*', r => r.fulfill({ json: {
+    ok: true, total: PROJ.length, projetos: PROJ, sincronizado_em: '2026-10-05T03:00:00Z' } }));
+  await pg.route('**/api/cp/contexto*', r => r.fulfill({ json: CTX }));
   await pg.route('**/api/cp/lancamento*', r => r.fulfill({ json: LANC }));
   await pg.route('**/api/cp/aceite*', r => r.fulfill({ json: ACE }));
 
+  const pedidosIniciais = [];
+  pg.on('request', r => pedidosIniciais.push(r.url()));
   await pg.goto('http://127.0.0.1:8731/index.html');
   await pg.waitForTimeout(400);
 
   const ok = [], bad = [];
   const t = (nome, cond, extra) => (cond ? ok : bad).push(nome + (extra ? ` [${extra}]` : ''));
+
+  // SUBTITULO da lista: tem de dizer quantos estao NA TELA de quantos o usuario
+  // tem acesso. "4 projeto(s)" com 2 na lista parecia furo de permissao.
+  const sub = await pg.$eval('#subtitle', n => n.textContent.trim());
+  t('subtítulo diz visíveis de acessíveis', /^2 de 4 projeto\(s\)/.test(sub), sub);
+  t('subtítulo diz quantos clientes', /2 cliente\(s\)/.test(sub), sub);
+  t('subtítulo mantém a base', /base de/.test(sub), sub);
+  await pg.selectOption('#filtro-status', '');
+  await pg.selectOption('#filtro-tipo', '');
+  await pg.waitForTimeout(150);
+  const sub2 = await pg.$eval('#subtitle', n => n.textContent.trim());
+  t('sem filtro, some o "de N"', /^4 projeto\(s\)/.test(sub2), sub2);
 
   await pg.evaluate(() => window.abreInterno('cp'));
   await pg.waitForFunction(() => {
@@ -110,6 +146,46 @@ const ACE = {
     rotulo: n.querySelector('span').textContent.trim(),
     valor: n.querySelector('b').textContent.trim(),
     txt: Array.from(n.querySelectorAll('em')).map(e => e.textContent.trim()).join(' | ') })));
+  const defLente = await pg.$eval('#cp-lente .is-on', n => n.dataset.cpl);
+  const defDias = await pg.$eval('#cp-dias', n => n.value);
+  const defPedido = pedidosIniciais.find(u => u.includes('/api/cp/lancamento')) || '';
+  t('abre na lente Projeto dela', defLente === 'coord', defLente);
+  t('abre com janela de 15 dias', defDias === '15', defDias);
+  t('primeira chamada ja pede 15 dias', /dias=15/.test(defPedido), defPedido);
+  const kDef = await leKpis();
+  t('lente padrão já recorta (2 lançamentos)', kDef[0].valor === '2', JSON.stringify(kDef[0]));
+  t('abre com tudo recolhido', (await pg.$$('#cp-blocos tbody tr')).length === 0);
+  t('mas os KPIs já respondem', kDef.length === 4 && kDef[2].valor === '3');
+  const opts = await pg.$$eval('#cp-cliente option', ns => ns.map(n => n.textContent.trim()));
+  t('select de cliente com Todos no topo', /^Todos — 3 clientes$/.test(opts[0] || ''), opts.join(' | '));
+  t('clientes com projeto ativo primeiro', opts[1] === 'OLIM AGRO CEREAIS' && opts[2] === 'TTS RS', opts.join(' | '));
+  t('cliente sem projeto ativo marcado', opts[3] === 'ACOSUL COMERCIO (sem projeto ativo)', opts.join(' | '));
+  t('Todos selecionado por padrão', (await pg.$eval('#cp-cliente', n => n.value)) === '');
+  const antes = pedidosIniciais.length;
+  await pg.selectOption('#cp-cliente', 'TFEGN200');
+  await pg.waitForTimeout(400);
+  const pedidoCli = pedidosIniciais.slice(antes).find(u => u.includes('/api/cp/lancamento')) || '';
+  t('escolher cliente refaz a chamada com o recorte', /cliente=TFEGN200/.test(pedidoCli), pedidoCli);
+  await pg.selectOption('#cp-cliente', '');
+  await pg.waitForTimeout(400);
+
+  t('botão oferece expandir', (await pg.$eval('#cp-expandir', n => n.textContent)).includes('Expandir tudo'));
+  await pg.click('#cp-expandir');
+  await pg.waitForTimeout(200);
+  t('expandir tudo abre blocos e grupos',
+    (await pg.$$('#cp-blocos tbody tr')).length === 5
+    && (await pg.$$('#cp-blocos details[open]')).length === 4,
+    (await pg.$$('#cp-blocos tbody tr')).length + ' linhas / '
+    + (await pg.$$('#cp-blocos details[open]')).length + ' grupos abertos');
+  t('botão vira recolher', (await pg.$eval('#cp-expandir', n => n.textContent)).includes('Recolher tudo'));
+  await pg.click('#cp-expandir');
+  await pg.waitForTimeout(200);
+  t('recolher tudo fecha tudo de volta', (await pg.$$('#cp-blocos tbody tr')).length === 0);
+  await pg.click('#cp-expandir');
+  await pg.waitForTimeout(200);
+
+  await pg.click('#cp-lente [data-cpl="tudo"]');
+  await pg.waitForTimeout(150);
   const kpis = await leKpis();
   t('4 KPIs', kpis.length === 4, kpis.length);
   t('KPI lançamento = 4', kpis[0] && kpis[0].rotulo === 'Pendentes de lançamento' && kpis[0].valor === '4', JSON.stringify(JSON.stringify(kpis[0])));
@@ -173,7 +249,7 @@ const ACE = {
   await pg.fill('#cp-busca', '');
   await pg.waitForTimeout(300);
 
-  // RECOLHER: bloco fechado não gera DOM
+  // RECOLHER um bloco só: fechado não gera DOM
   await pg.click('#cp-blocos [data-cpcx="lanc"]');
   await pg.waitForTimeout(150);
   const aposFechar = await pg.$$eval('#cp-blocos tbody tr', ns => ns.length);

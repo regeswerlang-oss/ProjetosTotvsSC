@@ -5888,29 +5888,39 @@ def _cp_coordenadores():
     '(*) ALESSANDRA TATIANA VITI', e com matrículas diferentes quando trocou de
     código — guardamos TODOS os códigos, senão a lente por `owner` perde a
     agenda criada com a matrícula antiga."""
-    rows = q("""select nome_coordenador_projeto nome,
-                       raw->>'codigo_coordenador_projeto' cod,
-                       codigo_cliente_projeto cli, codigo_projeto cod_proj,
-                       nome_cliente_projeto cli_nome,
-                       descricao_projeto desc_proj, status_projeto st
-                from cockpit.projetos""")
+    rows = q("""select p.nome_coordenador_projeto nome,
+                       p.raw->>'codigo_coordenador_projeto' cod,
+                       p.codigo_cliente_projeto cli, p.codigo_projeto cod_proj,
+                       coalesce(c.nome, p.nome_cliente_projeto) cli_nome,
+                       p.descricao_projeto desc_proj, p.status_projeto st
+                from cockpit.projetos p
+                left join cockpit.clientes c on c.customer = p.codigo_cliente_projeto""")
     out = {}
     for r in rows:
         k = _cp_norm(r["nome"])
         if not k:
             continue
         c = out.setdefault(k, {"chave": k, "nome": _cp_norm(r["nome"]).title(),
-                               "codigos": set(), "clientes": set(),
+                               "codigos": set(), "clientes": {},
                                "projetos": {}, "ativos": 0})
         if (r["cod"] or "").strip():
             c["codigos"].add(r["cod"].strip())
+        vivo = (r["st"] or "") not in ("Finalizado", "Cancelado")
         if r["cli"]:
-            c["clientes"].add(r["cli"])
+            # O cliente é a unidade do seletor da tela, então guarda nome e
+            # contagem aqui: montar isso na rota exigiria varrer tudo de novo.
+            cli = c["clientes"].setdefault(r["cli"], {
+                "codigo": r["cli"], "nome": r["cli_nome"] or r["cli"],
+                "projetos": 0, "ativos": 0})
+            cli["projetos"] += 1
+            cli["ativos"] += 1 if vivo else 0
+            if r["cli_nome"]:
+                cli["nome"] = r["cli_nome"]
         if r["cod_proj"]:
             c["projetos"][r["cod_proj"]] = {
                 "cliente": r["cli"], "cliente_nome": r["cli_nome"],
                 "descricao": r["desc_proj"], "status": r["st"]}
-        if (r["st"] or "") not in ("Finalizado", "Cancelado"):
+        if vivo:
             c["ativos"] += 1
     return out
 
@@ -5951,17 +5961,22 @@ def _cp_agenda_pagina(params):
         + "). Configure TASKS_AGENDA_PATH com a rota correta.")
 
 
-def _cp_agenda(de, ate, regiao=""):
+def _cp_agenda(de, ate, regiao="", cliente=""):
     """Agenda da célula no período. Pagina por RECURSO: a resposta é
     items[] = {resource, scheduleData[]}, uma entrada por consultor com todos
-    os compromissos dele na janela."""
+    os compromissos dele na janela.
+
+    `cliente` vai no parâmetro `customer` da própria API — com 292 consultores
+    na célula, deixar o recorte para o Python faz a chamada trafegar a agenda
+    inteira e bater no teto de tempo. Mesmo assim o filtro é REFEITO aqui
+    embaixo: se a API ignorar o parâmetro, o resultado continua certo."""
     ini = time.time()
     itens, pagina, rota, truncado = [], 0, None, False
     while pagina < CP_MAX_PAGINAS:
         pagina += 1
         d, rota = _cp_agenda_pagina({
             "dateStart": de, "dateEnd": ate, "resource": "", "region": regiao,
-            "customer": "", "project": "", "owner": "", "team": "false",
+            "customer": cliente, "project": "", "owner": "", "team": "false",
             "view": "", "page": pagina, "pagesize": CP_PAGESIZE,
             "filterCustomer": "false"})
         lote = d.get("items") if isinstance(d, dict) else None
@@ -5977,7 +5992,7 @@ def _cp_agenda(de, ate, regiao=""):
                    "truncado": truncado}
 
 
-def _cp_pendentes(itens, hoje, coord, coords, allowed):
+def _cp_pendentes(itens, hoje, coord, coords, allowed, cliente=""):
     """Achata a agenda e separa o que está PENDENTE DE LANÇAMENTO.
 
     Pendente = a data já passou (ou é hoje) E não existe OS. `service_order_exist`
@@ -5998,8 +6013,10 @@ def _cp_pendentes(itens, hoje, coord, coords, allowed):
             st = (a.get("status") or "").strip().upper()
             if st in CP_STATUS_FORA or a.get("service_order_exist"):
                 continue
-            cliente = (a.get("customer") or "").strip()
-            if allowed is not None and cliente and cliente not in allowed:
+            cust = (a.get("customer") or "").strip()
+            if allowed is not None and cust and cust not in allowed:
+                continue
+            if cliente and cust != cliente:
                 continue
             proj = a.get("project")
             proj = (proj[0] if isinstance(proj, list) and proj else proj) or ""
@@ -6030,7 +6047,7 @@ def _cp_pendentes(itens, hoje, coord, coords, allowed):
                 "consultor_email": (res.get("email") or "").strip(),
                 "owner": owner,
                 "owner_nome": (a.get("owner_name") or "").strip(),
-                "cliente": cliente,
+                "cliente": cust,
                 "cliente_nome": (a.get("customer_name") or "").strip(),
                 "regiao": (a.get("customer_region") or "").strip(),
                 "projeto": proj,
@@ -6056,7 +6073,12 @@ def _cp_pendentes(itens, hoje, coord, coords, allowed):
 
 @app.get("/api/cp/contexto")
 def api_cp_contexto():
-    """Quem são os CPs, quantos projetos cada um tem e qual deles é o usuário."""
+    """Quem são os CPs, quantos projetos cada um tem, qual deles é o usuário —
+    e os CLIENTES do CP pedido (ou do palpite, na primeira carga).
+
+    A lista de clientes vem só do CP em foco, nunca de todos: o maior deles tem
+    162 clientes ativos e mandar isso para os ~25 coordenadores engordaria a
+    resposta em centenas de KB para a tela usar um só."""
     if (r := require_interno()):
         return r
     allowed = allowed_customers()
@@ -6065,16 +6087,24 @@ def api_cp_contexto():
     rl = q("select nome from cockpit.usuarios_login where lower(email)=%s",
            (eu.lower(),), one=True) if eu else None
     nome = (rl or {}).get("nome") or (read_session() or {}).get("n") or ""
+    palpite = _cp_palpite(coords, nome)
     lista = []
     for k, c in coords.items():
-        if allowed is not None and not (c["clientes"] & allowed):
+        if allowed is not None and not (set(c["clientes"]) & allowed):
             continue
         lista.append({"chave": k, "nome": c["nome"], "ativos": c["ativos"],
                       "projetos": len(c["projetos"]), "clientes": len(c["clientes"]),
                       "codigos": sorted(c["codigos"])})
     lista.sort(key=lambda x: (-x["ativos"], x["nome"]))
+
+    foco = _cp_norm(request.args.get("coord") or "") or palpite or ""
+    if foco not in coords:
+        foco = ""
+    clientes = [cli for cod, cli in (coords.get(foco) or {}).get("clientes", {}).items()
+                if allowed is None or cod in allowed]
+    clientes.sort(key=lambda x: (x["nome"] or "").upper())
     return _json({"ok": True, "eu": {"email": eu, "nome": nome},
-                  "palpite": _cp_palpite(coords, nome),
+                  "palpite": palpite, "coord": foco, "clientes": clientes,
                   "hoje": _cp_hoje().isoformat(), "coordenadores": lista})
 
 
@@ -6085,6 +6115,7 @@ def api_cp_lancamento():
         return r
     coord = _cp_norm(request.args.get("coord") or "")
     regiao = (request.args.get("regiao") or "").strip()
+    cliente = (request.args.get("cliente") or "").strip()
     # 15 dias é o padrão: a cobrança de lançamento é semanal e uma janela larga
     # devolve atraso antigo, que já é outro assunto (e não some ao ser cobrado).
     try:
@@ -6098,9 +6129,10 @@ def api_cp_lancamento():
     coords = _cp_coordenadores()
     if coord and coord not in coords:
         return _err(404, f"Não encontrei o coordenador '{coord}' em cockpit.projetos.")
-    itens, diag = _cp_agenda(de, ate, regiao)
-    pend = _cp_pendentes(itens, hoje, coord, coords, allowed_customers())
-    return _json({"ok": True, "coord": coord, "de": de, "ate": ate,
+    itens, diag = _cp_agenda(de, ate, regiao, cliente)
+    pend = _cp_pendentes(itens, hoje, coord, coords, allowed_customers(), cliente)
+    return _json({"ok": True, "coord": coord, "cliente": cliente,
+                  "de": de, "ate": ate,
                   "hoje": hoje.isoformat(), "dias": dias,
                   "total": len(pend),
                   "horas": round(sum(r["horas"] for r in pend), 2),
@@ -6118,6 +6150,7 @@ def api_cp_aceite():
     if (r := require_interno()):
         return r
     coord = _cp_norm(request.args.get("coord") or "")
+    cliente = (request.args.get("cliente") or "").strip()
     allowed = allowed_customers()
     coords = _cp_coordenadores()
     projetos_cp = (coords.get(coord) or {}).get("projetos") or {}
@@ -6135,6 +6168,8 @@ def api_cp_aceite():
     for r in rows or []:
         cli = (r["customer"] or "").strip()
         if allowed is not None and cli and cli not in allowed:
+            continue
+        if cliente and cli != cliente:
             continue
         # projeto vem como "TFESR00001 Servico de Implantacao": os 10 primeiros
         # caracteres são o codigo_projeto, o resto é a descrição.
@@ -6162,7 +6197,8 @@ def api_cp_aceite():
             "projeto_nome": (r["projeto"] or "")[10:].strip(),
             "dias": idade, "faixa": _cp_faixa(idade), "por": por})
     out.sort(key=lambda x: (-x["dias"], x["cliente_nome"] or "", x["numero_os"] or ""))
-    return _json({"ok": True, "coord": coord, "hoje": hoje.isoformat(),
+    return _json({"ok": True, "coord": coord, "cliente": cliente,
+                  "hoje": hoje.isoformat(),
                   "total": len(out), "horas": round(sum(x["horas"] for x in out), 2),
                   "sincronizado_em": sync, "pendentes": out,
                   "lido_em_ts": int(time.time())})

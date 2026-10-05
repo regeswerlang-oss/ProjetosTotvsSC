@@ -927,6 +927,8 @@
               <button data-cpl="owner" class="cp-seg" title="Agendas em que ela é a responsável (owner)">Agenda dela</button>
               <button data-cpl="coord" class="cp-seg" title="Agendas de projetos que ela coordena, marcadas por qualquer um">Projeto dela</button>
             </div>
+            <span class="text-xs text-slate-500 ml-1">Cliente</span>
+            <select id="cp-cliente" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm max-w-[16rem]"></select>
             <span class="text-xs text-slate-500 ml-1">Janela</span>
             <select id="cp-dias" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white text-sm">
               <option value="15" selected>15 dias</option>
@@ -963,6 +965,7 @@ const state = {
   view: 'lista',                       // 'lista' | 'detalhe'
   selected: null,                      // { cli, cod, ver, loja, projeto }
   showAll: false,
+  sincronizadoEm: null,                // data da base, para o subtítulo
   cronograma: null,                    // último cronograma carregado
   tab: 'resumo',                       // ver TABS
   sub: 'cad_prod',                     // sub-aba dentro de Cadastros (ver SUBABAS)
@@ -1073,7 +1076,8 @@ async function carregaLista() {
     populaFiltros();
     renderResumo();
     renderGrupos();
-    $('#subtitle').textContent = `${state.projetos.length} projeto(s)` + (data.sincronizado_em ? ` · base de ${fmtData(String(data.sincronizado_em).slice(0,10).replace(/-/g,''))}` : '');
+    state.sincronizadoEm = data.sincronizado_em || null;
+    renderSubtitulo();
   } catch (e) {
     $('#grupos').innerHTML = `<div class="text-rose-600 p-4 bg-rose-50 rounded">Erro: ${e.message}</div>`;
   }
@@ -1118,7 +1122,27 @@ function aplicarFiltros() {
   });
 }
 
+// O subtitulo dizia so `state.projetos.length` — o total que o usuario TEM
+// ACESSO — enquanto a tela mostrava bem menos por causa dos filtros padrao
+// (Em Execucao + Implantacao). Ler "29 projeto(s)" com 7 na lista parece furo
+// de permissao e nao e: os 29 ja sao so os clientes liberados para ele. Agora
+// diz os dois numeros e quantos clientes, e acompanha a troca de filtro.
+function renderSubtitulo() {
+  const visiveis = aplicarFiltros();
+  const total = state.projetos.length;
+  const clientes = new Set(visiveis.map(p => p.codigo_cliente_projeto)).size;
+  const base = state.sincronizadoEm
+    ? ` · base de ${fmtData(String(state.sincronizadoEm).slice(0, 10).replace(/-/g, ''))}`
+    : '';
+  const quanto = visiveis.length === total
+    ? `${total} projeto(s)`
+    : `${visiveis.length} de ${total} projeto(s)`;
+  $('#subtitle').textContent =
+    `${quanto} · ${clientes} cliente(s)${base}`;
+}
+
 function renderResumo() {
+  renderSubtitulo();
   const filtrados = aplicarFiltros();
   const total = filtrados.length;
   const ativos = filtrados.filter(p => p.status_projeto === 'Em Execução').length;
@@ -9356,7 +9380,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
   // CP desce ao detalhe do bloco que lhe interessa. `expandido` é o estado do
   // botão de expandir tudo e também decide se os grupos nascem abertos.
   const cp = {
-    coord: '', lente: 'coord', dias: 15, busca: '',
+    coord: '', cliente: '', lente: 'coord', dias: 15, busca: '',
     ctx: null, lanc: null, aceite: null, carregando: false,
     abertas: new Set(), expandido: false,
   };
@@ -9402,7 +9426,9 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 
   // ── carga ─────────────────────────────────────────────────────────────────
   async function carregaContexto() {
-    cp.ctx = await api('/api/cp/contexto');
+    // O coord vai na chamada porque a lista de clientes volta só DELE: o maior
+    // CP tem 162 clientes ativos e mandar isso de todos engordaria a resposta.
+    cp.ctx = await api('/api/cp/contexto?coord=' + encodeURIComponent(cp.coord));
     const sl = el('#cp-coord');
     const lista = cp.ctx.coordenadores || [];
     if (!cp.coord) cp.coord = cp.ctx.palpite || (lista[0] && lista[0].chave) || '';
@@ -9410,11 +9436,31 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       `<option value="${esc(c.chave)}"${c.chave === cp.coord ? ' selected' : ''}>`
       + `${esc(c.nome)} — ${c.ativos} ativo${c.ativos === 1 ? '' : 's'}</option>`).join('')
       || '<option value="">(nenhum coordenador em cockpit.projetos)</option>';
+    pintaClientes();
     if (!cp.ctx.palpite && cp.ctx.eu) {
       msg(`Não consegui casar <b>${esc(cp.ctx.eu.nome || cp.ctx.eu.email)}</b> com um `
         + 'coordenador de <code>cockpit.projetos</code> — escolha na lista acima. '
         + 'O nome do login precisa ter os mesmos sobrenomes do cadastro do Protheus.', 'aviso');
     }
+  }
+
+  // Só os clientes em que ELA tem projeto como gestora, com os ativos na frente
+  // (cliente sem projeto vivo quase nunca tem agenda pendente) e "Todos" no
+  // topo. Se o cliente escolhido some ao trocar de CP, volta para Todos — senão
+  // a tela ficaria filtrando por um cliente que não aparece na lista.
+  function pintaClientes() {
+    const lista = (cp.ctx && cp.ctx.clientes) || [];
+    if (cp.cliente && !lista.some(c => c.codigo === cp.cliente)) cp.cliente = '';
+    // Ordena aqui também: a tela não deve depender da ordem em que o servidor
+    // devolveu, e os dois grupos precisam sair alfabéticos cada um.
+    const porNome = (a, b) => (a.nome || '').localeCompare(b.nome || '', 'pt-BR');
+    const ativos = lista.filter(c => c.ativos > 0).sort(porNome);
+    const resto = lista.filter(c => !c.ativos).sort(porNome);
+    const opt = (c) => `<option value="${esc(c.codigo)}"${c.codigo === cp.cliente ? ' selected' : ''}>`
+      + `${esc(c.nome)}${c.ativos ? '' : ' (sem projeto ativo)'}</option>`;
+    el('#cp-cliente').innerHTML =
+      `<option value=""${cp.cliente ? '' : ' selected'}>Todos — ${lista.length} cliente${lista.length === 1 ? '' : 's'}</option>`
+      + ativos.map(opt).join('') + resto.map(opt).join('');
   }
 
   async function carrega() {
@@ -9426,7 +9472,8 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       '<div class="text-slate-400 text-sm py-10 text-center">Carregando…</div>';
     try {
       if (!cp.ctx) await carregaContexto();
-      const qs = `coord=${encodeURIComponent(cp.coord)}`;
+      const qs = `coord=${encodeURIComponent(cp.coord)}`
+        + `&cliente=${encodeURIComponent(cp.cliente)}`;
       const [lanc, ace] = await Promise.all([
         api(`/api/cp/lancamento?${qs}&dias=${cp.dias}`),
         api(`/api/cp/aceite?${qs}`),
@@ -9647,8 +9694,13 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
   window.initCP = async function () {
     if (!iniciado) {
       iniciado = true;
-      el('#cp-coord').addEventListener('change', e => {
-        cp.coord = e.target.value;   // o catálogo continua válido: muda só o recorte
+      el('#cp-coord').addEventListener('change', async e => {
+        cp.coord = e.target.value;
+        cp.ctx = null;               // a lista de clientes é DO CP: refaz o contexto
+        await carrega();
+      });
+      el('#cp-cliente').addEventListener('change', e => {
+        cp.cliente = e.target.value;
         carrega();
       });
       el('#cp-dias').addEventListener('change', e => {
