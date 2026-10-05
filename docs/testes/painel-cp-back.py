@@ -14,6 +14,7 @@ fim = src.index('@app.get("/api/cp/contexto")')
 ns = {'re': re, 'unicodedata': unicodedata, 'time': time, 'date': date,
       'datetime': datetime, 'timedelta': timedelta, 'timezone': timezone,
       'os': __import__('os'), 'q': None, 'pci_get': None, 'requests': None,
+      'SYNC_REGIOES': {'201', '202', '211'},
       'TASKS_BASE': 'https://api.tscst.com.br/restAPI', 'PCIUnavailable': Exception}
 trecho = src[ini:fim]
 # tira as funcoes que dependem de rede/banco (ficam fora deste teste)
@@ -132,6 +133,15 @@ t('hoje em Florianopolis, não em UTC', ns['_cp_hoje']() == datetime.now(timezon
 t('_cp_dia tolera timestamp e lixo', ns['_cp_dia']('2026-09-24T00:00:00Z') == date(2026,9,24) and ns['_cp_dia'](None) is None and ns['_cp_dia']('xx') is None)
 # candidatos de rota
 t('candidatos de rota sem duplicata', list(ns['CP_AGENDA_PATHS']) == ['/PCITConectaResourceSchedule', '/PCITConectaProjetos/agenda'], ns['CP_AGENDA_PATHS'])
+# a celula: mesmas regioes do recorte do sync de projetos
+t('celula = SYNC_REGIOES', sorted(ns['CP_REGIOES']) == ['201', '202', '211'], ns['CP_REGIOES'])
+
+# DEDUPE: varrer uma regiao por chamada traz o mesmo recurso duas vezes quando
+# ele esta cadastrado em duas. Sem dedupe a agenda dele contaria em dobro.
+DOBRADO = AGENDA + [AGENDA[0]]
+pd = ns['_cp_pendentes'](DOBRADO, HOJE, "REGES PAULO WERLANG", COORDS, None)
+t('recurso repetido nao conta duas vezes', sorted(r['id'] for r in pd) == [9, 11, 12, 1264418],
+  [r['id'] for r in pd])
 
 print(f'\n== OK ({len(ok)}) ==')
 for s in ok: print('  v ' + s)

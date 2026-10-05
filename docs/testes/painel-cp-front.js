@@ -147,6 +147,19 @@ const ACE = {
     rotulo: n.querySelector('span').textContent.trim(),
     valor: n.querySelector('b').textContent.trim(),
     txt: Array.from(n.querySelectorAll('em')).map(e => e.textContent.trim()).join(' | ') })));
+  const barra = async () => pg.$eval('#cp-readout', n => ({
+    cls: n.className, txt: n.textContent.replace(/\s+/g, ' ').trim(),
+    spin: !!n.querySelector('.cp-spin'),
+  }));
+  const b1 = await barra();
+  t('barra pronta é discreta', /st-ok/.test(b1.cls) && !b1.spin, b1.cls);
+  t('barra diz hora, período e consultores',
+    /Agenda lida ao vivo às/.test(b1.txt) && /114 consultores/.test(b1.txt), b1.txt);
+  t('barra traz o selo atualizado', /ATUALIZADO|atualizado/i.test(b1.txt), b1.txt);
+  t('barra fora da fila de botões',
+    await pg.$eval('#cp-readout', n => n.previousElementSibling === null
+      || !n.previousElementSibling.querySelector('#cp-reload')));
+
   const defLente = await pg.$eval('#cp-lente .is-on', n => n.dataset.cpl);
   const defDias = await pg.$eval('#cp-dias', n => n.value);
   const defPedido = pedidosIniciais.find(u => u.includes('/api/cp/lancamento')) || '';
@@ -305,6 +318,39 @@ const ACE = {
   await pg.selectOption('#cp-dias', '15');
   await pg.waitForTimeout(400);
   t('trocar janela recarrega', pedidos >= 2, pedidos);
+
+  // CARREGANDO: a barra tem de virar azul com spinner E apagar o conteúdo
+  // velho — número antigo com cara de número novo é pior que tela vazia.
+  let solta;
+  await pg.route('**/api/cp/lancamento*', async r => {
+    await new Promise(ok => { solta = ok; });
+    await r.fulfill({ json: LANC });
+  });
+  pg.click('#cp-reload').catch(() => {});
+  await pg.waitForTimeout(400);
+  const bl = await barra();
+  t('carregando: barra fica azul', /st-load/.test(bl.cls), bl.cls);
+  t('carregando: tem spinner', bl.spin);
+  t('carregando: avisa que é ao vivo e quantos dias', /ao vivo/.test(bl.txt) && /15 dias/.test(bl.txt), bl.txt);
+  t('carregando: conteúdo velho apagado',
+    (await pg.$$('#cp-kpis.cp-apaga')).length === 1 && (await pg.$$('#cp-resumo.cp-apaga')).length === 1);
+  if (solta) solta();
+  await pg.waitForTimeout(600);
+  t('terminou: volta ao normal e desapaga',
+    /st-ok|st-warn/.test((await barra()).cls) && (await pg.$$('#cp-kpis.cp-apaga')).length === 0);
+
+  // TRUNCADO: a leitura parou no meio, os totais estão por baixo. Isso muda a
+  // barra de cor e vem antes de qualquer outra informação.
+  await pg.route('**/api/cp/lancamento*', r => r.fulfill({
+    json: { ...LANC, diag: { ...LANC.diag, truncado: true } } }));
+  await pg.click('#cp-reload');
+  await pg.waitForTimeout(700);
+  const bt = await barra();
+  t('truncado: barra fica âmbar', /st-warn/.test(bt.cls), bt.cls);
+  t('truncado: diz que os totais estão por baixo',
+    /Leitura incompleta/.test(bt.txt) && /por baixo/.test(bt.txt), bt.txt);
+  t('truncado: sugere o que fazer', /cliente ou reduza a janela/.test(bt.txt), bt.txt);
+  t('truncado: selo incompleto', /INCOMPLETO|incompleto/i.test(bt.txt), bt.txt);
 
   t('sem erros de JS', erros.length === 0, erros.join(' ;; '));
 

@@ -9515,8 +9515,9 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     if (cp.carregando) return;
     cp.carregando = true;
     msg('');
-    estado('load', 'Lendo a agenda <b>ao vivo</b> na API Totvs SC — a célula inteira '
-      + `dos últimos <b>${cp.dias} dias</b>. Pode levar alguns segundos.`, 'carregando');
+    estado('load', 'Lendo a agenda <b>ao vivo</b> na API Totvs SC — <b>todos</b> os '
+      + `consultores da célula nos últimos <b>${cp.dias} dias</b>, região por região. `
+      + 'Pode levar alguns segundos.', 'carregando');
     apaga(true);
     if (!cp.lanc) {
       el('#cp-blocos').innerHTML =
@@ -9575,9 +9576,14 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     // TRUNCADO não é detalhe de diagnóstico: quer dizer que a leitura parou no
     // meio e os números acima estão INCOMPLETOS. Isso muda a barra inteira de
     // cor e vem antes de qualquer outra informação.
+    // A agenda varrida é a da CÉLULA inteira, de todo mundo — e não só do CP:
+    // quem precisa lançar pode ser qualquer consultor que atendeu o cliente.
+    // Dizer quais regiões foram lidas é o que deixa isso explícito na tela.
+    const regs = (d.regioes || []).join(', ');
     const comum = lido
       ? `Agenda lida <b>ao vivo</b> às <b>${esc(lido)}</b> · <b>${dt(cp.lanc.de)} a ${dt(cp.lanc.ate)}</b>`
-        + ` · ${plural(d.recursos || 0, 'consultor', 'consultores')} na célula`
+        + ` · célula <b>${esc(regs || '—')}</b>`
+        + ` · ${plural(d.recursos || 0, 'consultor', 'consultores')} varrido${(d.recursos || 0) === 1 ? '' : 's'}`
         + (cp.cliente ? ' · recorte de 1 cliente' : '')
       : '';
     if (!lido) {

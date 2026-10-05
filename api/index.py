@@ -5845,6 +5845,14 @@ CP_STATUS_LABEL = {"P": "Planejado", "C": "Confirmado", "S": "Em espera",
                    "ZA": "Apontado", "ZV": "Cancelado"}
 # ZV = cancelada: não é pendência de ninguém. ZA = já apontada.
 CP_STATUS_FORA = {"ZV", "ZA"}
+# A CÉLULA. Sem `region` o endpoint devolve a agenda da TOTVS SC INTEIRA — no
+# primeiro uso real vieram 1242 consultores e a paginação morreu no teto de
+# tempo antes de terminar, com os totais saindo por baixo. A célula é a mesma
+# regional que já recorta o sync de projetos (SYNC_REGIOES = 201, 202, 211), e
+# o endpoint só aceita UMA região por chamada — por isso uma chamada por região.
+# CP_REGIOES vazio volta ao comportamento antigo (a empresa toda).
+CP_REGIOES = tuple(r.strip() for r in os.environ.get(
+    "CP_REGIOES", ",".join(sorted(SYNC_REGIOES))).split(",") if r.strip())
 CP_PAGESIZE = 100
 CP_MAX_PAGINAS = 12
 CP_TETO_S = 40                    # a função morre em 60s; sai antes e avisa
@@ -5961,34 +5969,51 @@ def _cp_agenda_pagina(params):
         + "). Configure TASKS_AGENDA_PATH com a rota correta.")
 
 
-def _cp_agenda(de, ate, regiao="", cliente=""):
-    """Agenda da célula no período. Pagina por RECURSO: a resposta é
-    items[] = {resource, scheduleData[]}, uma entrada por consultor com todos
-    os compromissos dele na janela.
+def _cp_agenda(de, ate, regioes=None, cliente=""):
+    """Agenda da CÉLULA no período — todo mundo que tem agenda, não só o CP.
+    A resposta é items[] = {resource, scheduleData[]}, uma entrada por
+    consultor com todos os compromissos dele na janela.
 
-    `cliente` vai no parâmetro `customer` da própria API — com 292 consultores
-    na célula, deixar o recorte para o Python faz a chamada trafegar a agenda
-    inteira e bater no teto de tempo. Mesmo assim o filtro é REFEITO aqui
-    embaixo: se a API ignorar o parâmetro, o resultado continua certo."""
+    DOIS recortes vão na própria API, e não no Python depois:
+
+    `region` — o endpoint só aceita UMA região por chamada, então varremos as
+    regiões da célula uma a uma. Sem isso ele devolve a TOTVS SC inteira (1242
+    consultores no primeiro uso real) e a paginação morre no teto de tempo com
+    os totais saindo por baixo.
+
+    `customer` — mesmo motivo, quando a tela está recortada por cliente. O
+    filtro por cliente é REFEITO em _cp_pendentes: se a API ignorar o
+    parâmetro, o resultado continua certo. O de região não dá para refazer,
+    porque o recurso pode vir com region vazia ou "000" e seria pior derrubar
+    gente de verdade do que confiar no filtro do servidor."""
     ini = time.time()
-    itens, pagina, rota, truncado = [], 0, None, False
-    while pagina < CP_MAX_PAGINAS:
-        pagina += 1
-        d, rota = _cp_agenda_pagina({
-            "dateStart": de, "dateEnd": ate, "resource": "", "region": regiao,
-            "customer": cliente, "project": "", "owner": "", "team": "false",
-            "view": "", "page": pagina, "pagesize": CP_PAGESIZE,
-            "filterCustomer": "false"})
-        lote = d.get("items") if isinstance(d, dict) else None
-        if not isinstance(lote, list) or not lote:
+    regioes = list(regioes) if regioes else [""]
+    itens, paginas, rota, truncado = [], 0, None, False
+    lidas = []
+    for reg in regioes:
+        pagina = 0
+        while pagina < CP_MAX_PAGINAS:
+            pagina += 1
+            paginas += 1
+            d, rota = _cp_agenda_pagina({
+                "dateStart": de, "dateEnd": ate, "resource": "", "region": reg,
+                "customer": cliente, "project": "", "owner": "", "team": "false",
+                "view": "", "page": pagina, "pagesize": CP_PAGESIZE,
+                "filterCustomer": "false"})
+            lote = d.get("items") if isinstance(d, dict) else None
+            if not isinstance(lote, list) or not lote:
+                break
+            itens.extend(lote)
+            if len(lote) < CP_PAGESIZE:
+                break
+            if time.time() - ini > CP_TETO_S:
+                truncado = True
+                break
+        lidas.append(reg or "(todas)")
+        if truncado:
             break
-        itens.extend(lote)
-        if len(lote) < CP_PAGESIZE:
-            break
-        if time.time() - ini > CP_TETO_S:
-            truncado = True
-            break
-    return itens, {"rota": rota, "paginas": pagina, "recursos": len(itens),
+    return itens, {"rota": rota, "paginas": paginas, "recursos": len(itens),
+                   "regioes": lidas, "regioes_pedidas": [r or "(todas)" for r in regioes],
                    "truncado": truncado}
 
 
@@ -6001,12 +6026,19 @@ def _cp_pendentes(itens, hoje, coord, coords, allowed, cliente=""):
     c = coords.get(coord) or {}
     cod_cp = {x.upper() for x in (c.get("codigos") or set())}
     projetos_cp = c.get("projetos") or {}
-    out = []
+    out, vistos = [], set()
     for it in itens:
         res = (it.get("resource") or {}) if isinstance(it, dict) else {}
         for a in (it.get("scheduleData") or []):
             if not isinstance(a, dict):
                 continue
+            # Varremos uma região por chamada: um consultor cadastrado em duas
+            # regiões voltaria duas vezes e a agenda dele contaria em dobro.
+            ident = a.get("id")
+            if ident is not None:
+                if ident in vistos:
+                    continue
+                vistos.add(ident)
             dia = _cp_dia(a.get("date"))
             if not dia or dia > hoje:
                 continue
@@ -6114,8 +6146,10 @@ def api_cp_lancamento():
     if (r := require_interno()):
         return r
     coord = _cp_norm(request.args.get("coord") or "")
-    regiao = (request.args.get("regiao") or "").strip()
     cliente = (request.args.get("cliente") or "").strip()
+    # ?regiao= fixa UMA região (depuração); o normal é a célula inteira.
+    regiao = (request.args.get("regiao") or "").strip()
+    regioes = [regiao] if regiao else list(CP_REGIOES)
     # 15 dias é o padrão: a cobrança de lançamento é semanal e uma janela larga
     # devolve atraso antigo, que já é outro assunto (e não some ao ser cobrado).
     try:
@@ -6129,7 +6163,7 @@ def api_cp_lancamento():
     coords = _cp_coordenadores()
     if coord and coord not in coords:
         return _err(404, f"Não encontrei o coordenador '{coord}' em cockpit.projetos.")
-    itens, diag = _cp_agenda(de, ate, regiao, cliente)
+    itens, diag = _cp_agenda(de, ate, regioes, cliente)
     pend = _cp_pendentes(itens, hoje, coord, coords, allowed_customers(), cliente)
     return _json({"ok": True, "coord": coord, "cliente": cliente,
                   "de": de, "ate": ate,
