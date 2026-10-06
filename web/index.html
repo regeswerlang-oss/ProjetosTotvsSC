@@ -9511,13 +9511,19 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       + ativos.map(opt).join('') + resto.map(opt).join('');
   }
 
-  async function carrega() {
+  // ABRIR/FILTRAR lê a FOTO no Supabase (cockpit.cp_lanc_pendente, refeita de
+  // 2 em 2 h pelo pg_cron) — sem tocar na API Totvs SC. Só o botão
+  // "↻ Atualizar" passa live=1: aí o servidor lê a agenda ao vivo, regrava a
+  // foto e devolve a partir dela.
+  async function carrega(live) {
     if (cp.carregando) return;
     cp.carregando = true;
     msg('');
-    estado('load', 'Lendo a agenda <b>ao vivo</b> na API Totvs SC — <b>todos</b> os '
-      + `consultores da célula nos últimos <b>${cp.dias} dias</b>, região por região. `
-      + 'Pode levar alguns segundos.', 'carregando');
+    estado('load', live
+      ? 'Lendo a agenda <b>ao vivo</b> na API Totvs SC — <b>todos</b> os '
+        + `consultores da célula nos últimos <b>${cp.dias} dias</b>, região por região, `
+        + 'e gravando no Supabase. Pode levar alguns segundos.'
+      : 'Lendo as pendências gravadas no <b>Supabase</b>…', 'carregando');
     apaga(true);
     if (!cp.lanc) {
       el('#cp-blocos').innerHTML =
@@ -9528,7 +9534,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
       const qs = `coord=${encodeURIComponent(cp.coord)}`
         + `&cliente=${encodeURIComponent(cp.cliente)}`;
       const [lanc, ace] = await Promise.all([
-        api(`/api/cp/lancamento?${qs}&dias=${cp.dias}`),
+        api(`/api/cp/lancamento?${qs}&dias=${cp.dias}${live ? '&live=1' : ''}`),
         api(`/api/cp/aceite?${qs}`),
       ]);
       cp.lanc = lanc;
@@ -9569,9 +9575,15 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     ].join('');
 
     const d = (cp.lanc && cp.lanc.diag) || {};
-    const lido = cp.lanc && cp.lanc.lido_em_ts
-      ? new Date(cp.lanc.lido_em_ts * 1000).toLocaleTimeString('pt-BR',
-          { hour: '2-digit', minute: '2-digit' })
+    const foto = (cp.lanc && cp.lanc.foto) || null;
+    const aoVivo = cp.lanc && cp.lanc.fonte === 'api';
+    // Hora que vale: na leitura ao vivo, agora; senão, a da última foto completa.
+    const quando = aoVivo
+      ? new Date((cp.lanc.lido_em_ts || 0) * 1000)
+      : (foto && foto.em ? new Date(foto.em) : null);
+    const lido = quando
+      ? quando.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit',
+          hour: '2-digit', minute: '2-digit' })
       : '';
     // TRUNCADO não é detalhe de diagnóstico: quer dizer que a leitura parou no
     // meio e os números acima estão INCOMPLETOS. Isso muda a barra inteira de
@@ -9581,19 +9593,27 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
     // Dizer quais regiões foram lidas é o que deixa isso explícito na tela.
     const regs = (d.regioes || []).join(', ');
     const comum = lido
-      ? `Agenda lida <b>ao vivo</b> às <b>${esc(lido)}</b> · <b>${dt(cp.lanc.de)} a ${dt(cp.lanc.ate)}</b>`
+      ? (aoVivo ? `Agenda lida <b>ao vivo</b> e gravada no Supabase em <b>${esc(lido)}</b>`
+                : `Agenda do <b>Supabase</b> · foto de <b>${esc(lido)}</b>`
+                  + (foto && foto.origem === 'cron' ? ' (automática, a cada 2 h)' : ''))
+        + ` · <b>${dt(cp.lanc.de)} a ${dt(cp.lanc.ate)}</b>`
         + ` · célula <b>${esc(regs || '—')}</b>`
         + ` · ${plural(d.recursos || 0, 'consultor', 'consultores')} varrido${(d.recursos || 0) === 1 ? '' : 's'}`
         + (cp.cliente ? ' · recorte de 1 cliente' : '')
       : '';
     if (!lido) {
-      estado('ok', '');
+      estado('warn', 'Ainda não há foto da agenda no Supabase. Clique em '
+        + '<b>↻ Atualizar</b> para ler ao vivo na API Totvs SC.', 'sem foto');
+    } else if (!aoVivo && foto && cp.dias > (foto.cobre || 0)) {
+      estado('warn', `A foto automática cobre só os últimos <b>${foto.cobre} dias</b> — `
+        + `agendas mais antigas da janela de ${cp.dias} dias podem faltar. Clique em `
+        + `<b>↻ Atualizar</b> para ler a janela inteira ao vivo. — ${comum}`, 'parcial');
     } else if (d.truncado) {
       estado('warn', `<b>Leitura incompleta.</b> A API não devolveu a célula inteira `
         + `dentro do tempo, então os totais acima estão <b>por baixo</b>. Escolha um `
         + `cliente ou reduza a janela e atualize. — ${comum}`, 'incompleto');
     } else {
-      estado('ok', comum, 'atualizado');
+      estado('ok', comum, aoVivo ? 'ao vivo' : 'Supabase');
     }
 
     // O sincronismo do aceite é de outro processo (cron do Cockpit). Se ele
@@ -9864,7 +9884,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
         cp.abertas = cp.expandido ? new Set(['lanc', 'ace']) : new Set();
         if (cp.lanc) render();
       });
-      el('#cp-reload').addEventListener('click', () => { cp.ctx = null; carrega(); });
+      el('#cp-reload').addEventListener('click', () => { cp.ctx = null; carrega(true); });
       pintaLente();
       await carrega();
       return;

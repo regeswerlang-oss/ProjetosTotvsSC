@@ -6140,16 +6140,98 @@ def api_cp_contexto():
                   "hoje": _cp_hoje().isoformat(), "coordenadores": lista})
 
 
+# ── FOTO da fila de lançamento (cockpit.cp_lanc_pendente) ──────────────────
+# A tela NÃO lê mais a agenda ao vivo ao abrir: lê a foto no Supabase. A API só
+# é chamada pelo cron (/api/cron/cp-lancamento, de 2 em 2 h) e pelo botão
+# "↻ Atualizar" (?live=1). Toda leitura ao vivo que termina sem truncar refaz a
+# foto do ESCOPO que leu (janela + cliente): o que não voltou ganhou OS e sai.
+# A foto guarda a célula inteira SEM a lente do CP — a lente é aplicada na
+# leitura, então a mesma foto serve a todos os coordenadores.
+CP_SNAP_DIAS = int(os.environ.get("CP_SNAP_DIAS", "30"))
+
+
+def _cp_lente(rows, coord, coords):
+    """Reaplica as DUAS lentes ('owner' e 'coord') sobre linhas da foto,
+    exatamente como _cp_pendentes faz na leitura ao vivo."""
+    if not coord:
+        return [{**r, "por": []} for r in rows]
+    c = coords.get(coord) or {}
+    cod_cp = {x.upper() for x in (c.get("codigos") or set())}
+    projetos_cp = c.get("projetos") or {}
+    out = []
+    for r in rows:
+        por = []
+        if ((r.get("owner") or "").upper() in cod_cp
+                or _cp_norm(r.get("owner_nome")) == coord):
+            por.append("owner")
+        if (r.get("projeto") or "") in projetos_cp:
+            por.append("coord")
+        if por:
+            out.append({**r, "por": por})
+    return out
+
+
+def _cp_grava_foto(pend, de, ate, cliente, diag, origem):
+    """Grava a leitura ao vivo na foto. Só apaga o que sumiu se a leitura foi
+    COMPLETA (não truncada) — leitura pela metade apagaria pendência real."""
+    agora = datetime.now(timezone.utc)
+    with db() as c, c.cursor() as cur:
+        for r in pend:
+            ident = r.get("id")
+            chave = str(ident) if ident is not None else "|".join(str(r.get(k) or "") for k in (
+                "consultor_cod", "data", "hora_inicio", "cliente", "projeto"))
+            dados = {k: v for k, v in r.items() if k not in ("dias", "faixa", "por")}
+            cur.execute("""insert into cockpit.cp_lanc_pendente
+                           (agenda_id, data, cliente, owner, owner_nome, projeto, dados, synced_at)
+                           values (%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
+                           on conflict (agenda_id) do update set
+                             data=excluded.data, cliente=excluded.cliente,
+                             owner=excluded.owner, owner_nome=excluded.owner_nome,
+                             projeto=excluded.projeto, dados=excluded.dados,
+                             synced_at=excluded.synced_at""",
+                        (chave, r["data"], r.get("cliente"), r.get("owner"),
+                         r.get("owner_nome"), r.get("projeto"),
+                         json.dumps(dados, ensure_ascii=False, default=str), agora))
+        removidos = 0
+        if not diag.get("truncado"):
+            sql = """delete from cockpit.cp_lanc_pendente
+                     where data between %s and %s and synced_at < %s"""
+            par = [de, ate, agora]
+            if cliente:
+                sql += " and cliente = %s"
+                par.append(cliente)
+            cur.execute(sql, par)
+            removidos = cur.rowcount or 0
+        # higiene: nada além da maior janela da tela (180 d) precisa ficar
+        cur.execute("delete from cockpit.cp_lanc_pendente where data < current_date - 200")
+        cur.execute("""insert into cockpit.cp_lanc_sync
+                       (origem, de, ate, cliente, total, removidos, truncado, diag)
+                       values (%s,%s,%s,%s,%s,%s,%s,%s::jsonb)""",
+                    (origem, de, ate, cliente or "", len(pend), removidos,
+                     bool(diag.get("truncado")), json.dumps(diag, default=str)))
+    return removidos
+
+
+def _cp_le_ao_vivo(de, ate, cliente, origem):
+    """Agenda da célula na API → linhas pendentes (sem lente) → foto."""
+    itens, diag = _cp_agenda(de, ate, list(CP_REGIOES), cliente)
+    pend = _cp_pendentes(itens, _cp_hoje(), "", {}, None, cliente)
+    diag["removidos"] = _cp_grava_foto(pend, de, ate, cliente, diag, origem)
+    return diag
+
+
 @app.get("/api/cp/lancamento")
 def api_cp_lancamento():
-    """BLOCO 1 — agendas realizadas sem OS gerada, ao vivo na API Totvs SC."""
+    """BLOCO 1 — agendas realizadas sem OS gerada.
+
+    Padrão: lê a FOTO em cockpit.cp_lanc_pendente (sem tocar na API).
+    ?live=1 (botão ↻ Atualizar): lê a agenda ao vivo na API Totvs SC, grava
+    na foto e devolve a partir dela."""
     if (r := require_interno()):
         return r
     coord = _cp_norm(request.args.get("coord") or "")
     cliente = (request.args.get("cliente") or "").strip()
-    # ?regiao= fixa UMA região (depuração); o normal é a célula inteira.
-    regiao = (request.args.get("regiao") or "").strip()
-    regioes = [regiao] if regiao else list(CP_REGIOES)
+    live = (request.args.get("live") or "") in ("1", "true", "sim")
     # 15 dias é o padrão: a cobrança de lançamento é semanal e uma janela larga
     # devolve atraso antigo, que já é outro assunto (e não some ao ser cobrado).
     try:
@@ -6163,15 +6245,79 @@ def api_cp_lancamento():
     coords = _cp_coordenadores()
     if coord and coord not in coords:
         return _err(404, f"Não encontrei o coordenador '{coord}' em cockpit.projetos.")
-    itens, diag = _cp_agenda(de, ate, regioes, cliente)
-    pend = _cp_pendentes(itens, hoje, coord, coords, allowed_customers(), cliente)
+
+    diag_live = None
+    if live:
+        diag_live = _cp_le_ao_vivo(de, ate, cliente, "botao")
+
+    rows = q("""select dados, synced_at from cockpit.cp_lanc_pendente
+                where data between %s and %s
+                  and (%s = '' or cliente = %s)""", (de, ate, cliente, cliente))
+    allowed = allowed_customers()
+    base, foto_em = [], None
+    for x in rows or []:
+        d = dict(x["dados"] or {})
+        cust = (d.get("cliente") or "").strip()
+        if allowed is not None and cust and cust not in allowed:
+            continue
+        dia = _cp_dia(d.get("data"))
+        if not dia or dia > hoje:
+            continue
+        d["dias"] = (hoje - dia).days
+        d["faixa"] = _cp_faixa(d["dias"])
+        base.append(d)
+        if x["synced_at"] and (foto_em is None or x["synced_at"] > foto_em):
+            foto_em = x["synced_at"]
+    pend = _cp_lente(base, coord, coords)
+    pend.sort(key=lambda r: (-r["dias"], r.get("consultor") or "", r.get("cliente_nome") or ""))
+
+    # Última leitura COMPLETA da célula (cliente vazio): é a "idade da foto" que a
+    # tela mostra, e diz até quantos dias a foto automática cobre.
+    ult = q("""select origem, de, ate, total, truncado, diag, criado_em
+               from cockpit.cp_lanc_sync where cliente = ''
+               order by criado_em desc limit 1""", one=True)
+    foto = None
+    if ult:
+        foto = {"origem": ult["origem"], "de": ult["de"].isoformat(),
+                "ate": ult["ate"].isoformat(), "truncado": ult["truncado"],
+                "em": ult["criado_em"], "diag": ult["diag"] or {},
+                "cobre": (hoje - ult["de"]).days}
     return _json({"ok": True, "coord": coord, "cliente": cliente,
-                  "de": de, "ate": ate,
-                  "hoje": hoje.isoformat(), "dias": dias,
+                  "de": de, "ate": ate, "hoje": hoje.isoformat(), "dias": dias,
+                  "fonte": "api" if live else "supabase",
                   "total": len(pend),
-                  "horas": round(sum(r["horas"] for r in pend), 2),
-                  "pendentes": pend, "diag": diag,
+                  "horas": round(sum(float(r.get("horas") or 0) for r in pend), 2),
+                  "pendentes": pend, "diag": diag_live or (foto or {}).get("diag") or {},
+                  "foto": foto, "foto_linhas_em": foto_em,
                   "lido_em_ts": int(time.time())})
+
+
+@app.route("/api/cron/cp-lancamento", methods=["GET", "POST"])
+def api_cron_cp_lancamento():
+    """pg_cron (de 2 em 2 h): lê a agenda da célula ao vivo e refaz a foto dos
+    últimos CP_SNAP_DIAS dias. Não exige login — exige o Bearer CRON_SECRET."""
+    if not _cron_autorizado():
+        return _err(401, "CRON_SECRET inválido ou ausente.")
+    ini = time.time()
+    try:
+        dias = int(request.args.get("dias") or CP_SNAP_DIAS)
+    except ValueError:
+        dias = CP_SNAP_DIAS
+    hoje = _cp_hoje()
+    de = (hoje - timedelta(days=max(1, min(dias, 180)))).isoformat()
+    diag = _cp_le_ao_vivo(de, hoje.isoformat(), "", "cron")
+    dur = int((time.time() - ini) * 1000)
+    try:
+        execute("""insert into cockpit.sync_log
+                   (source, status, started_at, finished_at, duration_ms,
+                    tickets_processed, tickets_upserted)
+                   values ('projetos-cp-lancamento', %s, to_timestamp(%s), now(), %s, %s, %s)""",
+                ("partial" if diag.get("truncado") else "success", ini, dur,
+                 diag.get("recursos") or 0, diag.get("recursos") or 0))
+    except Exception:
+        pass
+    return _json({"ok": True, "de": de, "ate": hoje.isoformat(),
+                  "duracao_ms": dur, **diag})
 
 
 @app.get("/api/cp/aceite")
