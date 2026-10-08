@@ -1280,10 +1280,22 @@ async function abrirDetalhe(sel) {
   // URL-encode cada componente — clientes como "08872 00" têm espaço
   const enc = (s) => encodeURIComponent(s || '');
   const base = `/api/projeto/${enc(cli)}/${enc(cod)}/${enc(ver || '01')}/${enc(loja || 'undefined')}`;
+  // VERSÃO DO CRONOGRAMA (08/10/2026): a lista PCI não traz versao_projeto (nulo
+  // nos 1.160 projetos), então `ver` caía no '01' — o PLANO ORIGINAL. O /mapa
+  // ignora a versão pedida e devolve a VIGENTE (IB7_VERSAO), mas o /cronograma
+  // respeita o parâmetro: a aba Por Etapa/Por Módulo/Cronograma mostrava a v01
+  // (ex.: Digitro Protótipo Integrado 459h) enquanto o portal mostrava a v11
+  // (378h). Regra: o cronograma usa SEMPRE a versão que o /mapa devolveu.
+  let baseCrono = base;
 
   // 1) Mapa
   try {
     const mapa = await api(`${base}/mapa`);
+    const verVigente = String(mapa?.IB7_VERSAO || '').trim();
+    if (verVigente) {
+      baseCrono = `/api/projeto/${enc(cli)}/${enc(cod)}/${enc(verVigente)}/${enc(loja || 'undefined')}`;
+      sel.ver = verVigente;
+    }
     preencheMapa(mapa, projeto);
     $('#detalhe-loading').classList.add('hidden');
     $('#detalhe-conteudo').classList.remove('hidden');
@@ -1294,7 +1306,7 @@ async function abrirDetalhe(sel) {
 
   // 2) Cronograma
   try {
-    const crono = await api(`${base}/cronograma`);
+    const crono = await api(`${baseCrono}/cronograma`);
     state.cronograma = crono;
     renderCronograma(crono);
     renderPorModulo(crono);
