@@ -22,3 +22,20 @@ trouxer versão.
 Com v11 a soma das atividades nível 3 por sub-etapa bate com o portal
 (Levantamento 294 / 339,27; Prot. Integrado 378 / 0; Específicos 2.346,5 /
 1.282,42; Gestão 1.000 / 1.063,45).
+
+# Aba Consumo — coluna "Sem agenda" (08/10/2026)
+
+## Sintoma
+A linha não fechava: Protótipo Integrado 378 estimadas, 0 realizadas, 280,4 a
+realizar — faltavam 97,6h que não apareciam em lugar nenhum.
+
+## Causa
+"A realizar" (`aRealizar()`) soma só agendas não apontadas (status ≠ ZA/ZV).
+O estimado que ainda **não tem agenda** não tinha coluna. É o mesmo que o portal
+mostra como Cobertura (280,4 / 378 = 74%).
+
+## Correção
+Coluna **Sem agenda** = Estimadas − Realizadas − A realizar, na linha e no
+total. Valor negativo vira "+X estouro" em vermelho (realizado + agendado passou
+do estimado: Levantamento +45,3; Capacitação +88).
+Fechamento Digitro v11: 4.208,5 = 2.150,2 + 754,4 + 1.303,9.

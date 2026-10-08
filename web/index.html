@@ -2291,6 +2291,18 @@ function renderConsumo() {
   const barra = (pct, cor) => `
     <div class="bar-track"><div class="bar-fill ${cor}" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div></div>`;
 
+  // SEM AGENDA (08/10/2026): "A realizar" é só o que já está AGENDADO e não
+  // apontado (status ≠ ZA/ZV). O que foi estimado e ainda não tem agenda sumia
+  // da tela e a linha não fechava (Protótipo Integrado: 378 = 0 + 280,4 + ?).
+  // Agora: Estimadas = Realizadas + A realizar + Sem agenda. Negativo = estouro
+  // (realizado + agendado passou do estimado) e aparece em vermelho.
+  const semAgenda = (a) => a.estimadas - a.executadas - a.planejadas;
+  const celSemAgenda = (v, extra = '') => {
+    const r = Math.round(v * 10) / 10;
+    if (r < 0) return `<td class="py-2.5 pr-3 text-right tabular-nums text-red-600 ${extra}" title="Realizado + agendado passou do estimado">+${fmtH(-r)} estouro</td>`;
+    return `<td class="py-2.5 pr-3 text-right tabular-nums ${r > 0 ? 'text-amber-700' : 'text-slate-400'} ${extra}" title="Estimado que ainda não tem agenda">${fmtH(r)}</td>`;
+  };
+
   const linhaEtapa = (l) => {
     const pctBase = base > 0 ? (100 * l.agg.executadas / base) : 0;
     const pctExec = l.agg.estimadas > 0 ? (100 * l.agg.executadas / l.agg.estimadas) : 0;
@@ -2306,6 +2318,7 @@ function renderConsumo() {
         <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(l.agg.estimadas)}</td>
         <td class="py-2.5 pr-3 text-right tabular-nums font-medium">${fmtH(l.agg.executadas)}</td>
         <td class="py-2.5 pr-3 text-right tabular-nums text-slate-500">${fmtH(l.agg.planejadas)}</td>
+        ${celSemAgenda(semAgenda(l.agg))}
         <td class="py-2.5 pr-3 text-right tabular-nums">${pctExec.toFixed(0)}%</td>
         <td class="py-2.5 pr-3 w-48">${barra(pctBase, 'fill-exec')}</td>
         <td class="py-2.5 text-right tabular-nums font-semibold text-totvs-petroleo">${pctBase.toFixed(1)}%</td>
@@ -2328,7 +2341,8 @@ function renderConsumo() {
           <th class="pb-2 pr-3">Etapa</th>
           <th class="pb-2 pr-3 text-right">Estimadas</th>
           <th class="pb-2 pr-3 text-right">Realizadas</th>
-          <th class="pb-2 pr-3 text-right">A realizar</th>
+          <th class="pb-2 pr-3 text-right" title="Agendado e ainda não apontado">A realizar</th>
+          <th class="pb-2 pr-3 text-right" title="Estimadas − Realizadas − A realizar">Sem agenda</th>
           <th class="pb-2 pr-3 text-right">% da etapa</th>
           <th class="pb-2 pr-3">Consumo da base</th>
           <th class="pb-2 text-right">% da base</th>
@@ -2340,6 +2354,7 @@ function renderConsumo() {
             <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(somaEst)}</td>
             <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(somaExec)}</td>
             <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(linhas.reduce((a, l) => a + l.agg.planejadas, 0))}</td>
+            ${celSemAgenda(linhas.reduce((a, l) => a + semAgenda(l.agg), 0))}
             <td class="py-2.5 pr-3 text-right tabular-nums">${somaEst > 0 ? (100 * somaExec / somaEst).toFixed(0) : 0}%</td>
             <td class="py-2.5 pr-3">${barra(base > 0 ? 100 * somaExec / base : 0, 'fill-exec')}</td>
             <td class="py-2.5 text-right tabular-nums">${base > 0 ? (100 * somaExec / base).toFixed(1) : '0,0'}%</td>
