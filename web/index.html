@@ -1263,6 +1263,7 @@ async function abrirDetalhe(sel) {
   state.view = 'detalhe';
   consumo.iniciado = false;             // outro projeto, outra base de horas
   consumo.excluidos.clear();
+  consumo.etapasFora.clear();
   setTab('resumo');                     // todo projeto abre pelo Resumo
   aplicaAbas();                         // ...e a área de clientes corrige para a 1ª liberada
   $('#view-lista').classList.add('hidden');
@@ -2237,7 +2238,10 @@ function seloAmbiente(el, ambiente) {
 // e distorceriam o consumo por etapa.
 const CONSUMO_FORA = ['monitoramento e controle', 'encerramento'];
 
-const consumo = { desconto: 1006, excluidos: new Set(), iniciado: false };
+// etapasFora (08/10/2026): etapas inteiras desmarcadas pelo check da linha
+// (ex.: comparar "sem Operação Assistida"). Saem dos totais/KPIs E da base —
+// o estimado delas é descontado das Horas do projeto, senão o saldo inflava.
+const consumo = { desconto: 1006, excluidos: new Set(), etapasFora: new Set(), iniciado: false };
 
 const chaveAtiv = (it) =>
   `${it.subReal}|${it.modulo}|${(it.atividade?.descricao || '').trim()}`;
@@ -2262,8 +2266,6 @@ function renderConsumo() {
   const itens = coletaAtividades(state.cronograma).filter(it => !foraDoConsumo(it));
   const total = Number($('#cons-total').value || 0);
   const desconto = Number($('#cons-desconto').value || 0);
-  const base = Math.max(0, total - desconto);
-  $('#cons-base').textContent = `${fmtH(base)} h`;
 
   // Agrupa por etapa (sub-etapa real do MIT), na ordem natural do método
   const porEtapa = {};
@@ -2271,22 +2273,33 @@ function renderConsumo() {
   const linhas = Object.entries(porEtapa)
     .map(([etapa, lista]) => {
       const dentro = lista.filter(it => !consumo.excluidos.has(chaveAtiv(it)));
-      return { etapa, lista, dentro, agg: agrega(dentro), aggTudo: agrega(lista) };
+      return { etapa, lista, dentro, agg: agrega(dentro), aggTudo: agrega(lista),
+               on: !consumo.etapasFora.has(etapa) };
     })
     .sort((a, b) => ordemEtapa(a.etapa) - ordemEtapa(b.etapa) || b.aggTudo.estimadas - a.aggTudo.estimadas);
 
-  const somaExec = linhas.reduce((a, l) => a + l.agg.executadas, 0);
-  const somaEst = linhas.reduce((a, l) => a + l.agg.estimadas, 0);
+  // Só as etapas marcadas entram em totais e KPIs; o estimado das desmarcadas
+  // sai também da base (comparação "descontando a Operação Assistida").
+  const linhasOn = linhas.filter(l => l.on);
+  const etapasForaH = linhas.filter(l => !l.on).reduce((a, l) => a + l.agg.estimadas, 0);
+  const nEtapasFora = linhas.length - linhasOn.length;
+  const base = Math.max(0, total - desconto - etapasForaH);
+  $('#cons-base').textContent = `${fmtH(base)} h`;
+  const formulaBase = `${fmtH(total)} − ${fmtH(desconto)} de personalizações` +
+    (nEtapasFora ? ` − ${fmtH(etapasForaH)} de ${nEtapasFora} etapa(s) fora` : '');
+
+  const somaExec = linhasOn.reduce((a, l) => a + l.agg.executadas, 0);
+  const somaEst = linhasOn.reduce((a, l) => a + l.agg.estimadas, 0);
   const nExcl = consumo.excluidos.size;
 
   const kpi = (rot, val, sub, cls) => `
     <div class="rounded-lg p-4 ${cls}"><p class="text-xs opacity-80">${rot}</p>
       <p class="text-2xl font-totvs mt-1">${val}</p><p class="text-xs opacity-80 mt-0.5">${sub}</p></div>`;
   $('#cons-kpis').innerHTML =
-    kpi('Base de comparação', fmtH(base), `${fmtH(total)} − ${fmtH(desconto)} de personalizações`, 'bg-totvs-petroleo text-white') +
+    kpi('Base de comparação', fmtH(base), formulaBase, 'bg-totvs-petroleo text-white') +
     kpi('Realizado nas etapas', fmtH(somaExec), base > 0 ? `${(100 * somaExec / base).toFixed(1)}% da base` : '—', 'bg-totvs-blue text-totvs-petroleo') +
     kpi('Estimado nas etapas', fmtH(somaEst), base > 0 ? `${(100 * somaEst / base).toFixed(1)}% da base` : '—', 'bg-totvs-purple text-white') +
-    kpi('Saldo da base', fmtH(base - somaExec), `${linhas.length} etapa(s)${nExcl ? ` · ${nExcl} item(ns) fora` : ''}`, 'bg-white border border-slate-200 text-totvs-petroleo');
+    kpi('Saldo da base', fmtH(base - somaExec), `${linhasOn.length} de ${linhas.length} etapa(s)${nExcl ? ` · ${nExcl} item(ns) fora` : ''}`, 'bg-white border border-slate-200 text-totvs-petroleo');
 
   const barra = (pct, cor) => `
     <div class="bar-track"><div class="bar-fill ${cor}" style="width:${Math.min(100, Math.max(0, pct)).toFixed(1)}%"></div></div>`;
@@ -2309,10 +2322,13 @@ function renderConsumo() {
     const especifico = semAcento(l.etapa).includes('especifico');
     const fora = l.lista.length - l.dentro.length;
     return `
-      <tr class="border-t border-slate-100 ${especifico ? 'cursor-pointer hover:bg-slate-50' : ''}"
+      <tr class="border-t border-slate-100 ${especifico ? 'cursor-pointer hover:bg-slate-50' : ''} ${l.on ? '' : 'opacity-40'}"
           ${especifico ? 'data-abre-especificos' : ''}>
         <td class="py-2.5 pr-3 font-medium">
+          <input type="checkbox" data-etapa-on="${escapeAttr(l.etapa)}" ${l.on ? 'checked' : ''}
+                 class="accent-totvs-blue mr-2 align-middle cursor-pointer" title="Incluir esta etapa no cálculo e na base">
           ${especifico ? '<span class="text-slate-400 mr-1">▸</span>' : ''}${escapeHtml(l.etapa)}
+          ${l.on ? '' : '<span class="ml-2 text-xs text-slate-600 bg-slate-200 px-1.5 py-0.5 rounded-full">fora do cálculo</span>'}
           ${fora ? `<span class="ml-2 text-xs text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded-full">${fora} fora</span>` : ''}
         </td>
         <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(l.agg.estimadas)}</td>
@@ -2321,7 +2337,7 @@ function renderConsumo() {
         ${celSemAgenda(semAgenda(l.agg))}
         <td class="py-2.5 pr-3 text-right tabular-nums">${pctExec.toFixed(0)}%</td>
         <td class="py-2.5 pr-3 w-48">${barra(pctBase, 'fill-exec')}</td>
-        <td class="py-2.5 text-right tabular-nums font-semibold text-totvs-petroleo">${pctBase.toFixed(1)}%</td>
+        <td class="py-2.5 text-right tabular-nums font-semibold text-totvs-petroleo">${l.on ? pctBase.toFixed(1) + '%' : '—'}</td>
       </tr>`;
   };
 
@@ -2334,7 +2350,7 @@ function renderConsumo() {
     <div class="bg-white rounded-lg border border-slate-200 p-5 overflow-x-auto">
       <div class="flex items-baseline justify-between mb-3">
         <h3 class="text-sm font-semibold text-slate-700">Consumo por etapa</h3>
-        <p class="text-xs text-slate-400">Monitoramento e Controle e Encerramento ficam fora do cálculo e da tela.</p>
+        <p class="text-xs text-slate-400">Desmarque uma etapa para tirá-la dos totais e da base. Monitoramento e Controle e Encerramento ficam sempre fora.</p>
       </div>
       <table class="w-full text-sm">
         <thead><tr class="text-xs text-slate-500 text-left border-b border-slate-200">
@@ -2350,11 +2366,11 @@ function renderConsumo() {
         <tbody>${linhas.map(linhaEtapa).join('')}</tbody>
         <tfoot class="border-t-2 border-slate-300 font-semibold bg-slate-50">
           <tr>
-            <td class="py-2.5 pr-3">Total das etapas</td>
+            <td class="py-2.5 pr-3">${nEtapasFora ? `Total das etapas marcadas (${linhasOn.length})` : 'Total das etapas'}</td>
             <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(somaEst)}</td>
             <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(somaExec)}</td>
-            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(linhas.reduce((a, l) => a + l.agg.planejadas, 0))}</td>
-            ${celSemAgenda(linhas.reduce((a, l) => a + semAgenda(l.agg), 0))}
+            <td class="py-2.5 pr-3 text-right tabular-nums">${fmtH(linhasOn.reduce((a, l) => a + l.agg.planejadas, 0))}</td>
+            ${celSemAgenda(linhasOn.reduce((a, l) => a + semAgenda(l.agg), 0))}
             <td class="py-2.5 pr-3 text-right tabular-nums">${somaEst > 0 ? (100 * somaExec / somaEst).toFixed(0) : 0}%</td>
             <td class="py-2.5 pr-3">${barra(base > 0 ? 100 * somaExec / base : 0, 'fill-exec')}</td>
             <td class="py-2.5 text-right tabular-nums">${base > 0 ? (100 * somaExec / base).toFixed(1) : '0,0'}%</td>
@@ -2404,6 +2420,14 @@ function renderConsumo() {
     else listaEsp.forEach(it => consumo.excluidos.add(chaveAtiv(it)));
     renderConsumo();
   }));
+  box.querySelectorAll('[data-etapa-on]').forEach(c => {
+    c.addEventListener('click', ev => ev.stopPropagation());   // não dispara o scroll dos Específicos
+    c.addEventListener('change', () => {
+      const e = c.dataset.etapaOn;
+      if (c.checked) consumo.etapasFora.delete(e); else consumo.etapasFora.add(e);
+      renderConsumo();
+    });
+  });
   const alvo = box.querySelector('#cons-especificos');
   box.querySelectorAll('[data-abre-especificos]').forEach(tr =>
     tr.addEventListener('click', () => alvo?.scrollIntoView({ behavior: 'smooth', block: 'start' })));
@@ -2413,6 +2437,7 @@ function renderConsumo() {
   $(`#${id}`).addEventListener('input', renderConsumo));
 $('#cons-reset').addEventListener('click', () => {
   consumo.excluidos.clear();
+  consumo.etapasFora.clear();
   $('#cons-desconto').value = 1006;
   renderConsumo();
 });

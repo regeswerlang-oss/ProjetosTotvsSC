@@ -39,3 +39,15 @@ Coluna **Sem agenda** = Estimadas − Realizadas − A realizar, na linha e no
 total. Valor negativo vira "+X estouro" em vermelho (realizado + agendado passou
 do estimado: Levantamento +45,3; Capacitação +88).
 Fechamento Digitro v11: 4.208,5 = 2.150,2 + 754,4 + 1.303,9.
+
+# Aba Consumo — check por etapa (08/10/2026)
+
+Cada linha de etapa tem um check. Desmarcada, a etapa:
+- fica esmaecida com o selo "fora do cálculo" e "% da base" = —;
+- sai dos totais (rodapé) e dos KPIs Realizado / Estimado / Saldo;
+- tem o seu ESTIMADO descontado da base: Base = Horas do projeto −
+  Personalizações − estimado das etapas fora (a fórmula aparece no KPI).
+
+Uso típico: comparar "sem Operação Assistida" (Digitro v11: base
+4.209 − 1.006 − 405 = 2.798). Estado em `consumo.etapasFora` (Set de nomes),
+zerado ao trocar de projeto e no "↺ Restaurar seleção". Não persiste.
