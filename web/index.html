@@ -1650,6 +1650,7 @@ function coletaAtividades(arvore) {
           out.push({
             fase: fase.descricao, etapa: etapa.descricao,
             subetapa, subReal: (sub.descricao || '').trim() || subetapa,
+            etapaMit: etapaMit((sub.descricao || '').trim() || subetapa),
             modulo, atividade: at,
           });
         }
@@ -1842,6 +1843,27 @@ const ORDEM_ETAPAS = [
   'Encerramento do Projeto',
 ];
 
+// ETAPA DO MIT (08/10/2026): cronogramas por frente (Olim: "Adm Levantamento",
+// "Ind Levantamento", "Loja Levantamento", "Maq Levantamento", "Pre Levantamento")
+// viram UMA linha pela palavra-chave contida na descrição. A ordem importa:
+// "Prototipo Integrado/Modular" antes de qualquer coisa mais genérica.
+// Quem não casa (Especificos, Gestao de Projeto, Extra Projeto…) fica como veio.
+// Por Etapa e Consumo agrupam por aqui; o drill-down mostra as frentes.
+const ETAPAS_MIT = [
+  ['prototipo integrado', 'Prototipo Integrado'],
+  ['prototipo modular',   'Prototipo Modular'],
+  ['levantamento',        'Levantamento'],
+  ['parametrizacao',      'Parametrizacao'],
+  ['capacitacao',         'Capacitacao'],
+  ['operacao assistida',  'Operacao Assistida'],
+  ['fechamento',          'Fechamentos'],
+];
+function etapaMit(nome) {
+  const n = _norm(nome);
+  const hit = ETAPAS_MIT.find(([chave]) => n.includes(chave));
+  return hit ? hit[1] : (nome || '—');
+}
+
 function ordemEtapa(nome) {
   const i = ORDEM_ETAPAS.indexOf(nome);
   return i >= 0 ? i : 999;
@@ -1857,7 +1879,7 @@ function renderPorEtapa(arvore) {
   // 1) Agrupa por sub-etapa real (nível 2 do cronograma)
   const porEtapa = {};
   for (const it of itens) {
-    (porEtapa[it.subReal] = porEtapa[it.subReal] || []).push(it);
+    (porEtapa[it.etapaMit] = porEtapa[it.etapaMit] || []).push(it);
   }
   // ordena pela sequência natural do MIT; o resto vai por horas estimadas desc
   const linhas = Object.entries(porEtapa)
@@ -1926,9 +1948,13 @@ function renderPorEtapa(arvore) {
 }
 
 function rowEtapa({ etapa, lista, agg }) {
-  // agrupa as atividades dentro da etapa por módulo
+  // Etapa juntada de várias frentes (Adm/Ind/Loja… Levantamento): o 1º nível do
+  // drill-down é a frente (sub-etapa original) e o 2º, as atividades. Etapa de
+  // uma frente só continua como antes: por módulo.
+  const frentes = new Set(lista.map(it => it.subReal));
+  const chaveGrupo = frentes.size > 1 ? (it => it.subReal) : (it => it.modulo);
   const porMod = {};
-  for (const it of lista) (porMod[it.modulo] = porMod[it.modulo] || []).push(it);
+  for (const it of lista) (porMod[chaveGrupo(it)] = porMod[chaveGrupo(it)] || []).push(it);
   const modLinhas = Object.entries(porMod)
     .map(([mod, ls]) => ({ mod, ls, agg: agrega(ls) }))
     .sort((a, b) => b.agg.estimadas - a.agg.estimadas);
@@ -2269,7 +2295,7 @@ function renderConsumo() {
 
   // Agrupa por etapa (sub-etapa real do MIT), na ordem natural do método
   const porEtapa = {};
-  itens.forEach(it => (porEtapa[it.subReal] = porEtapa[it.subReal] || []).push(it));
+  itens.forEach(it => (porEtapa[it.etapaMit] = porEtapa[it.etapaMit] || []).push(it));
   const linhas = Object.entries(porEtapa)
     .map(([etapa, lista]) => {
       const dentro = lista.filter(it => !consumo.excluidos.has(chaveAtiv(it)));

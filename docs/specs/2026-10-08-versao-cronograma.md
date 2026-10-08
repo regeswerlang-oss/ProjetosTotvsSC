@@ -51,3 +51,17 @@ Cada linha de etapa tem um check. Desmarcada, a etapa:
 Uso típico: comparar "sem Operação Assistida" (Digitro v11: base
 4.209 − 1.006 − 405 = 2.798). Estado em `consumo.etapasFora` (Set de nomes),
 zerado ao trocar de projeto e no "↺ Restaurar seleção". Não persiste.
+
+# Por Etapa e Consumo — etapas juntadas pelo nome do MIT (08/10/2026)
+
+Cronogramas por frente (Olim TFEHXQ0001 v06: "Adm/Ind/Loja/Maq/Pre
+Levantamento", "Adm/Ind/Loja Prototipo Integrado"…) agora viram uma linha por
+etapa do MIT. `etapaMit()` procura a palavra-chave na descrição da sub-etapa
+(sem acento/caixa), nesta ordem: prototipo integrado, prototipo modular,
+levantamento, parametrizacao, capacitacao, operacao assistida, fechamento.
+O que não casa fica como veio (Especificos, Gestao de Projeto, Extra Projeto).
+
+Drill-down da etapa juntada: 1º nível = frente original (Adm Levantamento…),
+2º = atividades. Etapa de uma frente só continua por módulo.
+Olim: Levantamento 468 / 474,08; Prototipo Integrado 378 / 11,5;
+Prototipo Modular 256 / 217,59. "Pre Levantamento" entra em Levantamento.
