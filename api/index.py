@@ -299,6 +299,9 @@ ABAS = [
     {"id": "empresas",  "label": "Empresas e Compartilhamento", "cliente": True},
     {"id": "estrutura", "label": "Estrutura de Empresas", "cliente": False},
     {"id": "compara",   "label": "Compara (dicionário)",  "cliente": False},
+    # Integrações (13/10/2026): filas Quírons/Ahgora/eSocial SST da base. Fica
+    # interna por enquanto — o detalhe traz matrícula e nome de funcionário.
+    {"id": "integracoes", "label": "Integrações",        "cliente": False},
     {"id": "prototipo", "label": "Protótipo",            "cliente": True},
     {"id": "transicao", "label": "Transição",            "cliente": True},
 ]
@@ -6382,6 +6385,644 @@ def api_cp_aceite():
                   "total": len(out), "horas": round(sum(x["horas"] for x in out), 2),
                   "sincronizado_em": sync, "pendentes": out,
                   "lido_em_ts": int(time.time())})
+
+
+# ============================================================================
+#  ABA INTEGRAÇÕES — filas das integrações de RH na base do cliente
+# ============================================================================
+# A PERGUNTA é "as integrações estão rodando, quanto atrasaram e o que falhou?".
+# Cada integração guarda a sua fila numa tabela do Protheus, com data e status:
+#
+#   RJP / RU7  → Protheus → Quírons (JOB GPEM923). RJP_DTIN vazio = pendente;
+#                RU7 = histórico de envio (só existe com MV_HISTQUI 1 ou 2).
+#   RUM        → Protheus → Ahgora (JOB GPEM943 ou tela GPEM929).
+#                RUM_STATUS 0 não integrado · 3 inconsistência · 4 aguardando
+#                retorno · 6 integrado.
+#   RJE        → eventos SST do eSocial que o Quírons manda pelo Middleware
+#                (S-2210, S-2220, S-2240). RJE_STATUS 4 = transmitido.
+#   SX6        → os parâmetros que ligam cada integração (sem os de senha).
+#
+# Transporte: o MESMO /tscmonit/query da coleta de Cadastros (só leitura), um
+# bloco por chamada. Bloco em chamada separada é de propósito: base sem Ahgora
+# não tem RUM, e um UNION único morreria inteiro com ORA-00942 — separado, só
+# aquele indicador fica cinza e o resto da tela continua valendo.
+#
+# Além das filas, o healthcheck da Quírons (/api/rh/v1/integrationcheck/
+# healthcheck, expedição RH recente) devolve o laudo P1–P7/Q1–Q3 do GPEM926.
+#
+# Cada coleta vira UMA linha em cockpit.integ_medicoes: a série histórica é o
+# que mostra se a fila está crescendo — o número de um dia só não diz isso.
+# SQL: docs/sql/2026-10-13-integracoes.sql · Spec: docs/specs/2026-10-13-aba-integracoes.md
+
+INTEG_PARAMS = ("MV_RHNG", "MV_HISTQUI", "MV_RHMSGNG", "MV_URIQR", "MV_GPEURLP",
+                "MV_RHAHGOR", "MV_INTEGPW", "MV_FINAPW")
+# Nunca: MV_EMAILQR, MV_SENHAQR, MV_AHGORA1, MV_AHGORA2 — são credenciais.
+INTEG_SST = ("S2210", "S2220", "S2240")
+INTEG_NIVEIS = ("cinza", "verde", "amarelo", "vermelho")
+INTEG_LOTE_PADRAO = 100            # MV_RHMSGNG ausente = 100 (TDN)
+INTEG_TEMPO_MIN = 4                # s mínimos para valer a pena abrir mais um bloco
+
+
+def _integ_vazio(col):
+    """Campo caractere VAZIO nos dois bancos. No Oracle o DBAccess grava o
+    campo com espaços e RTRIM('    ') vira NULL; no SQL Server vira ''. Um
+    `= ' '` comparado com VARCHAR2 de 8 posições nunca casa."""
+    return f"(RTRIM({col}) IS NULL OR RTRIM({col}) = '')"
+
+
+def _integ_scripts(sufixo, hoje):
+    """Os blocos da coleta, já com o sufixo da base e as datas como literal.
+    Datas calculadas aqui, no fuso de Florianópolis, e não com SYSDATE/GETDATE:
+    o SQL fica igual em Oracle, SQL Server e Postgres. Sem ';' no fim (o Oracle
+    recusa via TCGenQry). Ordem = prioridade: os resumos vêm antes dos
+    detalhes, então se o tempo acabar o que falta é a lista, não o número."""
+    s = (sufixo or "010").strip()
+    h = hoje.strftime("%Y%m%d")
+    d7 = (hoje - timedelta(days=7)).strftime("%Y%m%d")
+    params = ", ".join(f"'{p}'" for p in INTEG_PARAMS)
+    sst = ", ".join(f"'{e}'" for e in INTEG_SST)
+    pend_rum = (f"(RUM.RUM_STATUS = '3' OR (RUM.RUM_STATUS = '4' AND RUM.RUM_DATINT < '{h}') "
+                f"OR (RUM.RUM_STATUS = '0' AND RUM.RUM_DATMOV < '{h}'))")
+    return [
+        {"id": "config", "rotulo": "Parâmetros das integrações (SX6)", "tabela": f"SX6{s}",
+         "limite": 200,
+         "sql": (f"SELECT RTRIM(X6_VAR) AS PARAMETRO, RTRIM(X6_FIL) AS FILIAL, "
+                 f"RTRIM(X6_CONTEUD) AS CONTEUDO FROM SX6{s} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND RTRIM(X6_VAR) IN ({params}) "
+                 f"ORDER BY X6_VAR, X6_FIL")},
+        {"id": "rjp_fila", "rotulo": "Quírons — fila pendente por tabela (RJP)",
+         "tabela": f"RJP{s}", "limite": 500,
+         "sql": (f"SELECT RJP_FILIAL AS FILIAL, RTRIM(RJP_TAB) AS TABELA, "
+                 f"RTRIM(RJP_OPER) AS OPER, COUNT(*) AS QTD, MIN(RJP_DTGER) AS MAIS_ANTIGO "
+                 f"FROM RJP{s} WHERE D_E_L_E_T_ = ' ' AND {_integ_vazio('RJP_DTIN')} "
+                 f"GROUP BY RJP_FILIAL, RJP_TAB, RJP_OPER ORDER BY QTD DESC")},
+        {"id": "rjp_vazao", "rotulo": "Quírons — envios por dia, últimos 7 dias (RJP)",
+         "tabela": f"RJP{s}", "limite": 50,
+         "sql": (f"SELECT RJP_DTIN AS DIA, COUNT(*) AS QTD, MIN(RJP_HORAIN) AS PRIMEIRA, "
+                 f"MAX(RJP_HORAIN) AS ULTIMA FROM RJP{s} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND RJP_DTIN >= '{d7}' "
+                 f"GROUP BY RJP_DTIN ORDER BY RJP_DTIN")},
+        {"id": "ru7_erros", "rotulo": "Quírons — erros de envio, últimos 7 dias (RU7)",
+         "tabela": f"RU7{s}", "limite": 200,
+         "sql": (f"SELECT RU7_DTIN AS DIA, RTRIM(RU7_CODRET) AS COD_HTTP, COUNT(*) AS QTD "
+                 f"FROM RU7{s} WHERE D_E_L_E_T_ = ' ' AND RU7_SUCESS = 'N' "
+                 f"AND RU7_DTIN >= '{d7}' GROUP BY RU7_DTIN, RU7_CODRET "
+                 f"ORDER BY RU7_DTIN DESC, QTD DESC")},
+        {"id": "rum_resumo", "rotulo": "Ahgora — situação da fila (RUM)",
+         "tabela": f"RUM{s}", "limite": 200,
+         "sql": (f"SELECT RTRIM(RUM_TIPO) AS TIPO, RTRIM(RUM_OPER) AS OPER, "
+                 f"RTRIM(RUM_STATUS) AS STATUS, COUNT(*) AS QTD, "
+                 f"MIN(RUM_DATMOV) AS MOV_MAIS_ANTIGO, MAX(RUM_DATINT) AS ULT_INTEGRACAO, "
+                 f"SUM(CASE WHEN (RUM_STATUS = '4' AND RUM_DATINT < '{h}') "
+                 f"OR (RUM_STATUS = '0' AND RUM_DATMOV < '{h}') THEN 1 ELSE 0 END) AS ATRASADOS "
+                 f"FROM RUM{s} WHERE D_E_L_E_T_ = ' ' "
+                 f"GROUP BY RUM_TIPO, RUM_OPER, RUM_STATUS ORDER BY STATUS, TIPO, OPER")},
+        {"id": "rje_sst", "rotulo": "eSocial SST — eventos por status (RJE)",
+         "tabela": f"RJE{s}", "limite": 100,
+         "sql": (f"SELECT RTRIM(RJE_EVENTO) AS EVENTO, RTRIM(RJE_STATUS) AS STATUS, "
+                 f"COUNT(*) AS QTD, MIN(RJE_DTG) AS MAIS_ANTIGO, MAX(RJE_DTG) AS MAIS_RECENTE "
+                 f"FROM RJE{s} WHERE D_E_L_E_T_ = ' ' AND RTRIM(RJE_EVENTO) IN ({sst}) "
+                 f"GROUP BY RJE_EVENTO, RJE_STATUS ORDER BY EVENTO, STATUS")},
+        # ── detalhes: lista para agir. Truncar aqui é aceitável (a tela avisa).
+        {"id": "rum_pendencias", "rotulo": "Ahgora — registros parados ou com inconsistência",
+         "tabela": f"RUM{s}", "limite": 300, "detalhe": True,
+         "sql": (f"SELECT RUM.RUM_FIL AS FILIAL, RUM.RUM_MAT AS MATRICULA, "
+                 f"RTRIM(SRA.RA_NOME) AS NOME, RTRIM(RUM.RUM_CODINT) AS COD_INTERNO, "
+                 f"RTRIM(RUM.RUM_TIPO) AS TIPO, RTRIM(RUM.RUM_OPER) AS OPER, "
+                 f"RTRIM(RUM.RUM_STATUS) AS STATUS, RUM.RUM_DATMOV AS DT_MOV, "
+                 f"RUM.RUM_DATINT AS DT_INTEG, RUM.RUM_HORINT AS HR_INTEG "
+                 f"FROM RUM{s} RUM LEFT JOIN SRA{s} SRA ON SRA.RA_FILIAL = RUM.RUM_FIL "
+                 f"AND SRA.RA_MAT = RUM.RUM_MAT AND SRA.D_E_L_E_T_ = ' ' "
+                 f"WHERE RUM.D_E_L_E_T_ = ' ' AND {pend_rum} "
+                 f"ORDER BY RUM.RUM_DATMOV, RUM.RUM_FIL, RUM.RUM_MAT")},
+        {"id": "rjp_antigos", "rotulo": "Quírons — pendências mais antigas (RJP)",
+         "tabela": f"RJP{s}", "limite": 100, "detalhe": True,
+         "sql": (f"SELECT RJP_FILIAL AS FILIAL, RTRIM(RJP_TAB) AS TABELA, "
+                 f"RTRIM(RJP_OPER) AS OPER, RTRIM(REPLACE(RJP_KEY, ';', ',')) AS CHAVE, "
+                 f"RJP_DTGER AS GERADO FROM RJP{s} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND {_integ_vazio('RJP_DTIN')} "
+                 f"ORDER BY RJP_DTGER, RJP_TAB")},
+        {"id": "rje_pendentes", "rotulo": "eSocial SST — eventos não transmitidos (RJE)",
+         "tabela": f"RJE{s}", "limite": 100, "detalhe": True,
+         "sql": (f"SELECT RJE_FIL AS FILIAL, RTRIM(RJE_EVENTO) AS EVENTO, "
+                 f"RTRIM(RJE_STATUS) AS STATUS, RTRIM(REPLACE(RJE_KEY, ';', ',')) AS CHAVE, "
+                 f"RJE_DTG AS GERADO FROM RJE{s} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND RTRIM(RJE_EVENTO) IN ({sst}) "
+                 f"AND RTRIM(RJE_STATUS) <> '4' ORDER BY RJE_DTG, RJE_EVENTO")},
+    ]
+
+
+def _integ_csv(texto):
+    """CSV do TSCMONITREST → lista de dicts (cabeçalho em maiúsculas). O
+    separador é sempre ';' — não usar o Sniffer, que com uma URL no conteúdo
+    (MV_URIQR) chegou a escolher ':' como delimitador."""
+    linhas = [r for r in csv.reader(io.StringIO(texto or ""), delimiter=";") if r]
+    if not linhas:
+        return []
+    cab = [c.strip().upper() for c in linhas[0]]
+    return [{cab[i]: (v or "").strip() for i, v in enumerate(ln) if i < len(cab)}
+            for ln in linhas[1:]]
+
+
+def _integ_motivo(msg, tabela):
+    """Tabela inexistente é situação NORMAL (cliente sem Ahgora não tem RUM):
+    vira cinza com frase clara, não erro vermelho."""
+    m = msg or ""
+    if re.search(r"ORA-00942|does not exist|Invalid object name|n[aã]o existe", m, re.I):
+        return True, (f"A tabela {tabela} não existe nesta base — a integração não está "
+                      f"instalada ou o dicionário está desatualizado.")
+    if re.search(r"ORA-00904|Invalid column name|column .* does not exist", m, re.I):
+        return False, (f"Campo inexistente em {tabela} — dicionário anterior à expedição "
+                       f"contínua do RH que criou o campo. Detalhe: {m[:200]}")
+    return False, m[:400]
+
+
+def _integ_data(v):
+    s = (v or "").strip()
+    if len(s) == 8 and s.isdigit():
+        try:
+            return date(int(s[:4]), int(s[4:6]), int(s[6:]))
+        except ValueError:
+            return None
+    return None
+
+
+def _integ_ddmm(d):
+    return d.strftime("%d/%m/%Y") if d else "—"
+
+
+def _integ_int(v, padrao=0):
+    try:
+        return int(float(str(v).replace(",", ".")))
+    except (TypeError, ValueError):
+        return padrao
+
+
+def _integ_logico(v):
+    s = (v or "").strip().upper().replace(".", "")
+    return s in ("T", "TRUE", "S", "1") if s else None
+
+
+def _integ_pior(niveis):
+    """Pior nível, ignorando cinza (sem dado não é problema). Tudo cinza = cinza."""
+    ordem = {"verde": 1, "amarelo": 2, "vermelho": 3}
+    val = [n for n in niveis if n in ordem]
+    return max(val, key=ordem.get) if val else "cinza"
+
+
+def _integ_norm_status(v):
+    if isinstance(v, bool):
+        return "ok" if v else "erro"
+    s = str(v or "").strip().lower()
+    if s in ("ok", "success", "sucesso", "passed", "pass", "aprovado", "verde", "true", "done"):
+        return "ok"
+    if s in ("warning", "warn", "aviso", "alerta", "amarelo"):
+        return "aviso"
+    if s in ("error", "erro", "fail", "failed", "falha", "reprovado", "vermelho",
+             "false", "fatal"):
+        return "erro"
+    return s or "?"
+
+
+_INTEG_ID = ("id", "codigo", "item", "check", "chave", "requisito", "nome", "name")
+_INTEG_ST = ("status", "resultado", "situacao", "ok", "sucesso", "result")
+_INTEG_MSG = ("mensagem", "message", "detalhe", "detail", "descricao", "description", "msg")
+
+
+def _integ_health_itens(obj, saida=None):
+    """Itens do laudo do healthcheck. A TDN descreve o laudo (P1–P7, Q1–Q3),
+    mas não o formato exato do JSON — então procura, em qualquer nível, objetos
+    que tenham um identificador E um status, em vez de amarrar num caminho."""
+    saida = [] if saida is None else saida
+    if isinstance(obj, dict):
+        k_id = next((k for k in obj if k.lower() in _INTEG_ID), None)
+        k_st = next((k for k in obj if k.lower() in _INTEG_ST), None)
+        if k_id and k_st and not isinstance(obj[k_st], (dict, list)):
+            k_msg = next((k for k in obj if k.lower() in _INTEG_MSG), None)
+            saida.append({"id": str(obj[k_id])[:40],
+                          "status": _integ_norm_status(obj[k_st]),
+                          "mensagem": str(obj.get(k_msg) or "")[:300] if k_msg else ""})
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                _integ_health_itens(v, saida)
+    elif isinstance(obj, list):
+        for v in obj:
+            _integ_health_itens(v, saida)
+    return saida
+
+
+def _integ_params(blocos):
+    """{PARAMETRO: conteúdo}. Com o mesmo parâmetro em várias filiais vale o
+    de filial em branco (o global) — é o que o JOB lê quando roda por grupo."""
+    b = blocos.get("config") or {}
+    out = {}
+    for ln in b.get("linhas") or []:
+        p = ln.get("PARAMETRO", "")
+        if p and (p not in out or not ln.get("FILIAL")):
+            out[p] = ln.get("CONTEUDO", "")
+    return out
+
+
+def _integ_ind(chave, grupo, rotulo, valor, nivel, texto):
+    return {"chave": chave, "grupo": grupo, "rotulo": rotulo, "valor": valor,
+            "nivel": nivel, "texto": texto}
+
+
+def _integ_bloco_falhou(b, chave, grupo, rotulo):
+    """Indicador cinza para bloco que não veio. Tabela ausente é informação;
+    erro de leitura também não é vermelho — vermelho é a FILA com problema."""
+    if not b:
+        return _integ_ind(chave, grupo, rotulo, None, "cinza", "Não lido nesta coleta.")
+    return _integ_ind(chave, grupo, rotulo, None, "cinza", b.get("erro") or "Não lido.")
+
+
+def _integ_indicadores(blocos, health, hoje):
+    """Indicadores da seção 4 da proposta de monitoramento (12/10/2026). Função
+    PURA: recebe os blocos já lidos e a data de hoje — testada em
+    docs/testes/integracoes-back.py."""
+    par = _integ_params(blocos)
+    lote = _integ_int(par.get("MV_RHMSGNG"), 0) or INTEG_LOTE_PADRAO
+    out = []
+
+    # ── Quírons: fila pendente ─────────────────────────────────────────────
+    b = blocos.get("rjp_fila")
+    pend_q = 0
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "quirons_fila", "quirons", "Fila Quírons"))
+    else:
+        pend_q = sum(_integ_int(ln.get("QTD")) for ln in b["linhas"])
+        datas = [d for d in (_integ_data(ln.get("MAIS_ANTIGO")) for ln in b["linhas"]) if d]
+        antiga = min(datas) if datas else None
+        idade = (hoje - antiga).days if antiga else 0
+        if pend_q == 0:
+            nivel, txt = "verde", "Fila zerada."
+        else:
+            nivel = ("verde" if pend_q <= lote else
+                     "amarelo" if pend_q <= 3 * lote else "vermelho")
+            if idade >= 2:
+                nivel = "vermelho"
+            elif idade == 1 and nivel == "verde":
+                nivel = "amarelo"
+            txt = (f"Mais antiga de {_integ_ddmm(antiga)} ({idade} dia(s)). "
+                   f"Lote do JOB (MV_RHMSGNG) = {lote}.")
+        if _integ_logico(par.get("MV_RHNG")) is False:
+            txt += " MV_RHNG = .F.: nada novo é enfileirado."
+        out.append(_integ_ind("quirons_fila", "quirons", "Fila Quírons", pend_q, nivel, txt))
+
+    # ── Quírons: último envio (o JOB está rodando?) ────────────────────────
+    b = blocos.get("rjp_vazao")
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "quirons_envios", "quirons", "Envios Quírons (7 dias)"))
+    else:
+        dias = sorted((d, ln) for d, ln in ((_integ_data(x.get("DIA")), x) for x in b["linhas"]) if d)
+        total = sum(_integ_int(ln.get("QTD")) for _d, ln in dias)
+        if not dias:
+            nivel = "vermelho" if pend_q else "cinza"
+            txt = ("Nenhum envio em 7 dias com fila pendente — confira o JOB GPEM923 no Schedule."
+                   if pend_q else "Sem movimento para enviar nos últimos 7 dias.")
+        else:
+            ult_d, ult = dias[-1]
+            atraso = (hoje - ult_d).days
+            nivel = "vermelho" if (pend_q and atraso >= 1) else "verde"
+            txt = f"Último envio em {_integ_ddmm(ult_d)} às {ult.get('ULTIMA') or '—'}."
+            if nivel == "vermelho":
+                txt += " Há fila pendente e nada saiu hoje — JOB GPEM923 parado?"
+        out.append(_integ_ind("quirons_envios", "quirons", "Envios Quírons (7 dias)",
+                              total, nivel, txt))
+
+    # ── Quírons: erros (RU7) ───────────────────────────────────────────────
+    b = blocos.get("ru7_erros")
+    hist = (par.get("MV_HISTQUI") or "").strip()
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "quirons_erros", "quirons", "Erros Quírons (7 dias)"))
+    elif hist == "0":
+        out.append(_integ_ind("quirons_erros", "quirons", "Erros Quírons (7 dias)", None, "cinza",
+                              "MV_HISTQUI = 0: a base não grava os erros. Use 1 para ver só os erros."))
+    else:
+        total = sum(_integ_int(ln.get("QTD")) for ln in b["linhas"])
+        por_dia = {}
+        for ln in b["linhas"]:
+            por_dia[ln.get("DIA")] = por_dia.get(ln.get("DIA"), 0) + _integ_int(ln.get("QTD"))
+        tem401 = any(ln.get("COD_HTTP") == "401" for ln in b["linhas"])
+        pico = max(por_dia.values()) if por_dia else 0
+        if total == 0:
+            nivel, txt = "verde", "Nenhum erro registrado."
+        else:
+            nivel = "vermelho" if (tem401 or pico > 10) else "amarelo"
+            codigos = sorted({ln.get("COD_HTTP") or "?" for ln in b["linhas"]})
+            txt = f"Códigos HTTP: {', '.join(codigos)}. Pico de {pico} no dia."
+            if tem401:
+                txt += " 401 = credencial do Quírons recusada: o JOB aborta o lote inteiro."
+        out.append(_integ_ind("quirons_erros", "quirons", "Erros Quírons (7 dias)", total, nivel, txt))
+
+    # ── Ahgora (RUM) ───────────────────────────────────────────────────────
+    b = blocos.get("rum_resumo")
+    if not b or not b.get("ok"):
+        for ch, rot in (("ahgora_inconsistencias", "Ahgora — inconsistências"),
+                        ("ahgora_aguardando", "Ahgora — retorno perdido"),
+                        ("ahgora_nao_enviados", "Ahgora — não enviados")):
+            out.append(_integ_bloco_falhou(b, ch, "ahgora", rot))
+    else:
+        ls = b["linhas"]
+        soma = lambda st, campo="QTD": sum(_integ_int(x.get(campo)) for x in ls if x.get("STATUS") == st)
+        inc = soma("3")
+        out.append(_integ_ind(
+            "ahgora_inconsistencias", "ahgora", "Ahgora — inconsistências", inc,
+            "verde" if inc == 0 else "amarelo" if inc <= 5 else "vermelho",
+            "Nenhuma." if inc == 0 else
+            "A Ahgora recusou (e-mail/CPF/PIS duplicado, centro de custo, CNPJ…). Corrija o cadastro e reenvie."))
+        ar = soma("4", "ATRASADOS")
+        out.append(_integ_ind(
+            "ahgora_aguardando", "ahgora", "Ahgora — retorno perdido", ar,
+            "verde" if ar == 0 else "vermelho",
+            "Nenhum." if ar == 0 else
+            "Enviados antes de hoje e ainda em 'aguardando retorno': a consulta expirou. "
+            "Use Reintegração na tela GPEM929 (status volta para 0)."))
+        nao = soma("0")
+        atrasados = soma("0", "ATRASADOS")
+        datas = [d for d in (_integ_data(x.get("MOV_MAIS_ANTIGO")) for x in ls if x.get("STATUS") == "0") if d]
+        antiga = min(datas) if datas else None
+        idade = (hoje - antiga).days if antiga else 0
+        ult = max((d for d in (_integ_data(x.get("ULT_INTEGRACAO")) for x in ls) if d), default=None)
+        if atrasados == 0:
+            nivel = "verde"
+        else:
+            nivel = "vermelho" if idade >= 2 else "amarelo"
+        txt = (f"{atrasados} com movimento anterior a hoje" + (f", mais antigo de {_integ_ddmm(antiga)}" if antiga else "")
+               + f". Última integração: {_integ_ddmm(ult)}.")
+        if _integ_logico(par.get("MV_RHAHGOR")) is False:
+            txt += " MV_RHAHGOR = .F.: alterações não geram fila."
+        out.append(_integ_ind("ahgora_nao_enviados", "ahgora", "Ahgora — não enviados", nao, nivel, txt))
+
+    # ── eSocial SST (RJE) ──────────────────────────────────────────────────
+    b = blocos.get("rje_sst")
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "sst_pendentes", "esocial", "eSocial SST não transmitidos"))
+    else:
+        pend = [x for x in b["linhas"] if x.get("STATUS") != "4"]
+        n = sum(_integ_int(x.get("QTD")) for x in pend)
+        datas = [d for d in (_integ_data(x.get("MAIS_ANTIGO")) for x in pend) if d]
+        antiga = min(datas) if datas else None
+        idade = (hoje - antiga).days if antiga else 0
+        tot = sum(_integ_int(x.get("QTD")) for x in b["linhas"])
+        nivel = "verde" if n == 0 else ("vermelho" if idade >= 2 else "amarelo")
+        por_ev = {}
+        for x in pend:
+            por_ev[x.get("EVENTO")] = por_ev.get(x.get("EVENTO"), 0) + _integ_int(x.get("QTD"))
+        txt = (f"{tot} evento(s) S-2210/2220/2240 na fila, todos transmitidos." if n == 0 else
+               "Pendentes: " + ", ".join(f"{k} {v}" for k, v in sorted(por_ev.items()))
+               + f". Mais antigo de {_integ_ddmm(antiga)}.")
+        out.append(_integ_ind("sst_pendentes", "esocial", "eSocial SST não transmitidos", n, nivel, txt))
+
+    # ── Healthcheck Quírons ────────────────────────────────────────────────
+    h = health or {}
+    itens = h.get("itens") or []
+    if not h.get("ok"):
+        out.append(_integ_ind("quirons_laudo", "quirons", "Laudo Quírons (GPEM926)", None, "cinza",
+                              h.get("mensagem") or "Healthcheck não consultado."))
+    elif not itens:
+        out.append(_integ_ind("quirons_laudo", "quirons", "Laudo Quírons (GPEM926)", None, "cinza",
+                              "O healthcheck respondeu, mas sem itens reconhecíveis — veja a resposta crua."))
+    else:
+        # P2 em aviso/401 neste modo é "prova de vida do REST" (TDN): não pesa.
+        def conta(it):
+            return not (it["id"].upper().startswith("P2") and it["status"] == "aviso")
+        erros = [i for i in itens if i["status"] == "erro" and conta(i)]
+        avisos = [i for i in itens if i["status"] not in ("ok", "erro") and conta(i)]
+        oks = sum(1 for i in itens if i["status"] == "ok" or not conta(i))
+        nivel = "vermelho" if erros else "amarelo" if avisos else "verde"
+        txt = ("Todos os requisitos OK." if nivel == "verde" else
+               "Reprovados: " + ", ".join(i["id"] for i in (erros or avisos)) + ".")
+        out.append(_integ_ind("quirons_laudo", "quirons", "Laudo Quírons (GPEM926)",
+                              f"{oks}/{len(itens)}", nivel, txt))
+    return out
+
+
+def _integ_health(cfg, customer, amb, timeout):
+    """GET <raiz REST>/api/rh/v1/integrationcheck/healthcheck com o Basic do
+    ⚙ Ambiente. A raiz sai da URL do TSCMONITREST (…/rest/tscmonit → …/rest).
+    O X-TSC-Token NÃO vai: é segredo da nossa rota, não do RH."""
+    url = (cfg.get("url_rest") or "").rstrip("/")
+    if not url.lower().endswith("/tscmonit"):
+        return {"ok": False, "mensagem": "A URL do ⚙ Ambiente não termina em /tscmonit — "
+                                         "não dá para chegar na raiz do REST."}
+    url = url[: -len("/tscmonit")] + "/api/rh/v1/integrationcheck/healthcheck"
+    heads, auth, _tok, _tmo = _sessao_protheus(cfg, customer, amb)
+    heads.pop("X-TSC-Token", None)
+    if not auth:
+        return {"ok": False, "url": url, "mensagem": "O healthcheck exige usuário/senha "
+                                                     "(Basic) — preencha no ⚙ Ambiente."}
+    try:
+        r = requests.get(url, headers=heads, auth=auth, timeout=max(5, min(timeout, 20)),
+                         params={"empresa": cfg.get("empresa") or "01",
+                                 "filial": cfg.get("filial") or "01"},
+                         verify=_verifica_tls(cfg))
+    except requests.RequestException as e:
+        return {"ok": False, "url": url, "mensagem": _motivo_rede(e)}
+    if r.status_code == 404:
+        return {"ok": False, "url": url, "http": 404,
+                "mensagem": "Healthcheck não existe nesta base: a expedição contínua do RH é "
+                            "anterior ao Verificador GPEM926."}
+    if r.status_code in (401, 403):
+        return {"ok": False, "url": url, "http": r.status_code,
+                "mensagem": f"HTTP {r.status_code}: usuário/senha do ⚙ Ambiente recusados no REST do RH."}
+    dados = _json_da_resposta(r)
+    if r.status_code >= 400 or not dados:
+        return {"ok": False, "url": url, "http": r.status_code,
+                "mensagem": f"HTTP {r.status_code} no healthcheck: {_trecho(r)}"}
+    bruto = json.dumps(dados, ensure_ascii=False)
+    return {"ok": True, "url": url, "http": r.status_code,
+            "itens": _integ_health_itens(dados),
+            "bruto": dados if len(bruto) <= 20000 else {"truncado": bruto[:20000]}}
+
+
+def _integ_guarda_leitura(customer):
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    return deny_aba(customer, "integracoes")
+
+
+def _integ_payload(customer, amb, n=60):
+    cfg = _cfg_ambiente(customer, amb)
+    ult = q("""select id, coletado_em, duracao_ms, nivel, indicadores, blocos, health,
+                      environment, disparado_por
+                 from cockpit.integ_medicoes where customer=%s and ambiente=%s
+                order by coletado_em desc limit 1""", (customer, amb), one=True)
+    serie = q("""select id, coletado_em, nivel,
+                        (select jsonb_agg(jsonb_build_object('chave', i->>'chave',
+                                 'valor', i->'valor', 'nivel', i->>'nivel'))
+                           from jsonb_array_elements(m.indicadores) i) as indicadores
+                   from cockpit.integ_medicoes m where customer=%s and ambiente=%s
+                  order by coletado_em desc limit %s""", (customer, amb, n))
+    coletas = q("""select iniciado_em, duracao_ms, ok, linhas, itens, erro, disparado_por
+                     from cockpit.protheus_coletas
+                    where customer=%s and ambiente=%s and tipo='integracoes'
+                    order by iniciado_em desc limit 10""", (customer, amb))
+    amb_cfg = None
+    if cfg:
+        amb_cfg = {k: cfg.get(k) for k in ("url_rest", "environment", "banco", "sufixo",
+                                            "empresa", "filial", "ativo", "ultimo_teste_ok",
+                                            "ultimo_teste_msg", "ultimo_teste_em")}
+        amb_cfg["tem_token"] = bool(cfg.get("token_enc"))
+        amb_cfg["tem_senha"] = bool(cfg.get("senha_enc"))
+    return {"ok": True, "customer": customer, "ambiente": amb,
+            "hoje": _cp_hoje().isoformat(), "ambiente_cfg": amb_cfg,
+            "ultima": ult, "serie": list(reversed(serie or [])), "coletas": coletas}
+
+
+@app.get("/api/integracoes/<customer>")
+def api_integracoes(customer):
+    """Última coleta + série histórica + log, lidos do Supabase (sem tocar na base).
+
+        GET /api/integracoes/TFEHM600?ambiente=producao
+    """
+    if (r := _integ_guarda_leitura(customer)):
+        return r
+    amb = _amb_path(request.args.get("ambiente") or "producao")
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    n = max(5, min(_integ_int(request.args.get("n"), 60), 365))
+    return _json(_integ_payload(customer, amb, n))
+
+
+@app.get("/api/integracoes/<customer>/scripts")
+def api_integracoes_scripts(customer):
+    """Os SQL exatamente como a coleta manda — para rodar no console TCloud
+    quando a REST ainda não está publicada, ou para conferir um número."""
+    if (r := _integ_guarda_leitura(customer)):
+        return r
+    amb = _amb_path(request.args.get("ambiente") or "producao")
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    cfg = _cfg_ambiente(customer, amb) or {}
+    suf = (cfg.get("sufixo") or "").strip()
+    return _json({"ok": True, "customer": customer, "ambiente": amb,
+                  "sufixo": suf or None, "sufixo_usado": suf or "010",
+                  "scripts": [{k: s[k] for k in ("id", "rotulo", "tabela", "sql")}
+                              for s in _integ_scripts(suf or "010", _cp_hoje())]})
+
+
+@app.post("/api/integracoes/<customer>/coletar")
+def api_integracoes_coletar(customer):
+    """Roda os blocos na base pela REST, chama o healthcheck e grava a coleta.
+
+        POST /api/integracoes/TFEHM600/coletar?ambiente=producao
+    """
+    erro, amb = _guarda_ambiente(customer, request.args.get("ambiente") or "producao",
+                                 escrita=True)
+    if erro:
+        return erro
+    if (d := deny_aba(customer, "integracoes")):
+        return d
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer} — "
+                         "preencha a REST em ⚙ Ambiente (aba Cadastros) antes de coletar.")
+    if not cfg.get("ativo"):
+        return _err(409, f"Ambiente {amb} está inativo — reative antes de coletar.")
+    suf = (cfg.get("sufixo") or "").strip()
+    if not suf:
+        return _err(409, "Informe o sufixo das tabelas no ⚙ Ambiente (ex.: 010) — "
+                         "as filas RJP/RUM/RJE são lidas com ele.")
+
+    ini = time.time()
+    try:
+        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+    except RuntimeError as e:
+        return _err(500, str(e))
+    if not tok:
+        return _err(409, "Sem token cadastrado para este ambiente — a REST da base "
+                         "recusa a chamada sem o X-TSC-Token.")
+    prazo = ini + tmo
+    hoje = _cp_hoje()
+    blocos, ambiente_srv, linhas_tot, conectou = {}, None, 0, False
+
+    scripts = _integ_scripts(suf, hoje)
+    # Ordem: resumos → healthcheck → detalhes. Se o tempo acabar, falta a
+    # lista, não o número.
+    resumos = [s for s in scripts if not s.get("detalhe")]
+    detalhes = [s for s in scripts if s.get("detalhe")]
+
+    def roda(s):
+        nonlocal ambiente_srv, linhas_tot, conectou
+        t0 = time.time()
+        resta = prazo - t0
+        base = {"rotulo": s["rotulo"], "tabela": s["tabela"]}
+        if resta < INTEG_TEMPO_MIN:
+            blocos[s["id"]] = {**base, "ok": False, "linhas": [],
+                               "erro": "Não lido: o tempo da coleta acabou antes deste bloco."}
+            return
+        try:
+            r = requests.post(f"{cfg['url_rest']}/query",
+                              json={"token": tok, "tipo": "integracoes", "sql": s["sql"],
+                                    "limite": s["limite"]},
+                              headers=heads, auth=auth,
+                              params={"empresa": cfg.get("empresa") or "01",
+                                      "filial": cfg.get("filial") or "01"},
+                              timeout=max(5, int(resta)), verify=_verifica_tls(cfg))
+            dados = _json_da_resposta(r)
+        except requests.RequestException as e:
+            if not conectou:
+                raise
+            blocos[s["id"]] = {**base, "ok": False, "linhas": [], "erro": _motivo_rede(e)}
+            return
+        conectou = True
+        ms = int((time.time() - t0) * 1000)
+        if r.status_code >= 400 or not dados.get("ok"):
+            msg = dados.get("erro") or f"HTTP {r.status_code}: {_trecho(r)}"
+            ausente, motivo = _integ_motivo(msg, s["tabela"])
+            blocos[s["id"]] = {**base, "ok": False, "ausente": ausente, "erro": motivo,
+                               "linhas": [], "ms": ms}
+            return
+        ambiente_srv = dados.get("environment") or ambiente_srv
+        linhas = _integ_csv(dados.get("csv") or "")
+        linhas_tot += len(linhas)
+        # Resumo truncado é número errado: não vira indicador. Detalhe truncado
+        # é lista parcial, e a tela diz isso.
+        if dados.get("truncado") and not s.get("detalhe"):
+            blocos[s["id"]] = {**base, "ok": False, "linhas": [], "ms": ms,
+                               "erro": f"Resumo bateu o limite de {s['limite']} linhas — descartado."}
+            return
+        blocos[s["id"]] = {**base, "ok": True, "linhas": linhas, "ms": ms,
+                           "truncado": bool(dados.get("truncado")), "limite": s["limite"]}
+
+    try:
+        for s in resumos:
+            roda(s)
+    except requests.RequestException as e:
+        msg = f"Falha ao chamar a base: {_motivo_rede(e)} Timeout = {tmo}s."
+        _log_coleta(customer, amb, "integracoes", ini, False, erro=msg)
+        return _err(502, msg)
+
+    health = (_integ_health(cfg, customer, amb, prazo - time.time())
+              if prazo - time.time() >= INTEG_TEMPO_MIN else
+              {"ok": False, "mensagem": "Não consultado: o tempo da coleta acabou."})
+    for s in detalhes:
+        roda(s)
+
+    if not any(b.get("ok") for b in blocos.values()):
+        msgs = "; ".join(f"{k}: {b.get('erro')}" for k, b in blocos.items())[:1800]
+        _log_coleta(customer, amb, "integracoes", ini, False, erro=msgs)
+        return _err(502, f"Nenhum bloco foi lido. {msgs}")
+
+    inds = _integ_indicadores(blocos, health, hoje)
+    nivel = _integ_pior(i["nivel"] for i in inds)
+    duracao = int((time.time() - ini) * 1000)
+    q("""insert into cockpit.integ_medicoes
+           (customer, ambiente, duracao_ms, nivel, indicadores, blocos, health,
+            environment, disparado_por)
+         values (%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s) returning id""",
+      (customer, amb, duracao, nivel, json.dumps(inds, ensure_ascii=False, default=str),
+       json.dumps(blocos, ensure_ascii=False, default=str),
+       json.dumps(health, ensure_ascii=False, default=str), ambiente_srv, current_user()),
+      one=True)
+    falhas = [f"{k}: {b.get('erro')}" for k, b in blocos.items() if not b.get("ok")]
+    _log_coleta(customer, amb, "integracoes", ini, True, http_status=200,
+                linhas=linhas_tot, itens=len(inds),
+                erro=("; ".join(falhas)[:1800] or None))
+    return _json(_integ_payload(customer, amb))
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────
