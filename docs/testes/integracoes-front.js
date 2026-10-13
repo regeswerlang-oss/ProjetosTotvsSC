@@ -34,12 +34,12 @@ const BLOCOS = {
   rjp_antigos: { ok: true, linhas: [] },
   rje_pendentes: { ok: true, linhas: [] },
 };
-const ULTIMA = (quando) => ({ id: 2, coletado_em: quando, duracao_ms: 8300, nivel: 'vermelho',
-  indicadores: INDS, blocos: BLOCOS, environment: 'RACLI_PROD', disparado_por: 'reges.werlang@totvs.com.br',
+const ULTIMA = (quando, desde = '2026-10-01') => ({ id: 2, coletado_em: quando, duracao_ms: 8300, nivel: 'vermelho',
+  indicadores: INDS, blocos: Object.assign({ _meta: { desde } }, BLOCOS), environment: 'RACLI_PROD', disparado_por: 'reges.werlang@totvs.com.br',
   health: { ok: true, url: 'https://x/rest/api/rh/v1/integrationcheck/healthcheck',
             itens: [{ id: 'P1', status: 'ok', mensagem: '' }, { id: 'P2', status: 'aviso', mensagem: '401' }, { id: 'Q3', status: 'ok', mensagem: '' }] } });
 const CFG = { url_rest: 'https://x/rest/tscmonit', environment: 'RACLI_PROD', banco: 'oracle', sufixo: '010',
-              ativo: true, tem_token: true, tem_senha: true };
+              ativo: true, tem_token: true, tem_senha: true, integ_desde: '2026-10-01' };
 const SERIE = [
   { id: 1, coletado_em: '2026-10-12T12:00:00Z', nivel: 'amarelo', indicadores: [{ chave: 'quirons_fila', valor: 40, nivel: 'amarelo' }] },
   { id: 2, coletado_em: AGORA, nivel: 'vermelho', indicadores: [{ chave: 'quirons_fila', valor: 12, nivel: 'verde' }] },
@@ -68,6 +68,11 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
     await new Promise(res => setTimeout(res, 300));
     r.fulfill({ status: modo.coleta.status, json: modo.coleta.json });
   });
+  const cortes = [];
+  await pg.route('**/api/integracoes/TFEHM600/corte*', r => {
+    cortes.push(JSON.parse(r.request().postData() || '{}'));
+    r.fulfill({ json: { ok: true, desde: cortes[cortes.length - 1].desde } });
+  });
   await pg.route('**/api/integracoes/TFEHM600/scripts*', r => r.fulfill({ json: { ok: true, sufixo: '010', sufixo_usado: '010',
     scripts: [{ id: 'config', rotulo: 'Parâmetros (SX6)', tabela: 'SX6010', sql: "SELECT X6_VAR FROM SX6010 WHERE D_E_L_E_T_ = ' '" },
               { id: 'rjp_fila', rotulo: 'Fila RJP', tabela: 'RJP010', sql: 'SELECT 1 FROM RJP010' }] } }));
@@ -95,6 +100,9 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('nome do cliente', (await txt('#int-cliente-nome')) === 'RACLI LIMPEZA');
   t('leu a produção ao abrir', pedidos.some(p => /GET .*\/api\/integracoes\/TFEHM600\?ambiente=producao/.test(p)), pedidos.join(' | '));
   t('abrir NÃO coleta', !pedidos.some(p => p.includes('/coletar')));
+  t('input de corte preenchido', (await pg.$eval('#int-desde', n => n.value)) === '2026-10-01');
+  t('barra diz o corte usado', /movimentos a partir de 01\/10\/2026/.test(await txt('#int-conteudo')));
+  t('sem aviso de corte alterado', !/Corte alterado/.test(await txt('#int-conteudo')));
   t('8 cartões', (await pg.$$('#int-conteudo [data-int-ind]')).length === 8);
   const conteudo = await txt('#int-conteudo');
   t('barra com data da coleta e environment', /Coleta de .*RACLI_PROD.*8\.3 s/.test(conteudo), conteudo.slice(0, 160));
@@ -121,6 +129,16 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('histórico com coletas e disparos', /Últimos disparos/.test(hist) && /2 coleta\(s\)/.test(hist) && /40/.test(hist));
   await pg.click('[data-int-caixa="quirons"]');
   t('recolher remove DOM', !/Fila pendente por tabela/.test(await txt('#int-conteudo')));
+
+  // ── trocar o corte grava e avisa que a coleta usou outro ─────────────────
+  modo.leitura = PAYLOAD({ ambiente_cfg: Object.assign({}, CFG, { integ_desde: '2026-09-15' }) });
+  await pg.fill('#int-desde', '2026-09-15');
+  await pg.waitForTimeout(400);
+  t('corte enviado ao servidor', cortes.length === 1 && cortes[0].desde === '2026-09-15', JSON.stringify(cortes));
+  t('trocar corte não coleta', !pedidos.some(p => p.includes('/coletar')));
+  t('aviso de corte alterado', /Corte alterado/.test(await txt('#int-conteudo')) && /15\/09\/2026/.test(await txt('#int-conteudo')));
+  modo.leitura = PAYLOAD();
+  await pg.click('#int-reload'); await pg.waitForTimeout(300);
 
   // ── coleta pelo botão do topo: barra "coletando" durante a chamada ────────
   modo.coleta = { status: 200, json: PAYLOAD({ ultima: Object.assign(ULTIMA(AGORA), { nivel: 'verde' }) }) };

@@ -80,6 +80,7 @@ CFG["cfg"] = {"customer": "TFEHM600", "ambiente": "producao",
               "usuario": "monitor", "senha_enc": m._cifra("s3nha", aad),
               "token_enc": m._cifra("tok123", aad), "banco": "oracle", "sufixo": "010",
               "timeout_s": 45, "limite_linhas": 50000, "ativo": True, "ssl_verificar": True}
+BASE_CFG = dict(CFG["cfg"])
 
 # ── REST fingida ────────────────────────────────────────────────────────────
 CSV = {
@@ -210,7 +211,35 @@ CFG["cfg"] = None
 r = cli.post("/api/integracoes/TFEHM600/coletar?ambiente=producao")
 confere("sem ambiente = 404", r.status_code == 404)
 
-# ── 6. scripts ──────────────────────────────────────────────────────────────
+# ── 6. corte por data ───────────────────────────────────────────────────────
+CFG["cfg"] = dict(BASE_CFG)
+UPD = []
+_exec_orig = m.execute
+def exec_corte(sql, params=None):
+    if "set integ_desde" in sql:
+        UPD.append(params); CFG["cfg"] = dict(CFG["cfg"], integ_desde=params[0]); return
+    return _exec_orig(sql, params)
+m.execute = exec_corte
+r = cli.post("/api/integracoes/TFEHM600/corte?ambiente=producao", json={"desde": "2026-10-01"})
+confere("corte gravado", r.status_code == 200 and r.get_json()["desde"] == "2026-10-01" and UPD)
+r = cli.post("/api/integracoes/TFEHM600/corte?ambiente=producao", json={"desde": "2099-01-01"})
+confere("corte futuro recusado", r.status_code == 400)
+r = cli.post("/api/integracoes/TFEHM600/corte?ambiente=producao", json={"desde": "01/10/2026"})
+confere("corte inválido recusado", r.status_code == 400)
+MODO.update(rum="existe", health=200)
+CHAMADAS.clear()
+d = cli.post("/api/integracoes/TFEHM600/coletar?ambiente=producao").get_json()
+sql_rum = [c["sql"] for c in CHAMADAS if "/query" in c["url"] and "FROM RUM010 WHERE" in c["sql"]]
+confere("coleta usa o corte", sql_rum and "RUM_DATMOV >= '20261001'" in sql_rum[0])
+confere("corte gravado na coleta", d["ultima"]["blocos"]["_meta"]["desde"] == "2026-10-01")
+confere("_meta não vira falha no log", "_meta" not in (DB["coletas"][-1]["erro"] or ""))
+confere("cfg devolve o corte", str(d["ambiente_cfg"]["integ_desde"]) == "2026-10-01")
+r = cli.post("/api/integracoes/TFEHM600/corte?ambiente=producao", json={"desde": None})
+confere("limpar corte", r.status_code == 200 and r.get_json()["desde"] is None and UPD[-1][0] is None)
+m.execute = _exec_orig
+CFG["cfg"] = None
+
+# ── 7. scripts ──────────────────────────────────────────────────────────────
 d = cli.get("/api/integracoes/TFEHM600/scripts?ambiente=producao").get_json()
 confere("scripts sem cadastro usam 010", d["sufixo_usado"] == "010" and len(d["scripts"]) == 9)
 confere("scripts sem ;", all(not s["sql"].rstrip().endswith(";") for s in d["scripts"]))

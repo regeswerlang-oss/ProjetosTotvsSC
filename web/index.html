@@ -781,6 +781,10 @@
               <option value="producao">Base Produção</option>
               <option value="teste">Base de Testes</option>
             </select>
+            <label class="flex items-center gap-1.5 text-xs text-slate-500" title="Só entram movimentos a partir desta data (fila Quírons, Ahgora e eSocial). Vale para esta base.">
+              A partir de
+              <input id="int-desde" type="date" class="px-2 py-1 border border-slate-300 rounded-md bg-white text-sm text-slate-800">
+            </label>
             <button id="int-coletar-topo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde disabled:opacity-50">⚡ Coletar agora</button>
             <button id="int-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
           </div>
@@ -8982,13 +8986,24 @@ function intEstado(d) {
       `Sem usuário/senha no ⚙ Ambiente: as filas são lidas, mas o healthcheck da Quírons exige Basic.${btnAmb}`));
   }
   const u = d?.ultima;
+  // Corte por data: o da BASE (vale para a próxima coleta) × o que a última
+  // coleta USOU (gravado nela). Diferentes = número medido com outra régua.
+  const corteBase = (cfg?.integ_desde || '').slice(0, 10) || null;
+  const corteUsado = u ? ((u.blocos?._meta?.desde || '').slice(0, 10) || null) : corteBase;
+  if (u && corteBase !== corteUsado) {
+    partes.push(barra('border-amber-200 bg-amber-50 text-amber-900',
+      `<b>Corte alterado:</b> a última coleta usou ${corteUsado ? 'movimentos a partir de ' + intData(corteUsado.replace(/-/g, '')) : 'todo o histórico'};
+       a base agora está com ${corteBase ? 'a partir de ' + intData(corteBase.replace(/-/g, '')) : 'todo o histórico'}.
+       Clique em <b>⚡ Coletar agora</b> para aplicar.`));
+  }
   if (!u) {
     partes.push(barra('border-slate-200 bg-slate-50 text-slate-600',
       'Nenhuma coleta ainda nesta base. Clique em <b>⚡ Coletar agora</b>.'));
   } else {
     const horas = (Date.now() - new Date(u.coletado_em).getTime()) / 36e5;
     const txt = `Coleta de <b>${intQuando(u.coletado_em)}</b> · ${escapeHtml(u.environment || base)} ·
-      ${(u.duracao_ms / 1000).toFixed(1)} s · por ${escapeHtml(u.disparado_por || '—')}`;
+      ${(u.duracao_ms / 1000).toFixed(1)} s · por ${escapeHtml(u.disparado_por || '—')} ·
+      ${corteUsado ? `movimentos a partir de <b>${intData(corteUsado.replace(/-/g, ''))}</b>` : 'todo o histórico'}`;
     partes.push(horas > 24
       ? barra('border-amber-200 bg-amber-50 text-amber-900',
               `${txt}<br><b>Retrato com mais de 24 h</b> — colete de novo antes de tomar decisão.`)
@@ -9066,6 +9081,11 @@ function renderIntegracoes() {
   const box = $('#int-conteudo');
   if (!box) return;
   $('#int-coletar-topo').disabled = integ.coletando || !integ.customer;
+  const inpDesde = $('#int-desde');
+  if (inpDesde && document.activeElement !== inpDesde) {
+    inpDesde.value = (integ.dados?.ambiente_cfg?.integ_desde || '').slice(0, 10);
+  }
+  if (inpDesde) inpDesde.disabled = !integ.dados?.ambiente_cfg || integ.coletando;
   if (!integ.customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver as integrações do cliente.'); return; }
   if (integ.carregando && !integ.dados) {
     box.innerHTML = `<div class="bg-white rounded-lg border border-slate-200 p-10 text-center text-slate-500">Lendo a última coleta…</div>`;
@@ -9196,6 +9216,7 @@ async function abreScriptsIntegracoes() {
   const m = modal('Scripts SQL da coleta de integrações',
     `<p class="text-xs text-slate-500">Exatamente o que o <b>⚡ Coletar agora</b> manda para a base
        (${escapeHtml((AMB[integ.ambiente] || AMB.producao).label)}, sufixo <b>${escapeHtml(j.sufixo_usado)}</b>${j.sufixo ? '' : ' — padrão, o ambiente não tem sufixo cadastrado'}).
+       ${j.desde ? `Corte: movimentos a partir de <b>${escapeHtml(intData(String(j.desde).slice(0, 10).replace(/-/g, '')))}</b>.` : 'Sem corte de data: todo o histórico.'}
        Só leitura, sem ';' no fim. Útil para rodar no console TCloud enquanto a REST não está publicada
        ou para conferir um número.</p>
      ${j.scripts.map((s, k) => `<details class="border border-slate-200 rounded"><summary class="px-3 py-2 cursor-pointer text-xs font-semibold">
@@ -9214,6 +9235,15 @@ $('#int-coletar-topo').addEventListener('click', coletaIntegracoes);
 $('#int-scripts').addEventListener('click', abreScriptsIntegracoes);
 $('#int-ambiente').addEventListener('click', abreAmbienteIntegracoes);
 $('#int-reload').addEventListener('click', carregaIntegracoes);
+$('#int-desde').addEventListener('change', async () => {
+  const v = $('#int-desde').value || null;
+  try {
+    await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/corte?ambiente=${integ.ambiente}`,
+              { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ desde: v }) });
+  } catch (e) { alert('Não consegui gravar o corte: ' + e.message); }
+  carregaIntegracoes();
+});
 $('#int-ambiente-sel').addEventListener('change', () => {
   integ.ambiente = $('#int-ambiente-sel').value; integ.dados = null; integ.erroColeta = null;
   carregaIntegracoes();

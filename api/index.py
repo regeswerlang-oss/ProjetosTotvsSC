@@ -6430,8 +6430,25 @@ def _integ_vazio(col):
     return f"(RTRIM({col}) IS NULL OR RTRIM({col}) = '')"
 
 
-def _integ_scripts(sufixo, hoje):
+def _integ_desde(v):
+    """Data de corte do ⚙ Ambiente (protheus_ambientes.integ_desde) → date|None."""
+    if not v:
+        return None
+    if isinstance(v, date):
+        return v
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except ValueError:
+        return None
+
+
+def _integ_scripts(sufixo, hoje, desde=None):
     """Os blocos da coleta, já com o sufixo da base e as datas como literal.
+
+    `desde` (corte por base, 13/10/2026): só entra movimento a partir dessa
+    data — RJP_DTGER, RUM_DATMOV, RJE_DTG. Base em produção há meses carrega
+    pendência de implantação que já virou outro assunto; sem o corte ela
+    pinta o painel de vermelho para sempre e esconde o que quebrou ontem.
     Datas calculadas aqui, no fuso de Florianópolis, e não com SYSDATE/GETDATE:
     o SQL fica igual em Oracle, SQL Server e Postgres. Sem ';' no fim (o Oracle
     recusa via TCGenQry). Ordem = prioridade: os resumos vêm antes dos
@@ -6439,6 +6456,13 @@ def _integ_scripts(sufixo, hoje):
     s = (sufixo or "010").strip()
     h = hoje.strftime("%Y%m%d")
     d7 = (hoje - timedelta(days=7)).strftime("%Y%m%d")
+    ds = desde.strftime("%Y%m%d") if desde else None
+    if ds and ds > d7:
+        d7 = ds                      # a janela de 7 dias também respeita o corte
+    c_rjp = f" AND RJP_DTGER >= '{ds}'" if ds else ""
+    c_rum = f" AND RUM_DATMOV >= '{ds}'" if ds else ""
+    c_rumA = f" AND RUM.RUM_DATMOV >= '{ds}'" if ds else ""
+    c_rje = f" AND RJE_DTG >= '{ds}'" if ds else ""
     params = ", ".join(f"'{p}'" for p in INTEG_PARAMS)
     sst = ", ".join(f"'{e}'" for e in INTEG_SST)
     pend_rum = (f"(RUM.RUM_STATUS = '3' OR (RUM.RUM_STATUS = '4' AND RUM.RUM_DATINT < '{h}') "
@@ -6454,7 +6478,7 @@ def _integ_scripts(sufixo, hoje):
          "tabela": f"RJP{s}", "limite": 500,
          "sql": (f"SELECT RJP_FILIAL AS FILIAL, RTRIM(RJP_TAB) AS TABELA, "
                  f"RTRIM(RJP_OPER) AS OPER, COUNT(*) AS QTD, MIN(RJP_DTGER) AS MAIS_ANTIGO "
-                 f"FROM RJP{s} WHERE D_E_L_E_T_ = ' ' AND {_integ_vazio('RJP_DTIN')} "
+                 f"FROM RJP{s} WHERE D_E_L_E_T_ = ' ' AND {_integ_vazio('RJP_DTIN')}{c_rjp} "
                  f"GROUP BY RJP_FILIAL, RJP_TAB, RJP_OPER ORDER BY QTD DESC")},
         {"id": "rjp_vazao", "rotulo": "Quírons — envios por dia, últimos 7 dias (RJP)",
          "tabela": f"RJP{s}", "limite": 50,
@@ -6475,13 +6499,13 @@ def _integ_scripts(sufixo, hoje):
                  f"MIN(RUM_DATMOV) AS MOV_MAIS_ANTIGO, MAX(RUM_DATINT) AS ULT_INTEGRACAO, "
                  f"SUM(CASE WHEN (RUM_STATUS = '4' AND RUM_DATINT < '{h}') "
                  f"OR (RUM_STATUS = '0' AND RUM_DATMOV < '{h}') THEN 1 ELSE 0 END) AS ATRASADOS "
-                 f"FROM RUM{s} WHERE D_E_L_E_T_ = ' ' "
+                 f"FROM RUM{s} WHERE D_E_L_E_T_ = ' '{c_rum} "
                  f"GROUP BY RUM_TIPO, RUM_OPER, RUM_STATUS ORDER BY STATUS, TIPO, OPER")},
         {"id": "rje_sst", "rotulo": "eSocial SST — eventos por status (RJE)",
          "tabela": f"RJE{s}", "limite": 100,
          "sql": (f"SELECT RTRIM(RJE_EVENTO) AS EVENTO, RTRIM(RJE_STATUS) AS STATUS, "
                  f"COUNT(*) AS QTD, MIN(RJE_DTG) AS MAIS_ANTIGO, MAX(RJE_DTG) AS MAIS_RECENTE "
-                 f"FROM RJE{s} WHERE D_E_L_E_T_ = ' ' AND RTRIM(RJE_EVENTO) IN ({sst}) "
+                 f"FROM RJE{s} WHERE D_E_L_E_T_ = ' ' AND RTRIM(RJE_EVENTO) IN ({sst}){c_rje} "
                  f"GROUP BY RJE_EVENTO, RJE_STATUS ORDER BY EVENTO, STATUS")},
         # ── detalhes: lista para agir. Truncar aqui é aceitável (a tela avisa).
         {"id": "rum_pendencias", "rotulo": "Ahgora — registros parados ou com inconsistência",
@@ -6493,14 +6517,14 @@ def _integ_scripts(sufixo, hoje):
                  f"RUM.RUM_DATINT AS DT_INTEG, RUM.RUM_HORINT AS HR_INTEG "
                  f"FROM RUM{s} RUM LEFT JOIN SRA{s} SRA ON SRA.RA_FILIAL = RUM.RUM_FIL "
                  f"AND SRA.RA_MAT = RUM.RUM_MAT AND SRA.D_E_L_E_T_ = ' ' "
-                 f"WHERE RUM.D_E_L_E_T_ = ' ' AND {pend_rum} "
+                 f"WHERE RUM.D_E_L_E_T_ = ' ' AND {pend_rum}{c_rumA} "
                  f"ORDER BY RUM.RUM_DATMOV, RUM.RUM_FIL, RUM.RUM_MAT")},
         {"id": "rjp_antigos", "rotulo": "Quírons — pendências mais antigas (RJP)",
          "tabela": f"RJP{s}", "limite": 100, "detalhe": True,
          "sql": (f"SELECT RJP_FILIAL AS FILIAL, RTRIM(RJP_TAB) AS TABELA, "
                  f"RTRIM(RJP_OPER) AS OPER, RTRIM(REPLACE(RJP_KEY, ';', ',')) AS CHAVE, "
                  f"RJP_DTGER AS GERADO FROM RJP{s} "
-                 f"WHERE D_E_L_E_T_ = ' ' AND {_integ_vazio('RJP_DTIN')} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND {_integ_vazio('RJP_DTIN')}{c_rjp} "
                  f"ORDER BY RJP_DTGER, RJP_TAB")},
         {"id": "rje_pendentes", "rotulo": "eSocial SST — eventos não transmitidos (RJE)",
          "tabela": f"RJE{s}", "limite": 100, "detalhe": True,
@@ -6508,7 +6532,7 @@ def _integ_scripts(sufixo, hoje):
                  f"RTRIM(RJE_STATUS) AS STATUS, RTRIM(REPLACE(RJE_KEY, ';', ',')) AS CHAVE, "
                  f"RJE_DTG AS GERADO FROM RJE{s} "
                  f"WHERE D_E_L_E_T_ = ' ' AND RTRIM(RJE_EVENTO) IN ({sst}) "
-                 f"AND RTRIM(RJE_STATUS) <> '4' ORDER BY RJE_DTG, RJE_EVENTO")},
+                 f"AND RTRIM(RJE_STATUS) <> '4'{c_rje} ORDER BY RJE_DTG, RJE_EVENTO")},
     ]
 
 
@@ -6864,7 +6888,8 @@ def _integ_payload(customer, amb, n=60):
     if cfg:
         amb_cfg = {k: cfg.get(k) for k in ("url_rest", "environment", "banco", "sufixo",
                                             "empresa", "filial", "ativo", "ultimo_teste_ok",
-                                            "ultimo_teste_msg", "ultimo_teste_em")}
+                                            "ultimo_teste_msg", "ultimo_teste_em",
+                                            "integ_desde")}
         amb_cfg["tem_token"] = bool(cfg.get("token_enc"))
         amb_cfg["tem_senha"] = bool(cfg.get("senha_enc"))
     return {"ok": True, "customer": customer, "ambiente": amb,
@@ -6887,6 +6912,34 @@ def api_integracoes(customer):
     return _json(_integ_payload(customer, amb, n))
 
 
+@app.post("/api/integracoes/<customer>/corte")
+def api_integracoes_corte(customer):
+    """Grava a data de corte da base: {"desde": "2026-10-01"} ou {"desde": null}.
+    Não coleta — a próxima coleta é que passa a usar o corte.
+
+        POST /api/integracoes/TFEHM600/corte?ambiente=producao
+    """
+    erro, amb = _guarda_ambiente(customer, request.args.get("ambiente") or "producao",
+                                 escrita=True)
+    if erro:
+        return erro
+    if (d := deny_aba(customer, "integracoes")):
+        return d
+    if not _cfg_ambiente(customer, amb):
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
+    b = request.get_json(silent=True) or {}
+    bruto = (b.get("desde") or "").strip() if isinstance(b.get("desde"), str) else b.get("desde")
+    desde = _integ_desde(bruto) if bruto else None
+    if bruto and not desde:
+        return _err(400, "Data de corte inválida — use AAAA-MM-DD.")
+    if desde and desde > _cp_hoje():
+        return _err(400, "A data de corte não pode ser futura.")
+    execute("""update cockpit.protheus_ambientes set integ_desde=%s, updated_by=%s, updated_at=now()
+                where customer=%s and ambiente=%s""", (desde, current_user(), customer, amb))
+    return _json({"ok": True, "customer": customer, "ambiente": amb,
+                  "desde": desde.isoformat() if desde else None})
+
+
 @app.get("/api/integracoes/<customer>/scripts")
 def api_integracoes_scripts(customer):
     """Os SQL exatamente como a coleta manda — para rodar no console TCloud
@@ -6900,8 +6953,10 @@ def api_integracoes_scripts(customer):
     suf = (cfg.get("sufixo") or "").strip()
     return _json({"ok": True, "customer": customer, "ambiente": amb,
                   "sufixo": suf or None, "sufixo_usado": suf or "010",
+                  "desde": cfg.get("integ_desde"),
                   "scripts": [{k: s[k] for k in ("id", "rotulo", "tabela", "sql")}
-                              for s in _integ_scripts(suf or "010", _cp_hoje())]})
+                              for s in _integ_scripts(suf or "010", _cp_hoje(),
+                                                      _integ_desde(cfg.get("integ_desde")))]})
 
 
 @app.post("/api/integracoes/<customer>/coletar")
@@ -6939,7 +6994,8 @@ def api_integracoes_coletar(customer):
     hoje = _cp_hoje()
     blocos, ambiente_srv, linhas_tot, conectou = {}, None, 0, False
 
-    scripts = _integ_scripts(suf, hoje)
+    desde = _integ_desde(cfg.get("integ_desde"))
+    scripts = _integ_scripts(suf, hoje, desde)
     # Ordem: resumos → healthcheck → detalhes. Se o tempo acabar, falta a
     # lista, não o número.
     resumos = [s for s in scripts if not s.get("detalhe")]
@@ -7009,6 +7065,9 @@ def api_integracoes_coletar(customer):
 
     inds = _integ_indicadores(blocos, health, hoje)
     nivel = _integ_pior(i["nivel"] for i in inds)
+    # O corte usado fica GRAVADO com a coleta: trocar o corte depois não pode
+    # fazer um número antigo parecer medido com a regra nova.
+    blocos["_meta"] = {"desde": desde.isoformat() if desde else None}
     duracao = int((time.time() - ini) * 1000)
     q("""insert into cockpit.integ_medicoes
            (customer, ambiente, duracao_ms, nivel, indicadores, blocos, health,
@@ -7018,7 +7077,8 @@ def api_integracoes_coletar(customer):
        json.dumps(blocos, ensure_ascii=False, default=str),
        json.dumps(health, ensure_ascii=False, default=str), ambiente_srv, current_user()),
       one=True)
-    falhas = [f"{k}: {b.get('erro')}" for k, b in blocos.items() if not b.get("ok")]
+    falhas = [f"{k}: {b.get('erro')}" for k, b in blocos.items()
+              if not k.startswith("_") and not b.get("ok")]
     _log_coleta(customer, amb, "integracoes", ini, True, http_status=200,
                 linhas=linhas_tot, itens=len(inds),
                 erro=("; ".join(falhas)[:1800] or None))

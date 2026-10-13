@@ -39,3 +39,11 @@ alter table cockpit.integ_medicoes enable row level security;
 alter table cockpit.protheus_coletas drop constraint if exists protheus_coletas_tipo_check;
 alter table cockpit.protheus_coletas add constraint protheus_coletas_tipo_check
   check (tipo = any (array['cadastros','movimentos','ping','sm0','empresas','integracoes']));
+
+-- Corte por data (13/10/2026): só entram movimentos a partir desta data.
+alter table cockpit.protheus_ambientes add column if not exists integ_desde date;
+comment on column cockpit.protheus_ambientes.integ_desde is
+  'Aba Integracoes: so considera movimentos a partir desta data (RJP_DTGER, RUM_DATMOV, RJE_DTG). Nulo = tudo.';
+-- Racli (produção): a partir de 01/10/2026
+update cockpit.protheus_ambientes set integ_desde = date '2026-10-01'
+ where customer = 'TFEHM600' and ambiente = 'producao';

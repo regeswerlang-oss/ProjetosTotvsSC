@@ -66,6 +66,28 @@ Decisões que custam caro se desfeitas:
    em qualquer nível. **P2 em aviso/401 não pesa**: a TDN diz que, nesse modo, é
    prova de vida do REST.
 
+## Corte por data (13/10/2026)
+
+A primeira coleta real da Racli mostrou o problema: 23 alterações de
+funcionário paradas desde 01/12/2025 e 79 inclusões com inconsistência desde
+janeiro. Isso é sobra da implantação e já virou outro assunto. Sem um corte, esse
+passado deixa o painel vermelho para sempre e esconde o que quebrou ontem.
+
+- **Um corte por base:** `cockpit.protheus_ambientes.integ_desde` (nulo = todo o
+  histórico). Na Racli, produção, está com **01/10/2026**.
+- **Onde entra:** `RJP_DTGER` (fila e pendências Quírons), `RUM_DATMOV` (resumo e
+  detalhe Ahgora) e `RJE_DTG` (eSocial SST). A janela de 7 dias de envios e erros
+  encurta quando o corte é mais recente. Os parâmetros SX6 e o laudo não mudam.
+- **Na tela:** campo **"A partir de"** no cabeçalho da aba
+  (`POST /api/integracoes/<customer>/corte?ambiente=` com `{"desde": "AAAA-MM-DD" | null}`).
+  Gravar o corte **não coleta**; a próxima coleta é que passa a usá-lo.
+- **O corte usado vai junto com a coleta** (`blocos._meta.desde`). A barra
+  mostra "movimentos a partir de dd/mm/aaaa" e, se o corte da base mudou depois
+  da última coleta, avisa em âmbar ("Corte alterado… colete de novo"). Um número
+  antigo não pode parecer medido com a régua nova.
+- O que ficou antes do corte **continua na base**, só não entra no painel. Para
+  o histórico inteiro, basta limpar o campo e coletar.
+
 ## Indicadores (`_integ_indicadores`, função pura)
 
 | Chave | Verde | Amarelo | Vermelho |
@@ -135,20 +157,20 @@ funcionário.
 
 ## Testes
 
-- `docs/testes/integracoes-back.py` — 146 asserções sobre as funções puras: SQL
+- `docs/testes/integracoes-back.py` — 159 asserções sobre as funções puras: SQL
   (sufixo, datas, sem `;`, sem comando de escrita, sem parâmetro de senha), CSV,
   classificação de erro, itens do laudo e as regras de nível de cada indicador
   (cenário saudável, com problema, base sem Ahgora, histórico desligado).
-- `docs/testes/integracoes-rotas.py` — 33 asserções com o Flask de verdade, banco
+- `docs/testes/integracoes-rotas.py` — 41 asserções com o Flask de verdade, banco
   em memória e REST fingida: coleta feliz, token só no `/query`, healthcheck na
   raiz do REST com Basic, nada de segredo na resposta, tabela ausente virando
   cinza, healthcheck 404, base fora do ar (502 sem gravar), guardas de sufixo,
-  token, ambiente e cadastro, e a rota de scripts.
-- `docs/testes/integracoes-front.js` — 39 asserções (Playwright, `/api/*`
+  token, ambiente e cadastro, a rota de scripts e o corte por data (gravar, recusar data futura ou inválida, aplicar no SQL, gravar na coleta, limpar).
+- `docs/testes/integracoes-front.js` — 45 asserções (Playwright, `/api/*`
   interceptado): abrir não coleta, cartões e rótulos, cinza com motivo,
   sparkline, escape de HTML, caixas sem DOM, coleta pelo topo e pelo rail com a
   barra "coletando", falha mantendo o retrato anterior, troca de base, retrato
-  velho, modal de scripts, exportação e zero erro de JS.
+  velho, corte por data (campo preenchido, troca grava sem coletar, aviso de corte alterado), modal de scripts, exportação e zero erro de JS.
 
 > O `painel-cp-front.js` tem 7 falhas que **já existiam antes** desta mudança
 > (testes do estado "truncado" escritos antes da foto no Supabase, de 06/10).

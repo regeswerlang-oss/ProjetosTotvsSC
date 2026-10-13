@@ -54,6 +54,24 @@ confere('vazio robusto (Oracle e SQL Server)',
         "RTRIM(RJP_DTIN) IS NULL OR RTRIM(RJP_DTIN) = ''" in fila)
 confere('sufixo de outra base', 'RUM020' in ns['_integ_scripts']('020', HOJE)[4]['sql'])
 
+# ── corte por data (13/10/2026) ─────────────────────────────────────────────
+corte = {x['id']: x['sql'] for x in ns['_integ_scripts']('010', HOJE, date(2026, 10, 1))}
+confere('corte na fila RJP', "RJP_DTGER >= '20261001'" in corte['rjp_fila'])
+confere('corte nas pendências RJP', "RJP_DTGER >= '20261001'" in corte['rjp_antigos'])
+confere('corte no resumo RUM', "RUM_DATMOV >= '20261001'" in corte['rum_resumo'])
+confere('corte no detalhe RUM', "RUM.RUM_DATMOV >= '20261001'" in corte['rum_pendencias'])
+confere('corte no RJE', "RJE_DTG >= '20261001'" in corte['rje_sst'] and "RJE_DTG >= '20261001'" in corte['rje_pendentes'])
+confere('corte não mexe nos parâmetros', 'DTGER' not in corte['config'] and '2026' not in corte['config'])
+confere('janela de 7 dias continua quando o corte é mais antigo', "'20261006'" in corte['rjp_vazao'])
+recente = {x['id']: x['sql'] for x in ns['_integ_scripts']('010', HOJE, date(2026, 10, 10))}
+confere('corte mais recente encurta a janela', "'20261010'" in recente['rjp_vazao'] and "'20261010'" in recente['ru7_erros'])
+sem = {x['id']: x['sql'] for x in ns['_integ_scripts']('010', HOJE, None)}
+confere('sem corte não filtra', 'RJP_DTGER >=' not in sem['rjp_fila'] and 'RUM_DATMOV >=' not in sem['rum_resumo'])
+confere('corte sem ;', all(not v.rstrip().endswith(';') for v in corte.values()))
+confere('_integ_desde aceita ISO', ns['_integ_desde']('2026-10-01') == date(2026, 10, 1))
+confere('_integ_desde aceita date', ns['_integ_desde'](date(2026, 10, 1)) == date(2026, 10, 1))
+confere('_integ_desde vazio', ns['_integ_desde'](None) is None and ns['_integ_desde']('xx') is None)
+
 # ── CSV ─────────────────────────────────────────────────────────────────────
 linhas = ns['_integ_csv']('PARAMETRO;FILIAL;CONTEUDO\nMV_URIQR;;https://app.quirons.com/ttalk/\n'
                           'MV_RHNG;  ;.T.\n')
