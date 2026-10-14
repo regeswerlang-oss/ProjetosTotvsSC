@@ -2855,6 +2855,12 @@ def api_protheus_salvar(customer, ambiente):
     url = (b.get("url_rest") or "").strip().rstrip("/")
     if not re.match(r"^https?://", url, re.I):
         return _err(400, "URL REST inválida — informe http://host:porta/tscmonit.")
+    # As rotas do TSCMONITREST são fixas em /tscmonit. Sem o sufixo, o /ping
+    # cai no próprio AppServer (que responde 200 com {"serverStatus":...}) e o
+    # teste parece "conectou, mas veio outra coisa" — Digitro, 14/10/2026.
+    url = re.sub(r"/(ping|query)$", "", url, flags=re.I)
+    if not url.lower().endswith("/tscmonit"):
+        url += "/tscmonit"
     banco = (b.get("banco") or "").strip().lower() or None
     if banco and banco not in BANCOS:
         return _err(400, f"Banco inválido — use um de: {', '.join(BANCOS)}.")
@@ -3035,6 +3041,10 @@ def api_protheus_testar(customer, ambiente):
         msg = (dados.get("erro") or
                f"HTTP {r.status_code} na rota /ping, mas a resposta nao é o JSON do "
                f"TSCMONITREST. A base devolveu: {_trecho(r)}")
+        if '"serverStatus"' in (r.text or "") or r.url.split("?")[0].lower().endswith("/rest/ping"):
+            msg = (f"A URL chegou ao AppServer, mas nao ao TSCMONITREST: quem respondeu foi o "
+                   f"/ping nativo do REST ({_trecho(r)}). A URL precisa terminar em "
+                   f"/tscmonit — ex.: https://host:porta/rest/tscmonit.")
         if r.status_code == 404:
             # 404 = o AppServer respondeu, mas a rota nao existe nele. Quase
             # sempre e fonte nao compilado naquele RPO ou AppServer nao
