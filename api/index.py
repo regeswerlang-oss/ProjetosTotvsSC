@@ -1592,13 +1592,19 @@ def api_monitcad_script_salvar(customer):
         return _err(400, "O script precisa conter um SELECT.")
 
     tipo = _tipo_script()
+    dialeto = (body.get("dialeto") or "")[:20] or None
+    # Console do TCloud (Oracle) recusa o ';' final com "Esta consulta apresenta
+    # erros" — sem ORA- nenhum. Gravar já sem ele evita levar o erro para a
+    # base; o SQL Server aceita os dois, então lá o texto fica como veio.
+    if dialeto == "oracle":
+        sql = re.sub(r"(\s*;)+\s*$", "", sql)
     execute("""insert into cockpit.monitcad_scripts
                  (customer, tipo, sql, dialeto, sufixo, updated_by, updated_at)
                values (%s,%s,%s,%s,%s,%s, now())
                on conflict (customer, tipo) do update set
                  sql=excluded.sql, dialeto=excluded.dialeto, sufixo=excluded.sufixo,
                  updated_by=excluded.updated_by, updated_at=now()""",
-            (customer, tipo, sql, (body.get("dialeto") or "")[:20] or None,
+            (customer, tipo, sql, dialeto,
              (body.get("sufixo") or "")[:10] or None, current_user()))
     return _json({"ok": True, "customer": customer, "tipo": tipo, "bytes": len(sql)})
 
@@ -1615,6 +1621,151 @@ def api_monitcad_script_remover(customer):
     execute("delete from cockpit.monitcad_scripts where customer=%s and tipo=%s",
             (customer, _tipo_script()))
     return _json({"ok": True, "customer": customer, "tipo": _tipo_script(), "removido": True})
+
+
+# ── Catálogo de tabelas e seleção por projeto (14/10/2026) ──────────────────
+# Pedido do Cássio: escolher por checkbox, POR PROJETO, quais tabelas monitorar,
+# e cadastrar tabela nova sem mexer na query. O catálogo é GLOBAL (uma tabela do
+# Protheus é a mesma em qualquer cliente); a seleção é do projeto e pode trocar
+# o módulo de agrupamento só ali (SA3 em Financeiro na Digitro).
+# Sem seleção gravada nada muda: o script segue saindo da última medição.
+RE_TABELA = re.compile(r"^[A-Z][A-Z0-9]{2}$")
+
+
+def _txt(v, n):
+    v = (v or "").strip()
+    return v[:n] if v else None
+
+
+@app.get("/api/monitcad/catalogo")
+def api_monitcad_catalogo():
+    if (r := require_interno()):
+        return r
+    rows = q("""select c.tabela, c.modulo, c.descricao, c.filtro, c.painel, c.origem,
+                       c.ativo, c.updated_by, c.updated_at,
+                       (select count(*) from cockpit.monitcad_selecao s
+                         where s.tabela = c.tabela) as projetos
+                  from cockpit.monitcad_catalogo c
+                 order by c.modulo, c.tabela""")
+    return _json({"ok": True, "tabelas": rows})
+
+
+@app.post("/api/monitcad/catalogo")
+def api_monitcad_catalogo_salvar():
+    """Inclui ou altera uma tabela do catálogo. Tabela nova nasce 'manual' — é o
+    que permite apagar depois sem arriscar uma do conjunto padrão."""
+    if (r := require_interno()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de alterar o catálogo.")
+    b = request.get_json(silent=True) or {}
+    tab = (b.get("tabela") or "").strip().upper()
+    if not RE_TABELA.match(tab):
+        return _err(400, "Tabela inválida — use o alias de 3 caracteres do Protheus (ex.: SA1, DA0, Z01).")
+    if tab in TABELAS_IGNORADAS:
+        return _err(400, f"{tab} fica fora do monitoramento (SX5/SX6/SX7 não são cadastro do projeto).")
+    mod = _txt(b.get("modulo"), 40)
+    if not mod:
+        return _err(400, "Informe o módulo (ex.: Faturamento, Compras, GFE).")
+    desc = _txt(b.get("descricao"), 120) or ""
+    filtro = _txt(b.get("filtro"), 400)
+    if filtro and re.search(r";|--|/\*|\b(drop|delete|update|insert|alter|truncate|exec)\b", filtro, re.I):
+        return _err(400, "O filtro aceita só a condição do WHERE (sem ';', comentário ou comando).")
+    row = q("""insert into cockpit.monitcad_catalogo
+                 (tabela, modulo, descricao, filtro, painel, origem, created_by, updated_by)
+               values (%s,%s,%s,%s,%s,'manual',%s,%s)
+               on conflict (tabela) do update set
+                 modulo=excluded.modulo, descricao=excluded.descricao, filtro=excluded.filtro,
+                 ativo=true, updated_by=excluded.updated_by, updated_at=now()
+               returning tabela, modulo, descricao, filtro, painel, origem,
+                         (xmax = 0) as nova""",
+            (tab, mod, desc, filtro, _painel_da_tabela(tab), current_user(), current_user()),
+            one=True)
+    return _json({"ok": True, "tabela": row})
+
+
+@app.delete("/api/monitcad/catalogo/<tabela>")
+def api_monitcad_catalogo_remover(tabela):
+    """Só sai do catálogo a tabela incluída à mão e que nenhum projeto usa —
+    as do conjunto padrão e as em uso apenas se desmarcam na seleção."""
+    if (r := require_interno()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de alterar o catálogo.")
+    tab = (tabela or "").strip().upper()
+    c = q("select origem from cockpit.monitcad_catalogo where tabela=%s", (tab,), one=True)
+    if not c:
+        return _err(404, f"{tab} não está no catálogo.")
+    if c["origem"] != "manual":
+        return _err(409, f"{tab} é do conjunto padrão — desmarque na seleção do projeto.")
+    uso = q("select string_agg(customer, ', ') c from cockpit.monitcad_selecao where tabela=%s",
+            (tab,), one=True)
+    if uso and uso["c"]:
+        return _err(409, f"{tab} está selecionada em: {uso['c']}. Desmarque lá antes de remover.")
+    execute("delete from cockpit.monitcad_catalogo where tabela=%s", (tab,))
+    return _json({"ok": True, "tabela": tab, "removida": True})
+
+
+@app.get("/api/monitcad/<customer>/selecao")
+def api_monitcad_selecao(customer):
+    """Tabelas escolhidas para o projeto, já com módulo/descrição/filtro
+    efetivos. Leitura liberada a quem vê a aba: a Situação atual usa para mostrar
+    a tabela selecionada que ainda não apareceu em nenhuma medição."""
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "cadastros")):
+        return d
+    rows = q("""select s.tabela, coalesce(s.modulo, c.modulo) as modulo, c.descricao,
+                       coalesce(s.filtro, c.filtro) as filtro, c.painel,
+                       s.modulo as modulo_projeto, s.filtro as filtro_projeto,
+                       s.updated_by, s.updated_at
+                  from cockpit.monitcad_selecao s
+                  join cockpit.monitcad_catalogo c on c.tabela = s.tabela
+                 where s.customer=%s
+                 order by 2, 1""", (customer,))
+    ult = max((r["updated_at"] for r in rows), default=None)
+    por = next((r["updated_by"] for r in rows if r["updated_at"] == ult), None)
+    return _json({"ok": True, "customer": customer, "tabelas": rows,
+                  "updated_at": ult, "updated_by": por})
+
+
+@app.put("/api/monitcad/<customer>/selecao")
+def api_monitcad_selecao_salvar(customer):
+    """Regrava a seleção inteira do projeto numa transação só — meia seleção
+    gravada geraria um script com metade das tabelas."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de salvar a seleção.")
+    b = request.get_json(silent=True) or {}
+    itens = b.get("tabelas")
+    if not isinstance(itens, list) or not itens:
+        return _err(400, "Marque ao menos uma tabela.")
+    norm = {}
+    for it in itens:
+        it = it if isinstance(it, dict) else {"tabela": it}
+        tab = (it.get("tabela") or "").strip().upper()
+        if RE_TABELA.match(tab):
+            norm[tab] = (_txt(it.get("modulo"), 40), _txt(it.get("filtro"), 400))
+    cat = {r["tabela"] for r in q("select tabela from cockpit.monitcad_catalogo "
+                                  "where ativo and tabela = any(%s)", (list(norm),))}
+    fora = sorted(set(norm) - cat)
+    if fora:
+        return _err(400, "Fora do catálogo: " + ", ".join(fora) + ". Cadastre antes de marcar.")
+    quem = current_user()
+    c = db()
+    c.autocommit = False
+    try:
+        with c, c.cursor() as cur:
+            cur.execute("delete from cockpit.monitcad_selecao where customer=%s", (customer,))
+            execute_values(cur, """insert into cockpit.monitcad_selecao
+                                     (customer, tabela, modulo, filtro, updated_by) values %s""",
+                           [(customer, t, m, f, quem) for t, (m, f) in sorted(norm.items())])
+    finally:
+        c.close()
+    return _json({"ok": True, "customer": customer, "tabelas": len(norm)})
 
 
 def _gravar_cadastros(customer, amb, body, origem="upload"):

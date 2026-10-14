@@ -391,6 +391,7 @@
         </div>
 
         <div data-rail="cad" class="rail-grupo hidden">
+          <button id="cad-tabelas"  data-interno class="rail-btn">☑ Tabelas monitoradas<span class="rail-sub">seleção do projeto</span></button>
           <button id="cad-sql"      data-interno class="rail-btn">🗄 Script SQL</button>
           <button id="cad-ambiente" data-interno class="rail-btn">⚙ Ambiente</button>
           <button id="cad-coletar"  data-interno class="rail-btn">⚡ Coletar agora</button>
@@ -3165,7 +3166,8 @@ async function abreGap(uuid) {
 //  ABA CADASTROS (MONITCAD) — status de carga dos cadastros por cliente
 // ============================================================================
 const cad = { customer: null, ambiente: 'producao', dados: null,
-              visao: 'atual', evol: null, evolChave: null };
+              visao: 'atual', evol: null, evolChave: null,
+              selecao: null };   // { tabelas:[...], updated_at } do projeto aberto — null = sem seleção
 
 function initCadastros(ambiente = 'producao') {
   const cli = state.selected?.cli;
@@ -3209,14 +3211,26 @@ async function carregaCadastros(customer) {
   if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver o status dos cadastros do cliente.'); return; }
   box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando medições…</div>';
   let j;
+  // A seleção vem junto: a Situação atual mostra a tabela marcada que ainda
+  // não apareceu em medição. Falhar nela não pode derrubar a aba.
+  const pSel = carregaSelecao(customer);
   try {
     j = await api(`/api/monitcad/${encodeURIComponent(customer)}?ambiente=${cad.ambiente}`);
   } catch (e) {
     box.innerHTML = blocoErro('Não foi possível carregar os cadastros', e, () => carregaCadastros(customer));
     return;
   }
+  await pSel;
   cad.dados = j;                        // guardado para o export HTML / e-mail
   aplicaVisao();
+}
+
+async function carregaSelecao(customer) {
+  try {
+    const j = await api(`/api/monitcad/${encodeURIComponent(customer)}/selecao`);
+    cad.selecao = (j.tabelas || []).length ? j : null;
+  } catch { cad.selecao = null; }
+  return cad.selecao;
 }
 
 function pintaAtual() {
@@ -3240,6 +3254,12 @@ function corStatus(s) {
 
 function renderCadastros(j) {
   const t = j.tabelas || [], serie = j.serie || [], p = j.projeto || {};
+  // Tabela marcada na seleção do projeto e que a última medição ainda não
+  // trouxe: aparece como "Aguardando medição" — some da tela só quem foi
+  // desmarcado. Movimento fica de fora: vive na sub-aba Movimentos.
+  const medidas = new Set(t.map(x => (x.tabela || '').toUpperCase()));
+  const pendentes = (cad.selecao?.tabelas || [])
+    .filter(x => x.painel !== 'movimento' && !medidas.has(x.tabela));
   const mods = j.modulos || [];
   const comEst = !!j.tem_estimativa;          // sem estimativa cadastrada não há %
   const totR = t.reduce((a, x) => a + Number(x.realizado || 0), 0);
@@ -3269,13 +3289,19 @@ function renderCadastros(j) {
        kpi('Módulos', String(mods.length), 'com tabela monitorada', 'bg-totvs-purple text-white'),
        kpi('% de carga', '—', 'sem estimativa cadastrada', 'bg-white border border-slate-200 text-totvs-gray')];
 
-  const aviso = comEst ? '' : `
+  const avisoPend = !pendentes.length ? '' : `
+    <div class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-4 text-sm">
+      <span class="font-semibold text-amber-900">${pendentes.length} tabela(s) da seleção ainda sem medição:</span>
+      <span class="font-mono text-xs text-amber-900">${pendentes.map(x => escapeHtml(x.tabela)).join(', ')}</span>
+      <span class="text-slate-600"> — gere o script de novo (🗄 Script SQL) e suba a próxima medição.</span>
+    </div>`;
+  const aviso = avisoPend + (comEst ? '' : `
     <div class="bg-totvs-yellow/10 border border-totvs-yellow/40 rounded-lg px-4 py-3 mb-4 text-sm">
       <span class="font-semibold text-totvs-petroleo">Sem estimativa cadastrada.</span>
       <span class="text-slate-600">Os números são a contagem absoluta da última medição.
       Para ter % e semáforo, cadastre a estimativa por tabela (monitcad.estimativas /
       TABELAS_MONITOR.TXT) ou suba um historico-semanal.json que já traga a estimativa.</span>
-    </div>`;
+    </div>`);
 
   // ── Tabelas agrupadas por módulo (accordion) ──────────────────────────────
   const maxMod = Math.max(1, ...mods.map(m => Number(m.registros || 0)));
@@ -3284,6 +3310,11 @@ function renderCadastros(j) {
     const k = x.modulo || '(sem módulo)';
     if (!porModulo.has(k)) porModulo.set(k, []);
     porModulo.get(k).push(x);
+  });
+  pendentes.forEach(x => {
+    const k = x.modulo || '(sem módulo)';
+    if (!porModulo.has(k)) porModulo.set(k, []);
+    porModulo.get(k).push({ ...x, realizado: null, pendente: true });
   });
   // Ordem dos grupos = a do backend (registros desc); sobras vão para o fim
   const ordem = mods.map(m => m.modulo).filter(k => porModulo.has(k));
@@ -3299,6 +3330,14 @@ function renderCadastros(j) {
     const est = Number(x.estimativa || 0);
     const pc = x.percentual != null ? Number(x.percentual)
              : (est > 0 ? 100 * Number(x.realizado) / est : null);
+    if (x.pendente) return `<tr class="border-t border-slate-100 bg-amber-50/40">
+      <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
+      <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
+      <td class="py-2 pr-3 text-right text-slate-400">—</td>
+      ${comEst ? '<td colspan="6"></td>' : ''}
+      <td class="py-2"><span class="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800"
+        title="Marcada na seleção do projeto e ainda fora da última medição — rode o script atualizado">Aguardando medição</span></td>
+    </tr>`;
     return `<tr class="border-t border-slate-100">
       <td class="py-2 pr-3 font-mono text-xs">${escapeHtml(x.tabela || '')}</td>
       <td class="py-2 pr-3">${escapeHtml(x.descricao || '—')}</td>
@@ -3319,9 +3358,11 @@ function renderCadastros(j) {
     const itens = porModulo.get(nome);
     const reg = itens.reduce((a, x) => a + Number(x.realizado || 0), 0);
     const cc = itens.filter(x => Number(x.realizado || 0) > 0).length;
-    // Já abre nos módulos que têm carga; os zerados nascem recolhidos
+    // Todos os módulos nascem ABERTOS, inclusive os zerados: tabela com zero é
+    // informação (o cadastro ainda não começou) e precisa ficar à vista para
+    // registro — pedido do Cássio em 14/10/2026. "Recolher" continua no topo.
     return `
-      <details class="cad-grupo border-b border-slate-100 last:border-b-0" ${reg > 0 ? 'open' : ''}>
+      <details class="cad-grupo border-b border-slate-100 last:border-b-0" open>
         <summary class="flex items-center gap-3 py-2.5 text-sm hover:bg-slate-50 -mx-2 px-2 rounded">
           <span class="chev text-slate-400 text-xs">▶</span>
           <span class="w-48 truncate font-medium ${reg > 0 ? 'text-totvs-petroleo' : 'text-slate-500'}">${escapeHtml(nome)}</span>
@@ -5503,16 +5544,25 @@ ${p1 && p2 ? `-- Período: ${p1} a ${p2} (data do documento, char AAAAMMDD).`
 ${sd2}
 UNION ALL
 ${se5}
-ORDER BY 1, 14 DESC;
+ORDER BY 1, 14 DESC${ora ? '' : ';'}
 `;
 }
 
 function montaScriptSQL(tipo, sufixo, dialeto, ini, fim) {
   if (tipo === 'movimentos') return scriptMovimentosD5(sufixo, dialeto, ini, fim);
 
+  // Fonte das tabelas, nesta ordem: a SELEÇÃO do projeto (☑ Tabelas
+  // monitoradas) → a última medição → o conjunto núcleo. Antes de 14/10/2026 a
+  // seleção não existia e o script só sabia repetir a medição anterior — tabela
+  // nova não tinha por onde entrar sem editar a query na mão.
+  const daSelecao = (cad.selecao?.tabelas || [])
+    .map(t => [t.modulo || '(sem módulo)', t.tabela, t.descricao || '', t.filtro || '']);
   const daMedicao = (cad.dados?.tabelas || [])
     .map(t => [t.modulo || '(sem módulo)', t.tabela, t.descricao || '', t.filtro || '']);
-  const linhas = daMedicao.length ? daMedicao : PADRAO_MONITCAD.map(x => [...x, '']);
+  const fonte = daSelecao.length ? 'selecao' : daMedicao.length ? 'medicao' : 'padrao';
+  const linhas = (fonte === 'selecao' ? daSelecao : fonte === 'medicao' ? daMedicao
+                  : PADRAO_MONITCAD.map(x => [...x, '']))
+    .sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
   const cliente = (state.selected?.projeto?.nome_cliente_projeto || '').trim();
 
   const oracle = dialeto === 'oracle';
@@ -5542,14 +5592,17 @@ function montaScriptSQL(tipo, sufixo, dialeto, ini, fim) {
 --
 -- Sufixo das tabelas: ${sufixo}  (ex.: SA1 → SA1${sufixo}). Troque se a empresa
 -- ou o grupo for outro. Mesma regra do job MONITCAD: D_E_L_E_T_=' '.
-${daMedicao.length
-  ? `-- Tabelas: as ${linhas.length} da última medição deste cliente/ambiente.`
+${fonte === 'selecao'
+  ? `-- Tabelas: as ${linhas.length} marcadas em "☑ Tabelas monitoradas" deste projeto.`
+  : fonte === 'medicao'
+  ? `-- Tabelas: as ${linhas.length} da última medição deste cliente/ambiente
+--          (o projeto ainda não tem seleção em "☑ Tabelas monitoradas").`
   : `-- Tabelas: conjunto núcleo (${linhas.length}) — ainda não há medição neste
---          ambiente. Ajuste conforme o escopo do cliente.`}
--- ===========================================================================
+--          ambiente. Ajuste em "☑ Tabelas monitoradas".`}
+${oracle ? `-- Oracle: sem ponto e virgula no fim — o console do TCloud recusa a consulta com ele.\n` : ''}-- ===========================================================================
 
 ${selects.join('\nUNION ALL\n')}
-ORDER BY 1, 2;
+ORDER BY 1, 2${oracle ? '' : ';'}
 `;
 }
 
@@ -5641,9 +5694,26 @@ function abreModalSQL(tipo = 'cadastros') {
   };
   pintaSalvo();
 
+  // Havendo script salvo, o modal ABRE NELE. Antes abria sempre no gerado e o
+  // salvo ficava atrás de "Carregar salvo" — quem salvava, reabria e via outro
+  // texto concluía que não tinha gravado (relato do Cássio, 14/10/2026).
   if (cli) {
     api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`)
-      .then(j => { salvo = j.script || null; pintaSalvo(); })
+      .then(j => {
+        salvo = j.script || null; pintaSalvo();
+        if (!salvo || manual) return;           // usuário já começou a digitar: não atropela
+        m.campo('sql-txt').value = salvo.sql;
+        if (salvo.sufixo) m.campo('sql-sufixo').value = salvo.sufixo;
+        if (salvo.dialeto) m.campo('sql-dialeto').value = salvo.dialeto;
+        marcaManual(true);
+        const selNova = !movimentos && cad.selecao?.updated_at && salvo.updated_at
+          && new Date(cad.selecao.updated_at) > new Date(salvo.updated_at);
+        avisaSalvo(selNova
+          ? 'Aberto no script salvo — mas a seleção de tabelas mudou depois dele. '
+            + 'Clique em "Gerar padrão" e depois em "Salvar script" para refletir a seleção.'
+          : 'Aberto no script salvo deste cliente. "Gerar padrão" recria a partir da seleção de tabelas.',
+          false);
+      })
       .catch(() => { m.campo('sql-salvo').textContent = 'Não foi possível checar se há script salvo.'; });
   }
 
@@ -5693,6 +5763,10 @@ function abreModalSQL(tipo = 'cadastros') {
     m.erro('');
     if (!cli) { m.erro('Abra um projeto antes de salvar o script.'); return; }
     m.ocupado(true, 'Salvando…');
+    // Oracle (TCloud) não aceita o ';' final: tira aqui também, para o texto
+    // da tela ficar igual ao que foi gravado
+    if (m.campo('sql-dialeto').value === 'oracle')
+      m.campo('sql-txt').value = m.campo('sql-txt').value.replace(/(\s*;)+\s*$/, '\n');
     try {
       await api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=${tipo}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -5716,6 +5790,280 @@ function abreModalSQL(tipo = 'cadastros') {
 }
 
 $('#cad-sql').addEventListener('click', () => abreModalSQL('cadastros'));
+
+// ============================================================================
+//  CADASTROS · ☑ TABELAS MONITORADAS — catálogo global + seleção do projeto
+//  Pedido do Cássio (14/10/2026): marcar por checkbox, por projeto, o que
+//  monitorar, a partir da lista completa; e o gestor cadastra tabela nova sem
+//  editar a query. O "🗄 Script SQL" passa a sair desta seleção.
+// ============================================================================
+async function abreModalTabelas() {
+  const cli = state.selected?.cli || null;
+  if (!cli) { alert('Abra um projeto antes de escolher as tabelas.'); return; }
+  const cliente = (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli;
+
+  const m = modal(`Tabelas monitoradas · ${escapeHtml(cliente)}`, `
+    <p id="tb-origem" class="text-xs text-slate-500">Carregando catálogo…</p>
+    <div class="flex flex-wrap gap-2 items-center">
+      <input id="tb-busca" type="search" placeholder="Buscar tabela ou descrição"
+        class="flex-1 min-w-[180px] px-3 py-1.5 border border-slate-300 rounded-md text-sm">
+      <select id="tb-modulo" class="px-2 py-1.5 border border-slate-300 rounded-md text-sm">
+        <option value="">Todos os módulos</option></select>
+      <label class="text-xs text-slate-600 flex items-center gap-1">
+        <input id="tb-so-marcadas" type="checkbox"> só marcadas</label>
+    </div>
+    <div class="flex gap-2 text-xs">
+      <button id="tb-marcar" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Marcar as visíveis</button>
+      <button id="tb-desmarcar" class="px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Desmarcar as visíveis</button>
+      <span id="tb-contador" class="ml-auto self-center font-semibold text-totvs-petroleo"></span>
+    </div>
+    <div id="tb-lista" class="border border-slate-200 rounded-md max-h-[50vh] overflow-y-auto"></div>
+    <details id="tb-form-box" class="border border-slate-200 rounded-md">
+      <summary class="px-3 py-2 cursor-pointer text-sm font-medium text-totvs-petroleo">＋ Cadastrar / editar tabela no catálogo</summary>
+      <div class="p-3 space-y-2">
+        <div class="grid grid-cols-3 gap-2">
+          ${campo('tb-f-tabela', 'Tabela (alias)', '', 'text', 'Ex.: DA0, SAL, Z01')}
+          <label class="block col-span-2"><span class="text-xs text-slate-500">Módulo</span>
+            <input id="tb-f-modulo" list="tb-mods" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+            <datalist id="tb-mods"></datalist></label>
+        </div>
+        ${campo('tb-f-desc', 'Descrição', '')}
+        ${campo('tb-f-filtro', 'Filtro (opcional, sem o WHERE)', '', 'text', "Ex.: A1_MSBLQL<>'1'. O D_E_L_E_T_=' ' já entra sozinho.")}
+        <label class="text-xs text-slate-600 flex items-center gap-1">
+          <input id="tb-f-local" type="checkbox"> mudar o módulo só neste projeto (não altera o catálogo dos outros clientes)</label>
+        <div class="flex gap-2 items-center">
+          <button id="tb-f-salvar" class="px-3 py-1.5 rounded-md bg-totvs-petroleo text-white text-sm hover:opacity-90">Salvar no catálogo</button>
+          <button id="tb-f-limpar" class="px-3 py-1.5 rounded-md border border-slate-300 text-sm hover:bg-slate-50">Limpar</button>
+          <p id="tb-f-msg" class="text-xs"></p>
+        </div>
+      </div>
+    </details>
+    <label id="tb-regrava-box" class="hidden text-xs text-slate-600 flex items-center gap-1">
+      <input id="tb-regrava" type="checkbox" checked> regravar também o script salvo com a nova seleção
+      <span id="tb-regrava-info" class="text-slate-400"></span></label>
+    <p id="tb-msg" class="text-xs hidden"></p>`,
+    'Salvar seleção');
+  m.el.firstElementChild.classList.replace('max-w-lg', 'max-w-4xl');
+
+  let catalogo = [];
+  const marcadas = new Set();
+  const modLocal = new Map();      // tabela → módulo só deste projeto
+  const filtroLocal = new Map();   // tabela → filtro só deste projeto
+  let salvo = null;                // script de cadastros gravado
+  const ultima = new Map((cad.dados?.tabelas || []).map(t => [t.tabela, t.realizado]));
+
+  const msg = (el, txt, ok = true) => {
+    const e = m.campo(el);
+    e.textContent = txt || '';
+    e.className = 'text-xs ' + (txt ? (ok ? 'text-emerald-700' : 'text-rose-600') : '');
+  };
+
+  const modEfetivo = (c) => modLocal.get(c.tabela) || c.modulo;
+
+  function pinta() {
+    const q = m.campo('tb-busca').value.trim().toUpperCase();
+    const fm = m.campo('tb-modulo').value;
+    const so = m.campo('tb-so-marcadas').checked;
+    const vis = catalogo.filter(c =>
+      (!fm || modEfetivo(c) === fm) &&
+      (!so || marcadas.has(c.tabela)) &&
+      (!q || c.tabela.includes(q) || (c.descricao || '').toUpperCase().includes(q)));
+    const grupos = new Map();
+    vis.forEach(c => { const k = modEfetivo(c); if (!grupos.has(k)) grupos.set(k, []); grupos.get(k).push(c); });
+    m.campo('tb-lista').innerHTML = [...grupos.keys()].sort((a, b) => a.localeCompare(b)).map(g => {
+      const it = grupos.get(g);
+      const n = it.filter(c => marcadas.has(c.tabela)).length;
+      return `<div class="border-b border-slate-100 last:border-b-0">
+        <label class="flex items-center gap-2 px-3 py-1.5 bg-slate-50 text-xs font-semibold text-slate-600 sticky top-0">
+          <input type="checkbox" data-grupo="${escapeHtml(g)}" ${n === it.length ? 'checked' : ''}>
+          ${escapeHtml(g)} <span class="font-normal text-slate-400">${n}/${it.length}</span></label>
+        ${it.map(c => {
+          const real = ultima.get(c.tabela);
+          return `<div class="flex items-center gap-2 px-3 py-1 text-sm hover:bg-slate-50">
+            <input type="checkbox" data-tab="${c.tabela}" ${marcadas.has(c.tabela) ? 'checked' : ''}>
+            <span class="font-mono text-xs w-10">${c.tabela}</span>
+            <span class="flex-1 truncate">${escapeHtml(c.descricao || '—')}
+              ${c.origem === 'manual' ? '<span class="ml-1 text-[9px] px-1 rounded bg-slate-200 text-slate-600">MANUAL</span>' : ''}
+              ${c.painel === 'movimento' ? '<span class="ml-1 text-[9px] px-1 rounded bg-indigo-100 text-indigo-700" title="Entra na sub-aba Movimentos, não em Cadastros">MOVIMENTO</span>' : ''}
+              ${modLocal.has(c.tabela) ? `<span class="ml-1 text-[9px] px-1 rounded bg-amber-100 text-amber-800" title="Catálogo: ${escapeHtml(c.modulo)}">só aqui: ${escapeHtml(modLocal.get(c.tabela))}</span>` : ''}</span>
+            <span class="w-16 text-right tabular-nums text-xs ${real == null ? 'text-slate-300' : Number(real) > 0 ? 'text-slate-600' : 'text-rose-500'}"
+              title="Última medição desta base">${real == null ? '—' : fmtNum(real)}</span>
+            <button data-editar="${c.tabela}" class="text-slate-400 hover:text-totvs-petroleo text-xs" title="Editar">✎</button>
+            ${c.origem === 'manual' ? `<button data-remover="${c.tabela}" class="text-slate-400 hover:text-rose-600 text-xs" title="Remover do catálogo">🗑</button>` : ''}
+          </div>`;
+        }).join('')}</div>`;
+    }).join('') || '<p class="p-4 text-sm text-slate-400">Nada com esse filtro.</p>';
+    m.campo('tb-contador').textContent = `${marcadas.size} de ${catalogo.length} marcadas`;
+  }
+
+  function preencheModulos() {
+    const mods = [...new Set(catalogo.map(modEfetivo).concat(catalogo.map(c => c.modulo)))]
+      .sort((a, b) => a.localeCompare(b));
+    const sel = m.campo('tb-modulo'), atual = sel.value;
+    sel.innerHTML = '<option value="">Todos os módulos</option>' +
+      mods.map(x => `<option ${x === atual ? 'selected' : ''}>${escapeHtml(x)}</option>`).join('');
+    m.campo('tb-mods').innerHTML = mods.map(x => `<option value="${escapeHtml(x)}">`).join('');
+  }
+
+  async function carregaCatalogo() {
+    catalogo = (await api('/api/monitcad/catalogo')).tabelas || [];
+    preencheModulos();
+  }
+
+  try {
+    const [, sel, scr] = await Promise.all([
+      carregaCatalogo(),
+      api(`/api/monitcad/${encodeURIComponent(cli)}/selecao`),
+      api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=cadastros`).catch(() => ({})),
+    ]);
+    salvo = scr.script || null;
+    const ts = sel.tabelas || [];
+    if (ts.length) {
+      ts.forEach(t => {
+        marcadas.add(t.tabela);
+        if (t.modulo_projeto) modLocal.set(t.tabela, t.modulo_projeto);
+        if (t.filtro_projeto) filtroLocal.set(t.tabela, t.filtro_projeto);
+      });
+      m.campo('tb-origem').innerHTML = `Seleção gravada por <b>${escapeHtml(sel.updated_by || '—')}</b>
+        em ${fmtDataHora(sel.updated_at)}. O "🗄 Script SQL" sai destas tabelas.`;
+    } else {
+      // Primeira vez: parte do que já se mede, para ninguém perder o escopo atual
+      const cat = new Map(catalogo.map(c => [c.tabela, c]));
+      (cad.dados?.tabelas || []).forEach(t => {
+        if (!cat.has(t.tabela)) return;
+        marcadas.add(t.tabela);
+        if (t.modulo && t.modulo !== cat.get(t.tabela).modulo) modLocal.set(t.tabela, t.modulo);
+        if (t.filtro) filtroLocal.set(t.tabela, t.filtro);
+      });
+      m.campo('tb-origem').innerHTML = marcadas.size
+        ? `Projeto ainda sem seleção gravada — já vêm marcadas as <b>${marcadas.size}</b> da última medição.
+           Ajuste e clique em <b>Salvar seleção</b>.`
+        : 'Projeto ainda sem seleção gravada e sem medição. Marque as tabelas do escopo e salve.';
+    }
+    if (salvo) {
+      m.campo('tb-regrava-box').classList.remove('hidden');
+      m.campo('tb-regrava-info').textContent =
+        `(${salvo.dialeto === 'oracle' ? 'Oracle' : 'SQL Server'}, sufixo ${salvo.sufixo || '010'})`;
+    }
+    preencheModulos();
+    pinta();
+  } catch (e) {
+    m.campo('tb-origem').textContent = 'Não foi possível carregar o catálogo: ' + e.message;
+    return;
+  }
+
+  ['tb-busca', 'tb-modulo', 'tb-so-marcadas'].forEach(id =>
+    m.campo(id).addEventListener('input', pinta));
+
+  const visiveis = () => [...m.campo('tb-lista').querySelectorAll('input[data-tab]')].map(i => i.dataset.tab);
+  m.campo('tb-marcar').addEventListener('click', () => { visiveis().forEach(t => marcadas.add(t)); pinta(); });
+  m.campo('tb-desmarcar').addEventListener('click', () => { visiveis().forEach(t => marcadas.delete(t)); pinta(); });
+
+  m.campo('tb-lista').addEventListener('change', ev => {
+    const i = ev.target;
+    if (i.dataset.tab) { i.checked ? marcadas.add(i.dataset.tab) : marcadas.delete(i.dataset.tab); }
+    else if (i.dataset.grupo != null) {
+      catalogo.filter(c => modEfetivo(c) === i.dataset.grupo)
+        .forEach(c => i.checked ? marcadas.add(c.tabela) : marcadas.delete(c.tabela));
+    }
+    pinta();
+  });
+
+  const limpaForm = () => {
+    ['tb-f-tabela', 'tb-f-modulo', 'tb-f-desc', 'tb-f-filtro'].forEach(id => { m.campo(id).value = ''; });
+    m.campo('tb-f-local').checked = false;
+    m.campo('tb-f-tabela').disabled = false;
+    msg('tb-f-msg', '');
+  };
+  m.campo('tb-f-limpar').addEventListener('click', limpaForm);
+
+  m.campo('tb-lista').addEventListener('click', async ev => {
+    const ed = ev.target.closest('[data-editar]'), rm = ev.target.closest('[data-remover]');
+    if (ed) {
+      const c = catalogo.find(x => x.tabela === ed.dataset.editar);
+      m.campo('tb-form-box').open = true;
+      m.campo('tb-f-tabela').value = c.tabela;
+      m.campo('tb-f-tabela').disabled = true;
+      m.campo('tb-f-modulo').value = modEfetivo(c);
+      m.campo('tb-f-desc').value = c.descricao || '';
+      m.campo('tb-f-filtro').value = filtroLocal.get(c.tabela) || c.filtro || '';
+      m.campo('tb-f-local').checked = modLocal.has(c.tabela);
+      msg('tb-f-msg', '');
+      m.campo('tb-form-box').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    if (rm) {
+      const t = rm.dataset.remover;
+      if (!confirm(`Remover ${t} do catálogo? Só é possível se nenhum projeto a usa.`)) return;
+      try {
+        await api(`/api/monitcad/catalogo/${t}`, { method: 'DELETE' });
+        marcadas.delete(t);
+        await carregaCatalogo(); pinta();
+        msg('tb-f-msg', `${t} removida do catálogo.`);
+      } catch (e) { msg('tb-f-msg', e.message, false); }
+    }
+  });
+
+  m.campo('tb-f-salvar').addEventListener('click', async () => {
+    const tab = m.campo('tb-f-tabela').value.trim().toUpperCase();
+    const mod = m.campo('tb-f-modulo').value.trim();
+    const desc = m.campo('tb-f-desc').value.trim();
+    const filtro = m.campo('tb-f-filtro').value.trim();
+    if (!/^[A-Z][A-Z0-9]{2}$/.test(tab)) { msg('tb-f-msg', 'Tabela = alias de 3 caracteres (ex.: DA0).', false); return; }
+    if (!mod) { msg('tb-f-msg', 'Informe o módulo.', false); return; }
+    const existe = catalogo.find(c => c.tabela === tab);
+    // "Só neste projeto": muda o agrupamento aqui e não toca no catálogo
+    if (m.campo('tb-f-local').checked && existe) {
+      if (mod === existe.modulo) modLocal.delete(tab); else modLocal.set(tab, mod);
+      if (filtro && filtro !== (existe.filtro || '')) filtroLocal.set(tab, filtro); else filtroLocal.delete(tab);
+      marcadas.add(tab);
+      preencheModulos(); pinta();
+      msg('tb-f-msg', `${tab} ajustada só neste projeto — vale ao clicar em "Salvar seleção".`);
+      return;
+    }
+    try {
+      await api('/api/monitcad/catalogo', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabela: tab, modulo: mod, descricao: desc, filtro }),
+      });
+      modLocal.delete(tab);
+      marcadas.add(tab);
+      await carregaCatalogo(); pinta();
+      limpaForm();
+      msg('tb-f-msg', `${tab} ${existe ? 'atualizada' : 'incluída'} no catálogo e marcada neste projeto.`);
+    } catch (e) { msg('tb-f-msg', e.message, false); }
+  });
+
+  m.aoConfirmar(async () => {
+    m.erro('');
+    if (!marcadas.size) { m.erro('Marque ao menos uma tabela.'); return; }
+    m.ocupado(true, 'Salvando…');
+    try {
+      await api(`/api/monitcad/${encodeURIComponent(cli)}/selecao`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabelas: [...marcadas].map(t => ({
+          tabela: t, modulo: modLocal.get(t) || null, filtro: filtroLocal.get(t) || null })) }),
+      });
+      await carregaSelecao(cli);
+      let extra = '';
+      if (salvo && m.campo('tb-regrava').checked) {
+        const sql = montaScriptSQL('cadastros', salvo.sufixo || '010', salvo.dialeto || 'mssql');
+        await api(`/api/monitcad/${encodeURIComponent(cli)}/script?tipo=cadastros`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sql, dialeto: salvo.dialeto || 'mssql', sufixo: salvo.sufixo || '010' }),
+        });
+        extra = ' Script salvo regravado com as tabelas novas.';
+      }
+      const el = m.campo('tb-msg');
+      el.className = 'text-xs px-3 py-2 rounded-md border text-emerald-800 bg-emerald-50 border-emerald-200 font-medium';
+      el.textContent = `Seleção salva: ${marcadas.size} tabela(s).${extra}`;
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      if (cad.customer === cli && cad.visao !== 'evolucao') pintaAtual();
+    } catch (e) { m.erro(e.message); }
+    m.ocupado(false, 'Salvar seleção');
+  });
+}
+
+$('#cad-tabelas').addEventListener('click', abreModalTabelas);
 
 // ============================================================================
 //  AMBIENTE PROTHEUS — parâmetros da base do cliente e coleta automática
