@@ -82,14 +82,19 @@ CFG["cfg"] = {"customer": "TFEHM600", "ambiente": "producao",
               "timeout_s": 45, "limite_linhas": 50000, "ativo": True, "ssl_verificar": True}
 BASE_CFG = dict(CFG["cfg"])
 
+# Datas da base fingida = HOJE (fuso de Florianópolis), senão o teste envelhece
+# com o calendário: fila "de hoje" vira "de ontem" e o nível muda sozinho.
+from datetime import datetime, timedelta, timezone
+HOJE = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y%m%d")
+
 # ── REST fingida ────────────────────────────────────────────────────────────
 CSV = {
     "SX6": "PARAMETRO;FILIAL;CONTEUDO\nMV_RHNG;;.T.\nMV_HISTQUI;;1\nMV_RHMSGNG;;100\nMV_URIQR;;https://app.quirons.com/ttalk/\n",
-    "RJP_FILA": "FILIAL;TABELA;OPER;QTD;MAIS_ANTIGO\n  ;SRA;A;12;20261013\n",
-    "RJP_VAZAO": "DIA;QTD;PRIMEIRA;ULTIMA\n20261013;9;06:00:01;09:15:00\n",
+    "RJP_FILA": f"FILIAL;TABELA;OPER;QTD;MAIS_ANTIGO\n  ;SRA;A;12;{HOJE}\n",
+    "RJP_VAZAO": f"DIA;QTD;PRIMEIRA;ULTIMA\n{HOJE};9;06:00:01;09:15:00\n",
     "RU7": "DIA;COD_HTTP;QTD\n",
     "RJE_SST": "EVENTO;STATUS;QTD;MAIS_ANTIGO;MAIS_RECENTE\nS2220;4;30;20260901;20261010\n",
-    "RJP_ANT": "FILIAL;TABELA;OPER;CHAVE;GERADO\n  ;SRA;A;01000123;20261013\n",
+    "RJP_ANT": f"FILIAL;TABELA;OPER;CHAVE;GERADO\n  ;SRA;A;01000123;{HOJE}\n",
     "RJE_PEND": "FILIAL;EVENTO;STATUS;CHAVE;GERADO\n",
 }
 CHAMADAS = []
@@ -119,9 +124,17 @@ def fake_post(url, json=None, headers=None, auth=None, params=None, timeout=None
     if "FROM RUM010" in sql:
         if MODO["rum"] == "ausente":
             return R(200, {"ok": False, "erro": "ORA-00942: table or view does not exist"})
+        # Memo: a base fingida tem CLOB — a 1ª variante (BLOB) falha e a 2ª vale.
+        if "UTL_RAW" in sql:
+            return R(200, {"ok": False, "erro": "ORA-06502: PL/SQL: numeric or value error: hex to raw conversion error"})
+        if "RUM_STATUS = '3'" in sql and "SRA010" not in sql:
+            return R(200, {"ok": True, "csv": "TIPO;OPER;MENSAGEM\n"
+                           "1;I;E-mail já cadastrado.\n1;I;Centro de custo inválido | CPF Inválido\n"
+                           "2;A;Nao existe licenca disponivel no License Server\n",
+                           "linhas": 3, "truncado": False, "environment": "RACLI_PROD"})
         if "SRA010" in sql:
-            return R(200, {"ok": True, "csv": "FILIAL;MATRICULA;NOME;COD_INTERNO;TIPO;OPER;STATUS;DT_MOV;DT_INTEG;HR_INTEG\n"
-                           "01;000123;FULANO DE TAL;01|01|000123;1;A;3;20261010;20261010;08:00:00\n",
+            return R(200, {"ok": True, "csv": "FILIAL;MATRICULA;NOME;COD_INTERNO;TIPO;OPER;STATUS;DT_MOV;DT_INTEG;HR_INTEG;MENSAGEM\n"
+                           "01;000123;FULANO DE TAL;01|01|000123;1;A;3;20261010;20261010;08:00:00;E-mail já cadastrado.\n",
                            "linhas": 1, "truncado": False, "environment": "RACLI_PROD"})
         return R(200, {"ok": True, "csv": "TIPO;OPER;STATUS;QTD;MOV_MAIS_ANTIGO;ULT_INTEGRACAO;ATRASADOS\n"
                        "1;A;6;800;20250101;20261013;0\n1;A;3;1;20261010;20261010;0\n",
@@ -159,7 +172,12 @@ confere("healthcheck na raiz do REST",
             for c in CHAMADAS))
 confere("basic decifrado", all(c["auth"] == ("monitor", "s3nha") for c in CHAMADAS))
 confere("tipo integracoes", all(c["tipo"] == "integracoes" for c in CHAMADAS if "/query" in c["url"]))
-confere("9 consultas", sum(1 for c in CHAMADAS if "/query" in c["url"]) == 9)
+confere("12 consultas (10 blocos + 2 tentativas de memo)", sum(1 for c in CHAMADAS if "/query" in c["url"]) == 12)
+bm = ult_bm = d["ultima"]["blocos"]["rum_motivos"]
+confere("motivos lidos pela variante CLOB", bm["ok"] and bm["variante"] == 1 and "ORA-06502" in bm.get("aviso_variante", ""))
+confere("só o resumo gravado", bm["linhas"] == [] and bm["resumo"]["registros"] == 3)
+confere("categorias", bm["resumo"]["categorias"]["cadastro"] == 2 and bm["resumo"]["categorias"]["licenca"] == 1)
+confere("detalhe com mensagem", d["ultima"]["blocos"]["rum_pendencias"]["linhas"][0]["MENSAGEM"] == "E-mail já cadastrado.")
 ult = d["ultima"]
 confere("nível geral amarelo (1 inconsistência)", ult["nivel"] == "amarelo")
 inds = {i["chave"]: i for i in ult["indicadores"]}
@@ -241,7 +259,7 @@ CFG["cfg"] = None
 
 # ── 7. scripts ──────────────────────────────────────────────────────────────
 d = cli.get("/api/integracoes/TFEHM600/scripts?ambiente=producao").get_json()
-confere("scripts sem cadastro usam 010", d["sufixo_usado"] == "010" and len(d["scripts"]) == 9)
+confere("scripts sem cadastro usam 010", d["sufixo_usado"] == "010" and len(d["scripts"]) == 10)
 confere("scripts sem ;", all(not s["sql"].rstrip().endswith(";") for s in d["scripts"]))
 
 print(f"{ok} asserções OK, {falhou} falha(s)")

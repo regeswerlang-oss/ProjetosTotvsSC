@@ -8897,6 +8897,68 @@ const INT_GRUPOS = [
 const INT_TIPO_RUM = { '1': 'Funcionário', '2': 'Afastamento' };
 const INT_STATUS_RUM = { '0': 'Não integrado', '3': 'Inconsistência', '4': 'Aguardando retorno', '6': 'Integrado' };
 const INT_OPER = { I: 'Inclusão', A: 'Alteração', D: 'Alteração', E: 'Exclusão' };
+// Motivo da inconsistência = QUEM resolve. Mesmas chaves de INTEG_CATS (api).
+// Cor só de apoio: o rótulo com ícone é que identifica a categoria.
+const INT_CAT = {
+  licenca:    { rot: 'Licença',    ico: '🔑', cls: 'bg-violet-100 text-violet-800', quem: 'TOTVS Cloud / License Server' },
+  integracao: { rot: 'Integração', ico: '🔌', cls: 'bg-sky-100 text-sky-800',       quem: 'credencial, rede ou serviço' },
+  cadastro:   { rot: 'Cadastro',   ico: '🗂', cls: 'bg-indigo-100 text-indigo-800', quem: 'duplicidade ou cadastro de apoio na Ahgora' },
+  campo:      { rot: 'Campo',      ico: '✏️', cls: 'bg-teal-100 text-teal-800',     quem: 'valor vazio ou inválido no Protheus' },
+  outros:     { rot: 'Outros',     ico: '❔', cls: 'bg-slate-100 text-slate-700',   quem: 'não reconhecido — ver a mensagem' },
+};
+const intCatChip = (cat, sub) => {
+  const c = INT_CAT[cat] || INT_CAT.outros;
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${c.cls}">${c.ico} ${c.rot}${sub ? ` · ${escapeHtml(sub)}` : ''}</span>`;
+};
+/** Mesma regra do servidor (_integ_classifica), para classificar a mensagem
+ *  de cada linha do detalhe sem ida ao back. */
+function intClassifica(txt) {
+  const n = String(txt || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (!n.trim()) return ['outros', null];
+  if (/licen[cs]|license/.test(n)) return ['licenca', null];
+  if (/unauthori|nao autoriz|forbidden|\b40[13]\b|\b50[0-4]\b|timeout|timed out|time out|internal server|token|conex|connection|expired|subunique|request format|comunica|indisponi|sem resposta|ssl|http/.test(n)) return ['integracao', null];
+  if (/cadastrad|duplicad|ja existe|already|intersec|sobrepo|conflit/.test(n)) return ['cadastro', 'duplicidade/conflito'];
+  if (/centro de custo|centrocusto|escala|turno|sindicato|cargo|funca|departamento|motivo|localiza|cnpj|filial|empresa|chefia|gestor|nao encontrad|inexistente|nao localizad|not found/.test(n)) return ['cadastro', 'tabela de apoio'];
+  if (/invalid|obrigat|formato|format|tamanho|nao informad|vazi|em branco|required|\bdata\b|date|cpf|pis|e-?mail|nome|sexo|telefone|\brg\b|matricula/.test(n)) return ['campo', null];
+  return ['outros', null];
+}
+function intMotivoCel(msg) {
+  const t = String(msg || '').trim();
+  if (!t) return '<span class="text-slate-400">—</span>';
+  const ordem = ['licenca', 'integracao', 'cadastro', 'campo', 'outros'];
+  const cats = t.split('|').map(p => p.trim()).filter(Boolean).map(intClassifica);
+  const [cat, sub] = cats.sort((a, b) => ordem.indexOf(a[0]) - ordem.indexOf(b[0]))[0];
+  const curto = t.length > 140 ? t.slice(0, 140) + '…' : t;
+  return `<div class="flex flex-col items-start gap-0.5">${intCatChip(cat, sub)}
+    <span class="text-slate-600" title="${escapeHtml(t)}">${escapeHtml(curto)}</span></div>`;
+}
+/** Quadro dos motivos: uma contagem por categoria + a lista de motivos. */
+function intMotivos(b) {
+  if (!b) return '<p class="text-xs text-slate-500 py-2">Não lido nesta coleta.</p>';
+  if (!b.ok) return `<p class="text-xs text-slate-500 py-2">⚠ ${escapeHtml(b.erro || 'Não lido.')}</p>`;
+  const r = b.resumo;
+  if (!r || !r.registros) return '<p class="text-xs text-slate-500 py-2">Nenhuma inconsistência no período.</p>';
+  const tiles = Object.keys(INT_CAT).map(c => {
+    const n = (r.categorias || {})[c] || 0;
+    const k = INT_CAT[c];
+    return `<div class="rounded-lg border border-slate-200 px-3 py-2 ${n ? 'bg-white' : 'bg-slate-50 opacity-70'}" data-int-cat="${c}">
+      <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-slate-700">${k.ico} ${k.rot}</span>
+        <span class="text-lg font-totvs text-totvs-petroleo tabular-nums">${n}</span></div>
+      <p class="text-[11px] text-slate-500 leading-snug mt-0.5">${escapeHtml(k.quem)}</p></div>`;
+  }).join('');
+  const aviso = [
+    r.sem_mensagem ? `${r.sem_mensagem} registro(s) sem mensagem gravada.` : '',
+    b.truncado ? `Lidos os ${b.limite} primeiros registros.` : '',
+    r.motivos_total > (r.motivos || []).length ? `Mostrando ${(r.motivos || []).length} de ${r.motivos_total} motivos.` : '',
+  ].filter(Boolean).join(' ');
+  return `<div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-3">${tiles}</div>` +
+    intTabela([
+      { rot: 'Motivo', fmt: m => escapeHtml(m.texto) },
+      { rot: 'Categoria', fmt: m => intCatChip(m.categoria, m.sub) },
+      { rot: 'Afeta', fmt: m => escapeHtml(Object.entries(m.tipos || {}).map(([t, q]) => `${INT_TIPO_RUM[t] || t} ${q}`).join(' · ')) },
+      { k: 'qtd', rot: 'Ocorrências', dir: 1 }], r.motivos || [], 'Sem motivos.') +
+    (aviso ? `<p class="text-xs text-slate-500 mt-1">${escapeHtml(aviso)}</p>` : '');
+}
 // Colunas do histórico: os indicadores que contam QUANTIDADE de fila.
 const INT_HIST = [
   ['quirons_fila', 'Fila Quírons'], ['quirons_erros', 'Erros Quírons'],
@@ -9135,16 +9197,20 @@ function renderIntegracoes() {
         { k: 'QTD', rot: 'Registros', dir: 1 }, { k: 'ATRASADOS', rot: 'Atrasados', dir: 1 },
         { rot: 'Mov. mais antigo', fmt: l => intData(l.MOV_MAIS_ANTIGO) },
         { rot: 'Última integração', fmt: l => intData(l.ULT_INTEGRACAO) }], ls, 'Fila vazia.')) +
+      `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">Motivos das inconsistências</h4>${intMotivos(B.rum_motivos)}</div>` +
       intSub('Registros para agir (inconsistência, retorno perdido, não enviado)', B.rum_pendencias, (ls) => intTabela([
         { k: 'FILIAL', rot: 'Filial' }, { k: 'MATRICULA', rot: 'Matrícula' }, { k: 'NOME', rot: 'Nome' },
         { rot: 'Tipo', fmt: l => escapeHtml(INT_TIPO_RUM[l.TIPO] || l.TIPO || '') },
         { rot: 'Operação', fmt: l => escapeHtml(INT_OPER[l.OPER] || l.OPER || '') },
         { rot: 'Status', fmt: l => escapeHtml(INT_STATUS_RUM[l.STATUS] || l.STATUS || '') },
         { rot: 'Movimento', fmt: l => intData(l.DT_MOV) },
-        { rot: 'Integração', fmt: l => `${intData(l.DT_INTEG)} ${escapeHtml(l.HR_INTEG || '')}` }], ls,
-        'Nenhum registro parado.')) +
-      `<p class="text-xs text-slate-500">A mensagem de recusa da Ahgora fica na tela <b>GPEM929</b> (Ações › Status).
-         Retorno perdido: use <b>Reintegração</b> na mesma tela.</p>`);
+        { rot: 'Integração', fmt: l => `${intData(l.DT_INTEG)} ${escapeHtml(l.HR_INTEG || '')}` },
+        ...(ls.some(l => 'MENSAGEM' in l) ? [{ rot: 'Motivo', fmt: l => l.STATUS === '3' ? intMotivoCel(l.MENSAGEM) : '<span class="text-slate-400">—</span>' }] : [])], ls,
+        'Nenhum registro parado.') +
+        (B.rum_pendencias?.aviso_variante && !ls.some(l => 'MENSAGEM' in l)
+          ? `<p class="text-xs text-amber-800 mt-1">A base não devolveu a mensagem (RUM_STAMSN): ${escapeHtml(B.rum_pendencias.aviso_variante)}</p>` : '')) +
+      `<p class="text-xs text-slate-500">Motivo = mensagem que a Ahgora devolveu (campo <b>RUM_STAMSN</b>, a mesma da tela
+         <b>GPEM929</b> › Status), classificada pelo painel. Retorno perdido: use <b>Reintegração</b> na GPEM929.</p>`);
     html += intCaixa('esocial', 'eSocial SST — eventos vindos do Quírons', INT_GRUPOS[2].sub, nivelGrupo('esocial'), () =>
       intSub('Eventos por status', B.rje_sst, (ls) => intTabela([
         { k: 'EVENTO', rot: 'Evento' },

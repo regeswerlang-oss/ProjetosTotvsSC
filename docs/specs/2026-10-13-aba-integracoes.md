@@ -88,6 +88,54 @@ passado deixa o painel vermelho para sempre e esconde o que quebrou ontem.
 - O que ficou antes do corte **continua na base**, só não entra no painel. Para
   o histórico inteiro, basta limpar o campo e coletar.
 
+## Motivo da inconsistência (14/10/2026)
+
+**Pedido:** "detalhar que tipo de inconsistência é: cadastro, campo,
+indisponibilidade de licença ou integração".
+
+**De onde vem.** A Ahgora devolve texto livre no `/process`, e o Protheus grava
+esse texto no memo **`RUM_STAMSN`**, com os erros separados por `|`. É a mesma
+mensagem da tela GPEM929 › Status. O lado Protheus também grava ali falha de
+chamada (401, 500, licença).
+
+**Como lê o memo pela REST.** No Oracle o DBAccess guarda memo como BLOB:
+`UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(RUM_STAMSN, 400, 1))`. A trava do
+TSCMONITREST contra `DBMS_`/`UTL_` compara a **palavra inteira**, então
+`DBMS_LOB.SUBSTR` passa sem recompilar o fonte. Como o tipo do memo pode variar,
+o bloco tem **variantes** (`sqls`), tentadas em ordem: BLOB → CLOB
+(`DBMS_LOB.SUBSTR` puro) → sem a mensagem. A primeira que a base aceitar vale
+(`variante` e `aviso_variante` ficam no bloco). Tabela inexistente não tenta a
+próxima. SQL Server usa `CONVERT(VARBINARY)`. Postgres fica sem mensagem.
+
+**Classificação** (`_integ_classifica`, servidor; `intClassifica`, tela, com a
+mesma regra), sobre o texto sem acento e em minúsculas, nesta ordem:
+
+| Categoria | Quem resolve | Exemplos |
+|---|---|---|
+| 🔑 Licença | TOTVS Cloud / License Server | "Nao existe licenca disponivel no License Server" |
+| 🔌 Integração | credencial, rede ou serviço | Unauthorized, 401/403, 5xx, timeout, token, SSL |
+| 🗂 Cadastro · duplicidade/conflito | dado conflita do outro lado | "E-mail já cadastrado", "PIS já cadastrado", "afastamento possui intersecção" |
+| 🗂 Cadastro · tabela de apoio | cadastro que falta na Ahgora | centro de custo, escala/turno, sindicato, motivo de afastamento, CNPJ, "não encontrado" |
+| ✏️ Campo | valor vazio ou inválido no Protheus | "CPF Inválido", "Data de nascimento inválida", obrigatório, formato |
+| ❔ Outros | ninguém ainda: vira regra | o texto cru aparece na lista |
+
+"E-mail já cadastrado" é **Cadastro** (duplicidade), não Campo: a ordem das
+regras decide. Um registro com `A | B` conta em cada motivo, mas na categoria só
+uma vez, na mais grave pela ordem acima.
+
+**Blocos novos/alterados.**
+- `rum_motivos`: `TIPO, OPER, MENSAGEM` dos registros com status 3 (respeita o
+  corte por data), até 2.000. O servidor resume em `_integ_motivos()` (contagem
+  por categoria e lista de motivos com matrícula/CPF mascarados por `…`, para
+  agrupar) e grava **só o resumo** na coleta.
+- `rum_pendencias` ganhou a coluna `MENSAGEM` (400 caracteres).
+
+**Na tela (caixa Ahgora).** Cinco quadros com a contagem por categoria e quem
+resolve. Depois, a lista de motivos (texto, categoria e subtipo, se afeta
+Funcionário ou Afastamento, ocorrências) e a coluna **Motivo** na lista de
+registros para agir, com o selo da categoria e a mensagem. O cartão "Ahgora —
+inconsistências" passa a dizer "Por motivo: Cadastro 7 · Campo 2 · Licença 2".
+
 ## Indicadores (`_integ_indicadores`, função pura)
 
 | Chave | Verde | Amarelo | Vermelho |
@@ -157,16 +205,16 @@ funcionário.
 
 ## Testes
 
-- `docs/testes/integracoes-back.py` — 159 asserções sobre as funções puras: SQL
+- `docs/testes/integracoes-back.py` — 198 asserções sobre as funções puras: SQL
   (sufixo, datas, sem `;`, sem comando de escrita, sem parâmetro de senha), CSV,
   classificação de erro, itens do laudo e as regras de nível de cada indicador
   (cenário saudável, com problema, base sem Ahgora, histórico desligado).
-- `docs/testes/integracoes-rotas.py` — 41 asserções com o Flask de verdade, banco
+- `docs/testes/integracoes-rotas.py` — 45 asserções com o Flask de verdade, banco
   em memória e REST fingida: coleta feliz, token só no `/query`, healthcheck na
   raiz do REST com Basic, nada de segredo na resposta, tabela ausente virando
   cinza, healthcheck 404, base fora do ar (502 sem gravar), guardas de sufixo,
   token, ambiente e cadastro, a rota de scripts e o corte por data (gravar, recusar data futura ou inválida, aplicar no SQL, gravar na coleta, limpar).
-- `docs/testes/integracoes-front.js` — 45 asserções (Playwright, `/api/*`
+- `docs/testes/integracoes-front.js` — 55 asserções (Playwright, `/api/*`
   interceptado): abrir não coleta, cartões e rótulos, cinza com motivo,
   sparkline, escape de HTML, caixas sem DOM, coleta pelo topo e pelo rail com a
   barra "coletando", falha mantendo o retrato anterior, troca de base, retrato
@@ -181,5 +229,4 @@ funcionário.
 - Agendar a coleta diária pelo pg_cron (rota `/api/cron/integracoes` com
   `CRON_SECRET`, no mesmo molde do `cp-lancamento`), para a série não depender de
   alguém clicar.
-- Trazer a mensagem de recusa (`RUM_STAMSN`, `RJP_RTN`) quando confirmarmos o tipo
-  do campo no dicionário: memo no Oracle exige leitura de LOB.
+- Classificar também os erros da Quírons (`RU7_RTN`/`RJP_RTN`) com a mesma régua.

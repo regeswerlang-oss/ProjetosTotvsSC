@@ -30,7 +30,15 @@ const BLOCOS = {
   ru7_erros: { ok: true, linhas: [{ DIA: '20261012', COD_HTTP: '401', QTD: '1' }] },
   rum_resumo: { ok: false, ausente: true, erro: 'A tabela RUM010 não existe nesta base.', linhas: [] },
   rje_sst: { ok: true, linhas: [{ EVENTO: 'S2220', STATUS: '4', QTD: '30', MAIS_ANTIGO: '20260901', MAIS_RECENTE: '20261010' }] },
-  rum_pendencias: { ok: true, truncado: true, limite: 300, linhas: [{ FILIAL: '01', MATRICULA: '000123', NOME: 'FULANO <b>X</b>', TIPO: '1', OPER: 'A', STATUS: '3', DT_MOV: '20261010', DT_INTEG: '20261010', HR_INTEG: '08:00' }] },
+  rum_pendencias: { ok: true, truncado: true, limite: 300, variante: 1, linhas: [
+    { FILIAL: '01', MATRICULA: '000123', NOME: 'FULANO <b>X</b>', TIPO: '1', OPER: 'A', STATUS: '3', DT_MOV: '20261010', DT_INTEG: '20261010', HR_INTEG: '08:00', MENSAGEM: 'Centro de custo inválido | CPF Inválido' },
+    { FILIAL: '01', MATRICULA: '000124', NOME: 'BELTRANO', TIPO: '2', OPER: 'A', STATUS: '3', DT_MOV: '20261010', DT_INTEG: '20261010', HR_INTEG: '08:00', MENSAGEM: 'Nao existe licenca disponivel no License Server' },
+    { FILIAL: '01', MATRICULA: '000125', NOME: 'CICLANO', TIPO: '1', OPER: 'I', STATUS: '0', DT_MOV: '20261010', DT_INTEG: '', HR_INTEG: '', MENSAGEM: '' }] },
+  rum_motivos: { ok: true, linhas: [], resumo: { registros: 12, sem_mensagem: 1,
+    categorias: { licenca: 2, integracao: 0, cadastro: 7, campo: 2, outros: 0 }, motivos_total: 3,
+    motivos: [{ texto: 'E-mail já cadastrado', categoria: 'cadastro', sub: 'duplicidade/conflito', qtd: 5, tipos: { 1: 5 } },
+              { texto: 'Centro de custo inválido', categoria: 'cadastro', sub: 'tabela de apoio', qtd: 2, tipos: { 1: 2 } },
+              { texto: 'Nao existe licenca disponivel no License Server', categoria: 'licenca', sub: null, qtd: 2, tipos: { 2: 2 } }] } },
   rjp_antigos: { ok: true, linhas: [] },
   rje_pendentes: { ok: true, linhas: [] },
 };
@@ -120,6 +128,25 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('nome escapado (sem HTML injetado)', await pg.$('#int-conteudo b:has-text("X")') === null && /FULANO <b>X<\/b>/.test(conteudo));
   t('config fechada não gera DOM', !/Laudo do healthcheck/.test(conteudo));
   t('histórico fechado não gera DOM', !/Últimos disparos/.test(conteudo));
+
+  // ── motivos das inconsistências (caixa Ahgora já abre aberta) ────────────
+  const ahg = await txt('#int-conteudo');
+  t('quadro de motivos', /Motivos das inconsistências/.test(ahg));
+  const tile = async (c) => pg.$eval(`[data-int-cat="${c}"]`, n => n.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
+  t('contagem por categoria', /Cadastro 7/.test(await tile('cadastro')) && /Licença 2/.test(await tile('licenca'))
+    && /Campo 2/.test(await tile('campo')) && /Integração 0/.test(await tile('integracao')), await tile('cadastro'));
+  t('categoria diz quem resolve', /License Server/.test(await tile('licenca')));
+  t('lista de motivos com sub-tipo', /E-mail já cadastrado/.test(ahg) && /Cadastro · duplicidade\/conflito/.test(ahg) && /Cadastro · tabela de apoio/.test(ahg));
+  t('motivo afeta funcionário', /Funcionário 5/.test(ahg));
+  t('registros sem mensagem avisados', /1 registro\(s\) sem mensagem/.test(ahg));
+  const linhas = await pg.$$eval('#int-conteudo table tr', trs => trs.map(tr => tr.textContent.replace(/\s+/g, ' ').trim()));
+  const lFul = linhas.find(l => /000123/.test(l)) || '';
+  const lBel = linhas.find(l => /000124/.test(l)) || '';
+  const lCic = linhas.find(l => /000125/.test(l)) || '';
+  t('coluna motivo na lista', linhas.some(l => /Motivo/.test(l) && /Matrícula/.test(l)));
+  t('linha: tabela de apoio vence campo', /Cadastro · tabela de apoio/.test(lFul) && /CPF Inválido/.test(lFul), lFul);
+  t('linha: licença', /Licença/.test(lBel), lBel);
+  t('linha não inconsistente sem motivo', !/Licença|Cadastro|Campo/.test(lCic), lCic);
 
   await pg.click('[data-int-caixa="config"]');
   const cfg = await txt('#int-conteudo');

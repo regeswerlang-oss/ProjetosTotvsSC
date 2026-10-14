@@ -6442,7 +6442,24 @@ def _integ_desde(v):
         return None
 
 
-def _integ_scripts(sufixo, hoje, desde=None):
+def _integ_memo_exprs(col, banco, n=400):
+    """Expressões que leem os primeiros `n` bytes de um campo MEMO, na ordem de
+    tentativa. No Oracle o DBAccess grava memo como BLOB (UTL_RAW + DBMS_LOB);
+    se a base tiver CLOB, a segunda forma serve. SQL Server guarda IMAGE/VARBINARY.
+    A última opção é sempre SEM a mensagem: a lista nunca morre por causa dela.
+
+    A REST aceita DBMS_LOB/UTL_RAW porque a trava do TSCMONITREST compara a
+    PALAVRA inteira ("DBMS_" seguido de separador) — DBMS_LOB.SUBSTR passa."""
+    b = (banco or "oracle").lower()
+    if b == "mssql":
+        return [f"CONVERT(VARCHAR({n}), CONVERT(VARBINARY({n}), {col}))", None]
+    if b == "postgres":
+        return [None]
+    return [f"UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR({col}, {n}, 1))",
+            f"DBMS_LOB.SUBSTR({col}, {n}, 1)", None]
+
+
+def _integ_scripts(sufixo, hoje, desde=None, banco=None):
     """Os blocos da coleta, já com o sufixo da base e as datas como literal.
 
     `desde` (corte por base, 13/10/2026): só entra movimento a partir dessa
@@ -6467,7 +6484,7 @@ def _integ_scripts(sufixo, hoje, desde=None):
     sst = ", ".join(f"'{e}'" for e in INTEG_SST)
     pend_rum = (f"(RUM.RUM_STATUS = '3' OR (RUM.RUM_STATUS = '4' AND RUM.RUM_DATINT < '{h}') "
                 f"OR (RUM.RUM_STATUS = '0' AND RUM.RUM_DATMOV < '{h}'))")
-    return [
+    lista = [
         {"id": "config", "rotulo": "Parâmetros das integrações (SX6)", "tabela": f"SX6{s}",
          "limite": 200,
          "sql": (f"SELECT RTRIM(X6_VAR) AS PARAMETRO, RTRIM(X6_FIL) AS FILIAL, "
@@ -6508,17 +6525,30 @@ def _integ_scripts(sufixo, hoje, desde=None):
                  f"FROM RJE{s} WHERE D_E_L_E_T_ = ' ' AND RTRIM(RJE_EVENTO) IN ({sst}){c_rje} "
                  f"GROUP BY RJE_EVENTO, RJE_STATUS ORDER BY EVENTO, STATUS")},
         # ── detalhes: lista para agir. Truncar aqui é aceitável (a tela avisa).
+        # Motivos das inconsistências: a mensagem que a Ahgora devolveu fica no
+        # memo RUM_STAMSN (erros separados por '|'). Vem crua, registro a
+        # registro; a classificação (licença/integração/cadastro/campo) é feita
+        # aqui no Python e só o RESUMO é gravado — 2.000 mensagens por coleta
+        # engordariam o histórico à toa.
+        {"id": "rum_motivos", "rotulo": "Ahgora — motivos das inconsistências",
+         "tabela": f"RUM{s}", "limite": 2000, "detalhe": True,
+         "sqls": [(f"SELECT RTRIM(RUM_TIPO) AS TIPO, RTRIM(RUM_OPER) AS OPER, "
+                   f"{e} AS MENSAGEM FROM RUM{s} "
+                   f"WHERE D_E_L_E_T_ = ' ' AND RUM_STATUS = '3'{c_rum}")
+                  for e in _integ_memo_exprs("RUM_STAMSN", banco) if e]},
         {"id": "rum_pendencias", "rotulo": "Ahgora — registros parados ou com inconsistência",
          "tabela": f"RUM{s}", "limite": 300, "detalhe": True,
-         "sql": (f"SELECT RUM.RUM_FIL AS FILIAL, RUM.RUM_MAT AS MATRICULA, "
-                 f"RTRIM(SRA.RA_NOME) AS NOME, RTRIM(RUM.RUM_CODINT) AS COD_INTERNO, "
-                 f"RTRIM(RUM.RUM_TIPO) AS TIPO, RTRIM(RUM.RUM_OPER) AS OPER, "
-                 f"RTRIM(RUM.RUM_STATUS) AS STATUS, RUM.RUM_DATMOV AS DT_MOV, "
-                 f"RUM.RUM_DATINT AS DT_INTEG, RUM.RUM_HORINT AS HR_INTEG "
-                 f"FROM RUM{s} RUM LEFT JOIN SRA{s} SRA ON SRA.RA_FILIAL = RUM.RUM_FIL "
-                 f"AND SRA.RA_MAT = RUM.RUM_MAT AND SRA.D_E_L_E_T_ = ' ' "
-                 f"WHERE RUM.D_E_L_E_T_ = ' ' AND {pend_rum}{c_rumA} "
-                 f"ORDER BY RUM.RUM_DATMOV, RUM.RUM_FIL, RUM.RUM_MAT")},
+         "sqls": [(f"SELECT RUM.RUM_FIL AS FILIAL, RUM.RUM_MAT AS MATRICULA, "
+                   f"RTRIM(SRA.RA_NOME) AS NOME, RTRIM(RUM.RUM_CODINT) AS COD_INTERNO, "
+                   f"RTRIM(RUM.RUM_TIPO) AS TIPO, RTRIM(RUM.RUM_OPER) AS OPER, "
+                   f"RTRIM(RUM.RUM_STATUS) AS STATUS, RUM.RUM_DATMOV AS DT_MOV, "
+                   f"RUM.RUM_DATINT AS DT_INTEG, RUM.RUM_HORINT AS HR_INTEG"
+                   + (f", {e} AS MENSAGEM " if e else " ")
+                   + f"FROM RUM{s} RUM LEFT JOIN SRA{s} SRA ON SRA.RA_FILIAL = RUM.RUM_FIL "
+                   f"AND SRA.RA_MAT = RUM.RUM_MAT AND SRA.D_E_L_E_T_ = ' ' "
+                   f"WHERE RUM.D_E_L_E_T_ = ' ' AND {pend_rum}{c_rumA} "
+                   f"ORDER BY RUM.RUM_DATMOV, RUM.RUM_FIL, RUM.RUM_MAT")
+                  for e in _integ_memo_exprs("RUM.RUM_STAMSN", banco)]},
         {"id": "rjp_antigos", "rotulo": "Quírons — pendências mais antigas (RJP)",
          "tabela": f"RJP{s}", "limite": 100, "detalhe": True,
          "sql": (f"SELECT RJP_FILIAL AS FILIAL, RTRIM(RJP_TAB) AS TABELA, "
@@ -6534,6 +6564,16 @@ def _integ_scripts(sufixo, hoje, desde=None):
                  f"WHERE D_E_L_E_T_ = ' ' AND RTRIM(RJE_EVENTO) IN ({sst}) "
                  f"AND RTRIM(RJE_STATUS) <> '4'{c_rje} ORDER BY RJE_DTG, RJE_EVENTO")},
     ]
+    # Bloco com variantes ("sqls") tenta uma por vez na coleta; "sql" é a
+    # primeira, que é a que a rota de scripts mostra e a que costuma valer.
+    # Banco sem forma de ler o memo (Postgres): o bloco de motivos não existe.
+    lista = [b for b in lista if b.get("sqls", [None]) != []]
+    for b in lista:
+        if "sqls" in b:
+            b["sql"] = b["sqls"][0]
+        else:
+            b["sqls"] = [b["sql"]]
+    return lista
 
 
 def _integ_csv(texto):
@@ -6546,6 +6586,93 @@ def _integ_csv(texto):
     cab = [c.strip().upper() for c in linhas[0]]
     return [{cab[i]: (v or "").strip() for i, v in enumerate(ln) if i < len(cab)}
             for ln in linhas[1:]]
+
+
+# ── Motivo da inconsistência ───────────────────────────────────────────────
+# A Ahgora devolve texto livre ("E-mail já cadastrado.", "CPF Inválido",
+# "Centro de custo inválido | CNPJ inválido", "matrícula: 998877 - O
+# afastamento possui intersecção com outro(s) já cadastrado(s)."), e o lado
+# Protheus grava ali também falha de chamada (401, 500, licença). A pergunta do
+# consultor é QUEM resolve, e isso define as categorias:
+#   licenca    → infraestrutura TOTVS/TCloud (License Server sem licença livre)
+#   integracao → comunicação/autenticação/servidor (credencial, timeout, 5xx)
+#   cadastro   → o dado conflita ou depende de algo que não existe do outro lado
+#                (duplicidade, intersecção, centro de custo/escala/sindicato/
+#                 CNPJ/motivo não cadastrado na Ahgora)
+#   campo      → o valor de um campo do Protheus está vazio ou inválido (CPF,
+#                PIS, e-mail, data, formato)
+#   outros     → não reconhecido — a mensagem crua aparece para virar regra.
+# Ordem importa: "E-mail já cadastrado" é CADASTRO (duplicidade), não campo.
+INTEG_CATS = (("licenca", "Licença"), ("integracao", "Integração"),
+              ("cadastro", "Cadastro"), ("campo", "Campo"), ("outros", "Outros"))
+_INTEG_RE_CAT = (
+    ("licenca", None, re.compile(r"licen[cs]|license")),
+    ("integracao", None, re.compile(
+        r"unauthori|nao autoriz|forbidden|\b40[13]\b|\b50[0-4]\b|timeout|timed out|time out|"
+        r"internal server|token|conex|connection|expired|subunique|request format|"
+        r"comunica|indisponi|sem resposta|ssl|http")),
+    ("cadastro", "duplicidade/conflito", re.compile(
+        r"cadastrad|duplicad|ja existe|already|intersec|sobrepo|conflit")),
+    ("cadastro", "tabela de apoio", re.compile(
+        r"centro de custo|centrocusto|escala|turno|sindicato|cargo|funca|departamento|"
+        r"motivo|localiza|cnpj|filial|empresa|chefia|gestor|nao encontrad|inexistente|"
+        r"nao localizad|not found")),
+    ("campo", None, re.compile(
+        r"invalid|obrigat|formato|format|tamanho|nao informad|vazi|em branco|required|"
+        r"\bdata\b|date|cpf|pis|e-?mail|nome|sexo|telefone|\brg\b|matricula")),
+)
+
+
+def _integ_norm(txt):
+    t = unicodedata.normalize("NFKD", txt or "").encode("ascii", "ignore").decode().lower()
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _integ_classifica(txt):
+    """(categoria, subcategoria) de UM trecho de mensagem."""
+    n = _integ_norm(txt)
+    if not n:
+        return "outros", None
+    for cat, sub, rx in _INTEG_RE_CAT:
+        if rx.search(n):
+            return cat, sub
+    return "outros", None
+
+
+def _integ_mascara(txt):
+    """Tira matrícula/CPF/código do texto: duas mensagens que só diferem no
+    número são o MESMO motivo."""
+    t = re.sub(r"\d{3,}", "…", (txt or "").strip())
+    return re.sub(r"\s+", " ", t).strip(" .;-")
+
+
+def _integ_motivos(linhas):
+    """Resumo dos motivos a partir das linhas (TIPO, OPER, MENSAGEM) do bloco
+    rum_motivos. Um registro com 'A | B' conta nos dois motivos, mas na
+    categoria só UMA vez (a mais grave na ordem de INTEG_CATS)."""
+    ordem = [c for c, _ in INTEG_CATS]
+    cats = {c: 0 for c in ordem}
+    motivos, sem_msg = {}, 0
+    for ln in linhas:
+        msg = (ln.get("MENSAGEM") or "").strip()
+        if not msg:
+            sem_msg += 1
+            continue
+        pedacos = [p for p in (x.strip() for x in msg.split("|")) if p] or [msg]
+        cats_reg = set()
+        for p in pedacos:
+            cat, sub = _integ_classifica(p)
+            cats_reg.add(cat)
+            chave = _integ_norm(_integ_mascara(p))
+            m = motivos.setdefault(chave, {"texto": _integ_mascara(p), "categoria": cat,
+                                           "sub": sub, "qtd": 0, "tipos": {}})
+            m["qtd"] += 1
+            t = ln.get("TIPO") or "?"
+            m["tipos"][t] = m["tipos"].get(t, 0) + 1
+        cats[min(cats_reg, key=ordem.index)] += 1
+    lista = sorted(motivos.values(), key=lambda m: (-m["qtd"], m["texto"]))
+    return {"registros": len(linhas), "sem_mensagem": sem_msg, "categorias": cats,
+            "motivos": lista[:60], "motivos_total": len(lista)}
 
 
 def _integ_motivo(msg, tabela):
@@ -6750,11 +6877,16 @@ def _integ_indicadores(blocos, health, hoje):
         ls = b["linhas"]
         soma = lambda st, campo="QTD": sum(_integ_int(x.get(campo)) for x in ls if x.get("STATUS") == st)
         inc = soma("3")
+        res = (blocos.get("rum_motivos") or {}).get("resumo") or {}
+        partes = [f"{rot} {res['categorias'][c]}" for c, rot in INTEG_CATS
+                  if (res.get("categorias") or {}).get(c)]
+        txt_inc = ("Nenhuma." if inc == 0 else
+                   ("Por motivo: " + " · ".join(partes) + "." if partes else
+                    "A Ahgora recusou (e-mail/CPF/PIS duplicado, centro de custo, CNPJ…). "
+                    "Corrija o cadastro e reenvie."))
         out.append(_integ_ind(
             "ahgora_inconsistencias", "ahgora", "Ahgora — inconsistências", inc,
-            "verde" if inc == 0 else "amarelo" if inc <= 5 else "vermelho",
-            "Nenhuma." if inc == 0 else
-            "A Ahgora recusou (e-mail/CPF/PIS duplicado, centro de custo, CNPJ…). Corrija o cadastro e reenvie."))
+            "verde" if inc == 0 else "amarelo" if inc <= 5 else "vermelho", txt_inc))
         ar = soma("4", "ATRASADOS")
         out.append(_integ_ind(
             "ahgora_aguardando", "ahgora", "Ahgora — retorno perdido", ar,
@@ -6956,7 +7088,8 @@ def api_integracoes_scripts(customer):
                   "desde": cfg.get("integ_desde"),
                   "scripts": [{k: s[k] for k in ("id", "rotulo", "tabela", "sql")}
                               for s in _integ_scripts(suf or "010", _cp_hoje(),
-                                                      _integ_desde(cfg.get("integ_desde")))]})
+                                                      _integ_desde(cfg.get("integ_desde")),
+                                                      cfg.get("banco"))]})
 
 
 @app.post("/api/integracoes/<customer>/coletar")
@@ -6995,7 +7128,7 @@ def api_integracoes_coletar(customer):
     blocos, ambiente_srv, linhas_tot, conectou = {}, None, 0, False
 
     desde = _integ_desde(cfg.get("integ_desde"))
-    scripts = _integ_scripts(suf, hoje, desde)
+    scripts = _integ_scripts(suf, hoje, desde, cfg.get("banco"))
     # Ordem: resumos → healthcheck → detalhes. Se o tempo acabar, falta a
     # lista, não o número.
     resumos = [s for s in scripts if not s.get("detalhe")]
@@ -7010,21 +7143,35 @@ def api_integracoes_coletar(customer):
             blocos[s["id"]] = {**base, "ok": False, "linhas": [],
                                "erro": "Não lido: o tempo da coleta acabou antes deste bloco."}
             return
-        try:
-            r = requests.post(f"{cfg['url_rest']}/query",
-                              json={"token": tok, "tipo": "integracoes", "sql": s["sql"],
-                                    "limite": s["limite"]},
-                              headers=heads, auth=auth,
-                              params={"empresa": cfg.get("empresa") or "01",
-                                      "filial": cfg.get("filial") or "01"},
-                              timeout=max(5, int(resta)), verify=_verifica_tls(cfg))
-            dados = _json_da_resposta(r)
-        except requests.RequestException as e:
-            if not conectou:
-                raise
-            blocos[s["id"]] = {**base, "ok": False, "linhas": [], "erro": _motivo_rede(e)}
-            return
-        conectou = True
+        # Variantes: a 1ª que a base aceitar vale (ex.: memo como BLOB → CLOB →
+        # sem a mensagem). Tabela inexistente não tenta a próxima: nenhuma serve.
+        falhas_var = []
+        for k, sql in enumerate(s["sqls"]):
+            resta = prazo - time.time()
+            if k and resta < INTEG_TEMPO_MIN:
+                break
+            try:
+                r = requests.post(f"{cfg['url_rest']}/query",
+                                  json={"token": tok, "tipo": "integracoes", "sql": sql,
+                                        "limite": s["limite"]},
+                                  headers=heads, auth=auth,
+                                  params={"empresa": cfg.get("empresa") or "01",
+                                          "filial": cfg.get("filial") or "01"},
+                                  timeout=max(5, int(resta)), verify=_verifica_tls(cfg))
+                dados = _json_da_resposta(r)
+            except requests.RequestException as e:
+                if not conectou:
+                    raise
+                blocos[s["id"]] = {**base, "ok": False, "linhas": [], "erro": _motivo_rede(e)}
+                return
+            conectou = True
+            if r.status_code < 400 and dados.get("ok"):
+                break
+            msg = dados.get("erro") or f"HTTP {r.status_code}: {_trecho(r)}"
+            ausente, motivo = _integ_motivo(msg, s["tabela"])
+            falhas_var.append(motivo)
+            if ausente:
+                break
         ms = int((time.time() - t0) * 1000)
         if r.status_code >= 400 or not dados.get("ok"):
             msg = dados.get("erro") or f"HTTP {r.status_code}: {_trecho(r)}"
@@ -7042,7 +7189,10 @@ def api_integracoes_coletar(customer):
                                "erro": f"Resumo bateu o limite de {s['limite']} linhas — descartado."}
             return
         blocos[s["id"]] = {**base, "ok": True, "linhas": linhas, "ms": ms,
-                           "truncado": bool(dados.get("truncado")), "limite": s["limite"]}
+                           "truncado": bool(dados.get("truncado")), "limite": s["limite"],
+                           "variante": k}
+        if falhas_var:
+            blocos[s["id"]]["aviso_variante"] = falhas_var[0][:300]
 
     try:
         for s in resumos:
@@ -7063,6 +7213,10 @@ def api_integracoes_coletar(customer):
         _log_coleta(customer, amb, "integracoes", ini, False, erro=msgs)
         return _err(502, f"Nenhum bloco foi lido. {msgs}")
 
+    bm = blocos.get("rum_motivos")
+    if bm and bm.get("ok"):
+        bm["resumo"] = _integ_motivos(bm["linhas"])
+        bm["linhas"] = []                  # só o resumo vai para o histórico
     inds = _integ_indicadores(blocos, health, hoje)
     nivel = _integ_pior(i["nivel"] for i in inds)
     # O corte usado fica GRAVADO com a coleta: trocar o corte depois não pode

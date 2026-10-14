@@ -12,7 +12,9 @@ RAIZ = pathlib.Path(__file__).resolve().parents[2]
 src = (RAIZ / 'api' / 'index.py').read_text(encoding='utf-8')
 ini = src.index('INTEG_PARAMS = (')
 fim = src.index('def _integ_health(cfg')
-ns = {'re': re, 'csv': csv, 'io': io, 'json': json, 'date': date, 'timedelta': timedelta}
+import unicodedata
+ns = {'re': re, 'csv': csv, 'io': io, 'json': json, 'date': date, 'timedelta': timedelta,
+      'unicodedata': unicodedata}
 exec(compile(src[ini:fim], 'integ', 'exec'), ns)
 
 ok = falhou = 0
@@ -32,7 +34,7 @@ HOJE = date(2026, 10, 13)
 # ── SQL dos blocos ──────────────────────────────────────────────────────────
 scripts = ns['_integ_scripts']('010', HOJE)
 ids = [s['id'] for s in scripts]
-confere('nove blocos', len(scripts) == 9)
+confere('dez blocos', len(scripts) == 10)
 confere('resumos antes dos detalhes',
         ids.index('rje_sst') < ids.index('rum_pendencias'))
 for s in scripts:
@@ -71,6 +73,61 @@ confere('corte sem ;', all(not v.rstrip().endswith(';') for v in corte.values())
 confere('_integ_desde aceita ISO', ns['_integ_desde']('2026-10-01') == date(2026, 10, 1))
 confere('_integ_desde aceita date', ns['_integ_desde'](date(2026, 10, 1)) == date(2026, 10, 1))
 confere('_integ_desde vazio', ns['_integ_desde'](None) is None and ns['_integ_desde']('xx') is None)
+
+# ── motivo da inconsistência (14/10/2026) ───────────────────────────────────
+cl = ns['_integ_classifica']
+casos = {
+    'E-mail já cadastrado.': ('cadastro', 'duplicidade/conflito'),
+    'PIS já cadastrado.': ('cadastro', 'duplicidade/conflito'),
+    'matrícula: 998877 - O afastamento possui intersecção com outro(s) já cadastrado(s).': ('cadastro', 'duplicidade/conflito'),
+    'Centro de custo inválido': ('cadastro', 'tabela de apoio'),
+    'CNPJ inválido': ('cadastro', 'tabela de apoio'),
+    'Escala 0101001 não encontrada': ('cadastro', 'tabela de apoio'),
+    'CPF Inválido': ('campo', None),
+    'Data de nascimento inválida': ('campo', None),
+    'Nao existe licenca disponivel no License Server para atender a requisicao nesse momento.': ('licenca', None),
+    'Internal Server Error': ('integracao', None),
+    'Unauthorized': ('integracao', None),
+    'xyz qualquer coisa': ('outros', None),
+    '': ('outros', None),
+}
+for txt, esperado in casos.items():
+    confere(f'classifica: {txt[:40]}', cl(txt) == esperado)
+confere('acento corrompido ainda classifica', cl('CPF Inv?lido')[0] == 'campo')
+mot = ns['_integ_motivos']([
+    {'TIPO': '2', 'OPER': 'A', 'MENSAGEM': 'matrícula: 0101002798 - O afastamento possui intersecção com outro(s) já cadastrado(s).'},
+    {'TIPO': '2', 'OPER': 'A', 'MENSAGEM': 'matrícula: 0101002799 - O afastamento possui intersecção com outro(s) já cadastrado(s).'},
+    {'TIPO': '1', 'OPER': 'I', 'MENSAGEM': 'Centro de custo inválido | CPF Inválido'},
+    {'TIPO': '1', 'OPER': 'I', 'MENSAGEM': 'Nao existe licenca disponivel no License Server'},
+    {'TIPO': '1', 'OPER': 'I', 'MENSAGEM': ''}])
+confere('motivos: registros', mot['registros'] == 5 and mot['sem_mensagem'] == 1)
+confere('motivos: matrícula mascarada agrupa', mot['motivos'][0]['qtd'] == 2 and '…' in mot['motivos'][0]['texto'])
+confere('motivos: registro com dois motivos conta uma vez na categoria',
+        mot['categorias']['cadastro'] == 3 and mot['categorias']['campo'] == 0)
+confere('motivos: licença', mot['categorias']['licenca'] == 1)
+confere('motivos: os dois pedaços viram motivos', mot['motivos_total'] == 4)
+confere('motivos: afeta por tipo', mot['motivos'][0]['tipos'] == {'2': 2})
+# variantes de leitura do memo
+sc = {x['id']: x for x in ns['_integ_scripts']('010', HOJE, None, 'oracle')}
+confere('memo oracle: BLOB, CLOB e sem mensagem', len(sc['rum_pendencias']['sqls']) == 3
+        and 'UTL_RAW.CAST_TO_VARCHAR2(DBMS_LOB.SUBSTR(RUM.RUM_STAMSN, 400, 1))' in sc['rum_pendencias']['sqls'][0]
+        and 'UTL_RAW' not in sc['rum_pendencias']['sqls'][1] and 'DBMS_LOB.SUBSTR' in sc['rum_pendencias']['sqls'][1]
+        and 'STAMSN' not in sc['rum_pendencias']['sqls'][2])
+confere('sql = primeira variante', sc['rum_pendencias']['sql'] == sc['rum_pendencias']['sqls'][0])
+confere('motivos só status 3', "RUM_STATUS = '3'" in sc['rum_motivos']['sql'] and len(sc['rum_motivos']['sqls']) == 2)
+confere('blocos sem variante têm sqls de 1', len(sc['rjp_fila']['sqls']) == 1)
+ms = {x['id']: x for x in ns['_integ_scripts']('010', HOJE, None, 'mssql')}
+confere('memo SQL Server', 'CONVERT(VARBINARY(400), RUM.RUM_STAMSN)' in ms['rum_pendencias']['sql'])
+pg = {x['id']: x for x in ns['_integ_scripts']('010', HOJE, None, 'postgres')}
+confere('postgres sem mensagem e sem bloco de motivos', 'STAMSN' not in pg['rum_pendencias']['sql'] and 'rum_motivos' not in pg)
+cm = {x['id']: x['sql'] for x in ns['_integ_scripts']('010', HOJE, date(2026, 10, 1), 'oracle')}
+confere('corte nos motivos', "RUM_DATMOV >= '20261001'" in cm['rum_motivos'])
+# indicador detalha os motivos
+com_mot = dict({'rum_resumo': {'ok': True, 'linhas': [{'TIPO': '1', 'OPER': 'I', 'STATUS': '3', 'QTD': '4',
+                 'MOV_MAIS_ANTIGO': '20261013', 'ULT_INTEGRACAO': '20261014', 'ATRASADOS': '0'}]},
+                'rum_motivos': {'ok': True, 'linhas': [], 'resumo': mot}})
+ii = next(i for i in ns['_integ_indicadores'](com_mot, {'ok': False}, HOJE) if i['chave'] == 'ahgora_inconsistencias')
+confere('indicador traz motivos', 'Cadastro 3' in ii['texto'] and 'Licença 1' in ii['texto'] and 'Campo' not in ii['texto'])
 
 # ── CSV ─────────────────────────────────────────────────────────────────────
 linhas = ns['_integ_csv']('PARAMETRO;FILIAL;CONTEUDO\nMV_URIQR;;https://app.quirons.com/ttalk/\n'
