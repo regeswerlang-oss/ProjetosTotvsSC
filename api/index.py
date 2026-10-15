@@ -3167,6 +3167,15 @@ def api_protheus_coletar(customer, ambiente):
     if r.status_code >= 400 or not dados.get("ok"):
         msg = dados.get("erro") or (f"HTTP {r.status_code} na rota /query, mas a resposta "
                                     f"nao é o JSON do TSCMONITREST. A base devolveu: {_trecho(r)}")
+        if r.status_code == 404 and not dados.get("erro"):
+            # Página HTML de 404 do AppServer: a rota não existe NESTE servidor.
+            # Foi o caso da base de testes da Digitro (15/10/2026) — produção,
+            # com o fonte compilado, coletou no mesmo minuto.
+            msg = (f"HTTP 404: o servidor {cfg['url_rest'].split('/rest')[0]} respondeu, mas a rota "
+                   f"/tscmonit/query nao existe nele. O TSCMONITREST.tlpp nao esta compilado no RPO "
+                   f"deste ambiente ({cfg.get('environment') or '?'}) ou o servico REST nao foi "
+                   f"reiniciado depois de compilar. Confira tambem se a porta e o prefixo do "
+                   f"[HTTPURI] da URL sao os deste ambiente.")
         _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code, erro=msg)
         return _err(502, f"A base recusou a consulta: {msg}")
 
