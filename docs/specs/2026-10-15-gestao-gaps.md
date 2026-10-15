@@ -60,3 +60,9 @@ SQL: `docs/sql/2026-10-15-gestao-gaps.sql` (já aplicado).
 ## Fica para depois
 Tags (add/remove), descrição, responsável do cliente, setas desenhadas no Gantt, cadastro
 de fases pela tela.
+
+## Botões ⓘ (15/10/2026)
+Cada KPI tem um ⓘ com a regra do número (popover único, fecha com clique fora/Esc),
+o campo **% concluído** do modal tem ⓘ explicando que é o `progress` da Task e que a
+fase só sugere o %, e a barra tem **ⓘ Critérios** (quais GAPs aparecem). Textos no
+objeto `INFO` dentro do módulo da Gestão de GAPs — mudou a regra, mude o texto.
