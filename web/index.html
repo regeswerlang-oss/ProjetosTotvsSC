@@ -318,6 +318,7 @@
         <div id="menu-interno" class="hidden fixed w-72 rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
              style="z-index:50"></div>
       </div>
+      <button id="btn-conta" data-interno class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Suas credenciais do Tasks SC e do e-mail — as gravações saem no seu nome">👤 Minha conta<span id="conta-alerta" class="hidden ml-1 inline-block w-2 h-2 rounded-full bg-amber-400 align-middle"></span></button>
       <button id="btn-acessos" data-interno class="hidden px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Liberar usuários por cliente e escolher as abas que cada um enxerga">👥 Acessos</button>
       <button id="btn-sync" data-interno class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base (só a regional e os clientes da carteira). O cron do Supabase já faz isso de hora em hora.">⟳ Sincronizar API</button>
       <button id="btn-refresh" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde transition-colors">↻ Atualizar</button>
@@ -2076,6 +2077,8 @@ function aplicaModo(me) {
     if (h) h.textContent = 'Acompanhamento do Projeto';
   }
   if (me.is_admin) $('#btn-acessos')?.classList.remove('hidden');
+  // ponto âmbar no 👤 Minha conta enquanto faltar credencial própria
+  if (acesso.modo === 'interno' && !me.view_as) atualizaAlertaConta();
 }
 
 /** Abas liberadas para o cliente do projeto aberto. null = todas (interno). */
@@ -6925,6 +6928,128 @@ function abreModalEmail() {
   });
 }
 
+// ============================================================================
+//  MINHA CONTA — credenciais do PRÓPRIO usuário (15/10/2026)
+// ============================================================================
+// Duas credenciais, cada uma com o seu "salvar e testar":
+//   Tasks SC → usuário/senha do AD; toda escrita no Tasks sai em nome de quem
+//              está logado (nunca da conta de serviço). Mesma tabela/cifra do
+//              cockpit-unico-tsc: cadastrou num, vale no outro.
+//   E-mail   → senha de app do Google (16 letras) para criar rascunhos na
+//              própria caixa. A senha normal o Gmail recusa por IMAP.
+// Nenhuma senha volta para a tela; o admin vê em Acessos só se cadastrou.
+const STATUS_CRED = {
+  valida:   ['✓ Válida', 'bg-emerald-100 text-emerald-800'],
+  invalida: ['✗ Recusada — salve de novo', 'bg-rose-100 text-rose-800'],
+  pendente: ['… Pendente', 'bg-amber-100 text-amber-800'],
+};
+const seloCred = (st) => {
+  const [t, c] = STATUS_CRED[st] || ['Não cadastrada', 'bg-slate-100 text-slate-600'];
+  return `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full ${c}">${t}</span>`;
+};
+
+async function atualizaAlertaConta() {
+  try {
+    const c = await api('/api/conta');
+    const falta = c.tasks.status !== 'valida' || !c.email_caixa.configurada;
+    document.querySelector('#conta-alerta')?.classList.toggle('hidden', !falta);
+    return c;
+  } catch { return null; }
+}
+
+// foco: 'tasks' | 'email' — destaca o card de quem mandou abrir (ex.: a gravação
+// no Tasks voltou 428 e o usuário precisa cadastrar antes de seguir).
+async function abreMinhaConta(foco) {
+  const m = modal('👤 Minha conta', '<p class="text-slate-400 py-6 text-center">Carregando…</p>', 'Fechar');
+  m.el.querySelector('[data-ok]').classList.add('hidden');
+  m.el.querySelector('.border-t [data-fechar]').textContent = 'Fechar';
+  m.el.querySelector('.max-w-lg')?.classList.replace('max-w-lg', 'max-w-2xl');
+  const corpo = m.el.querySelector('.p-5');
+
+  async function pinta() {
+    let c;
+    try { c = await api('/api/conta'); }
+    catch (e) { corpo.innerHTML = `<p class="text-rose-600">${escapeHtml(e.message)}</p>`; return; }
+    const t = c.tasks, g = c.email_caixa;
+    const dataBr = (v) => v ? new Date(v).toLocaleString('pt-BR') : '';
+    corpo.innerHTML = `
+      <p class="text-xs text-slate-500">Logado como <b>${escapeHtml(c.email)}</b>. As senhas ficam
+        cifradas no banco e <b>nunca voltam para a tela</b> — para trocar, digite de novo.</p>
+
+      <section class="border border-slate-200 rounded-lg p-4 space-y-3 ${foco === 'tasks' ? 'ring-2 ring-totvs-blue/50' : ''}">
+        <div class="flex items-center justify-between">
+          <h4 class="font-semibold text-totvs-petroleo">Tasks SC</h4>${seloCred(t.status)}
+        </div>
+        <p class="text-xs text-slate-500">Usada para gravar na Task (status, % concluído, datas,
+          histórico…) <b>em seu nome</b>. Sem ela, o portal não grava no Tasks.
+          ${t.validada_em ? `Última validação: ${dataBr(t.validada_em)}.` : ''}</p>
+        ${t.chave_ok ? '' : `<p class="text-xs text-rose-700 bg-rose-50 rounded p-2">A chave de cifra
+          (TASKS_CRED_KEY) não está configurada na Vercel deste app — avise o administrador.</p>`}
+        <div class="grid grid-cols-3 gap-3">
+          ${campo('mc-dom', 'Domínio', t.ad_domain || 'actvs')}
+          <div class="col-span-2">${campo('mc-usr', 'Usuário', t.ad_username || '', 'text', 'Ex.: nome.sobrenome')}</div>
+        </div>
+        ${campo('mc-pwd', 'Senha do Tasks SC', '', 'password')}
+        <div class="flex items-center gap-2">
+          <button data-acao="tasks-salvar" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">Salvar e testar</button>
+          ${t.configurada ? '<button data-acao="tasks-remover" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50">Remover</button>' : ''}
+          <span data-msg="tasks" class="text-xs"></span>
+        </div>
+      </section>
+
+      <section class="border border-slate-200 rounded-lg p-4 space-y-3 ${foco === 'email' ? 'ring-2 ring-totvs-blue/50' : ''}">
+        <div class="flex items-center justify-between">
+          <h4 class="font-semibold text-totvs-petroleo">E-mail (rascunhos)</h4>
+          ${seloCred(g.configurada ? 'valida' : (g.precisa_resalvar ? 'invalida' : null))}
+        </div>
+        <p class="text-xs text-slate-500">Para o portal criar rascunhos na <b>sua</b> caixa. O Gmail
+          não aceita a senha normal: gere uma <b>senha de app</b> (16 letras, com verificação em
+          2 etapas ativa) em <a href="https://myaccount.google.com/apppasswords" target="_blank"
+          rel="noopener" class="text-totvs-blue underline">myaccount.google.com/apppasswords</a>.</p>
+        ${campo('mc-gmail', 'E-mail', g.gmail_email || c.email, 'email')}
+        ${campo('mc-app', 'Senha de app (16 letras)', '', 'password', 'Os espaços são ignorados.')}
+        <div class="flex items-center gap-2">
+          <button data-acao="email-salvar" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">Salvar e testar</button>
+          ${g.gmail_email ? '<button data-acao="email-remover" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50">Remover</button>' : ''}
+          <span data-msg="email" class="text-xs"></span>
+        </div>
+      </section>`;
+    corpo.querySelector(foco === 'email' ? '#mc-app' : (t.ad_username ? '#mc-pwd' : '#mc-usr'))?.focus();
+  }
+
+  const msg = (k, txt, ok) => {
+    const el = corpo.querySelector(`[data-msg="${k}"]`);
+    if (el) { el.textContent = txt; el.className = `text-xs ${ok ? 'text-emerald-700' : 'text-rose-600'}`; }
+  };
+  const chama = async (k, btn, rotulo, fn) => {
+    btn.disabled = true; const orig = btn.textContent; btn.textContent = rotulo;
+    try { await fn(); await pinta(); msg(k, '✓ Salvo e validado.', true); atualizaAlertaConta(); }
+    catch (e) { btn.disabled = false; btn.textContent = orig; msg(k, e.message, false); }
+  };
+
+  corpo.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-acao]'); if (!b) return;
+    const json = (body) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    if (b.dataset.acao === 'tasks-salvar') {
+      const dados = { ad_domain: m.campo('mc-dom').value, ad_username: m.campo('mc-usr').value, senha: m.campo('mc-pwd').value };
+      if (!dados.ad_username.trim() || !dados.senha) { msg('tasks', 'Preencha usuário e senha.'); return; }
+      chama('tasks', b, 'Testando no Tasks SC…', () => api('/api/conta/tasks', json(dados)));
+    } else if (b.dataset.acao === 'email-salvar') {
+      const dados = { gmail_email: m.campo('mc-gmail').value.trim(), app_password: m.campo('mc-app').value };
+      if (!dados.gmail_email || !dados.app_password) { msg('email', 'Preencha e-mail e senha de app.'); return; }
+      chama('email', b, 'Testando no Gmail…', () => api('/api/gmail/cred', json(dados)));
+    } else if (b.dataset.acao === 'tasks-remover' || b.dataset.acao === 'email-remover') {
+      const k = b.dataset.acao.startsWith('tasks') ? 'tasks' : 'email';
+      if (!confirm('Remover esta credencial? As gravações deste tipo param até você cadastrar de novo.')) return;
+      try { await api(k === 'tasks' ? '/api/conta/tasks' : '/api/gmail/cred', { method: 'DELETE' }); }
+      catch (err) { msg(k, err.message, false); return; }
+      await pinta(); atualizaAlertaConta();
+    }
+  });
+  await pinta();
+}
+document.querySelector('#btn-conta')?.addEventListener('click', () => abreMinhaConta());
+
 function abreModalCredGmail(depois) {
   const m = modal('Conectar o Gmail',
     `<p class="text-xs text-slate-500">Para criar rascunhos, o app precisa de uma
@@ -7659,6 +7784,7 @@ async function abreAcessos() {
   acs.emails = ''; acs.papel = ''; acs.papelMod = ''; acs.mods = new Set();
   try {
     acs.dados = await api('/api/acessos');
+    pintaCredsAcessos(fundo, acs.dados.usuarios || []);
     // Protótipo: já vem com a aba padrão da área de clientes marcada.
     (acs.dados.abas_padrao_cliente || []).forEach(a => acs.abas.add(a));
     pintaAcessos();
@@ -7666,6 +7792,27 @@ async function abreAcessos() {
     fundo.querySelector('#acs-corpo').innerHTML =
       `<p class="text-rose-600 py-8 text-center">${escapeHtml(e.message)}</p>`;
   }
+}
+
+// Credenciais de cada um: o admin vê SE cadastrou, nunca a senha. Quem cadastra
+// é o próprio usuário em "👤 Minha conta".
+function pintaCredsAcessos(fundo, usuarios) {
+  const internos = usuarios.filter(u => u.ativo !== false && (u.perfil || '') !== 'cliente');
+  if (!internos.length) return;
+  const okT = internos.filter(u => u.cred_tasks === 'valida').length;
+  const okE = internos.filter(u => u.cred_email).length;
+  const box = document.createElement('details');
+  box.className = 'mt-2 text-xs text-slate-600';
+  box.innerHTML = `<summary class="cursor-pointer select-none">🔑 Credenciais próprias:
+      Tasks SC <b>${okT}/${internos.length}</b> · E-mail <b>${okE}/${internos.length}</b>
+      <span class="text-slate-400">(cada um cadastra em 👤 Minha conta)</span></summary>
+    <div class="mt-2 max-h-48 overflow-y-auto grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1">
+      ${internos.map(u => `<span class="truncate" title="${escapeAttr(u.email)}">
+        ${u.cred_tasks === 'valida' ? '✅' : (u.cred_tasks === 'invalida' ? '⚠️' : '▫️')}
+        ${u.cred_email ? '✉️' : '<span class="opacity-30">✉️</span>'}
+        ${escapeHtml(u.nome || u.email)}</span>`).join('')}
+    </div>`;
+  fundo.querySelector('h3')?.parentElement?.appendChild(box);
 }
 
 function perfilAcessos() {

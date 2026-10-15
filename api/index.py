@@ -579,7 +579,11 @@ def api_acessos():
     if (r := require_admin()):
         return r
     usuarios = q("""select u.email, u.nome, u.perfil, coalesce(u.is_admin,false) as is_admin,
-                           u.ativo, u.last_login
+                           u.ativo, u.last_login,
+                           (select ct.status from cockpit.credenciais_tasks ct
+                             where ct.email = lower(u.email)) as cred_tasks,
+                           exists (select 1 from cockpit.gmail_credenciais gc
+                                    where gc.usuario = u.email) as cred_email
                       from cockpit.usuarios_login u
                      order by coalesce(u.nome, u.email)""")
     liberacoes = q("""select uc.email, uc.customer, uc.abas, uc.papel,
@@ -3616,6 +3620,176 @@ def api_gmail_cred_del():
     if (r := require_auth()):
         return r
     execute("delete from cockpit.gmail_credenciais where usuario=%s", (current_user(),))
+    return _json({"ok": True})
+
+
+# ── MINHA CONTA — credencial do Tasks SC POR USUÁRIO (15/10/2026) ───────────
+# Escrita no Tasks SC sai SEMPRE em nome de quem está logado, nunca da conta de
+# serviço (TASKS_USERNAME fica só para leitura/sync). Cada usuário cadastra a
+# própria credencial do AD em "👤 Minha conta"; o admin NUNCA digita senha de
+# ninguém — em Acessos ele só vê se a pessoa já cadastrou.
+#
+# MESMA TABELA E MESMO FORMATO do cockpit-unico-tsc (src/lib/tasks-sc/crypto.ts
+# e user-auth.ts): cockpit.credenciais_tasks, senha_enc = base64(iv||tag||ct)
+# AES-256-GCM, AAD = e-mail em minúsculas, chave TASKS_CRED_KEY. Quem cadastra
+# num app já está cadastrado no outro — DESDE QUE a TASKS_CRED_KEY da Vercel
+# seja a MESMA nos dois projetos. Chaves diferentes = "invalida" do outro lado.
+_LIXO_CRED = re.compile(r"[\r\n\t\u200b-\u200d\ufeff]")
+
+
+def _tasks_cred_key():
+    b = base64.b64decode(os.environ.get("TASKS_CRED_KEY", "") or "")
+    if len(b) != 32:
+        raise RuntimeError("TASKS_CRED_KEY ausente ou inválida na Vercel (copie a do "
+                           "cockpit-unico-tsc; 32 bytes em base64).")
+    return b
+
+
+def _cifra_tasks(senha, email):
+    iv = os.urandom(12)
+    sel = AESGCM(_tasks_cred_key()).encrypt(iv, senha.encode(), email.encode())  # ct||tag
+    return base64.b64encode(iv + sel[-16:] + sel[:-16]).decode()
+
+
+def _decifra_tasks(blob, email):
+    raw = base64.b64decode(blob)
+    iv, tag, ct = raw[:12], raw[12:28], raw[28:]
+    return AESGCM(_tasks_cred_key()).decrypt(iv, ct + tag, email.encode()).decode()
+
+
+def _oauth_tasks(username, senha):
+    """Password grant no Tasks SC. Devolve (token, expires_in) ou levanta com
+    .status. Sucesso vem 201, não 200 — aceitar os dois."""
+    r = requests.post(f"{TASKS_BASE}/api/oauth2/v1/token",
+                      data={"grant_type": "password", "username": username,
+                            "password": senha},
+                      headers={"Content-Type": "application/x-www-form-urlencoded"},
+                      timeout=30)
+    if r.status_code not in (200, 201):
+        e = RuntimeError(f"Tasks SC recusou o login (HTTP {r.status_code}).")
+        e.status = r.status_code
+        raise e
+    d = r.json()
+    return d["access_token"], int(d.get("expires_in", 3600))
+
+
+def _usuario_ad(dominio, usuario):
+    return f"{dominio}\\{usuario}" if dominio else usuario
+
+
+_tok_usuario = {}   # email -> {"t": token, "exp": epoch}
+
+
+class SemCredencialTasks(Exception):
+    """Sem credencial válida do usuário logado — vira 428 para o front abrir
+    'Minha conta' em vez de gravar com outra conta."""
+
+
+def token_tasks_usuario(email=None, force=False):
+    """Token OAuth do USUÁRIO LOGADO para ESCRITAS no Tasks SC. Nunca cai na
+    conta de serviço: sem credencial válida, levanta SemCredencialTasks."""
+    email = (email or current_user() or "").strip().lower()
+    agora = time.time()
+    c = _tok_usuario.get(email)
+    if not force and c and c["exp"] - 120 > agora:
+        return c["t"]
+    row = q("""select ad_domain, ad_username, senha_enc from cockpit.credenciais_tasks
+                where email=%s""", (email,), one=True)
+    if not row:
+        raise SemCredencialTasks("Cadastre sua credencial do Tasks SC em 👤 Minha conta.")
+    try:
+        senha = _decifra_tasks(row["senha_enc"], email)
+    except Exception:
+        raise SemCredencialTasks("Sua credencial do Tasks SC foi gravada com outra chave. "
+                                 "Salve de novo em 👤 Minha conta.")
+    try:
+        tok, exp = _oauth_tasks(_usuario_ad(row["ad_domain"], row["ad_username"]), senha)
+    except Exception as e:
+        if getattr(e, "status", None) in (400, 401):
+            execute("""update cockpit.credenciais_tasks set status='invalida',
+                         atualizada_em=now() where email=%s""", (email,))
+            _tok_usuario.pop(email, None)
+            raise SemCredencialTasks("O Tasks SC recusou sua senha (trocada ou expirada). "
+                                     "Atualize em 👤 Minha conta.")
+        raise
+    _tok_usuario[email] = {"t": tok, "exp": agora + exp}
+    execute("""update cockpit.credenciais_tasks set status='valida', validada_em=now(),
+                 atualizada_em=now() where email=%s""", (email,))
+    return tok
+
+
+@app.errorhandler(SemCredencialTasks)
+def _sem_cred_tasks(e):
+    return _json({"ok": False, "error": str(e), "precisa_credencial": "tasks"}, 428)
+
+
+@app.get("/api/conta")
+def api_conta():
+    """Status das duas credenciais do usuário logado. Senha nunca volta."""
+    if (r := require_auth()):
+        return r
+    eu = current_user()
+    t = q("""select ad_domain, ad_username, status, validada_em
+               from cockpit.credenciais_tasks where email=%s""", (eu.strip().lower(),), one=True)
+    gmail, senha = _cred_gmail(eu)       # gmail_credenciais usa o e-mail como veio do login
+    return _json({"ok": True, "email": eu,
+                  "tasks": {"configurada": bool(t), "status": t and t["status"],
+                            "ad_domain": t and t["ad_domain"],
+                            "ad_username": t and t["ad_username"],
+                            "validada_em": t and t["validada_em"],
+                            "chave_ok": bool(os.environ.get("TASKS_CRED_KEY"))},
+                  "email_caixa": {"configurada": bool(gmail and senha),
+                                  "gmail_email": gmail,
+                                  "precisa_resalvar": bool(gmail and not senha)}})
+
+
+@app.post("/api/conta/tasks")
+def api_conta_tasks_set():
+    """Testa o login no Tasks SC de verdade ANTES de gravar: só entra o que
+    autentica. Grava no formato do cockpit (vale nos dois apps)."""
+    if (r := require_auth()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de mexer na sua conta.")
+    b = request.get_json(silent=True) or {}
+    dominio = _LIXO_CRED.sub("", b.get("ad_domain") or "").strip()
+    usuario = _LIXO_CRED.sub("", b.get("ad_username") or "").strip()
+    senha = _LIXO_CRED.sub("", b.get("senha") or "")
+    if "\\" in usuario and not dominio:            # colou "actvs\\fulano" num campo só
+        dominio, usuario = usuario.split("\\", 1)
+    if not usuario or not senha:
+        return _err(400, "Informe usuário e senha do Tasks SC.")
+    try:
+        _tasks_cred_key()
+    except RuntimeError as e:
+        return _err(500, str(e))
+    try:
+        _oauth_tasks(_usuario_ad(dominio, usuario), senha)
+    except Exception as e:
+        if getattr(e, "status", None) in (400, 401):
+            return _err(400, "O Tasks SC recusou a credencial. Confira domínio, usuário e senha.")
+        return _err(502, f"Não foi possível validar no Tasks SC agora: {e}")
+    eu = current_user().strip().lower()
+    execute("""insert into cockpit.credenciais_tasks
+                 (email, ad_domain, ad_username, senha_enc, status, validada_em,
+                  criada_em, atualizada_em)
+               values (%s,%s,%s,%s,'valida', now(), now(), now())
+               on conflict (email) do update set
+                 ad_domain=excluded.ad_domain, ad_username=excluded.ad_username,
+                 senha_enc=excluded.senha_enc, status='valida',
+                 validada_em=now(), atualizada_em=now()""",
+            (eu, dominio, usuario, _cifra_tasks(senha, eu)))
+    _tok_usuario.pop(eu, None)
+    return _json({"ok": True, "ad_domain": dominio, "ad_username": usuario})
+
+
+@app.delete("/api/conta/tasks")
+def api_conta_tasks_del():
+    if (r := require_auth()):
+        return r
+    eu = current_user().strip().lower()
+    execute("delete from cockpit.credenciais_tasks where email=%s", (eu,))
+    _tok_usuario.pop(eu, None)
     return _json({"ok": True})
 
 
