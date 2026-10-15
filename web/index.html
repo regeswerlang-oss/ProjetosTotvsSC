@@ -978,6 +978,9 @@
       <!-- CP — as duas filas que travam o faturamento do coordenador.
            Painel INTERNO (menu "Interno" do topo) e não aba de projeto: a
            pergunta atravessa a carteira inteira dela, não um projeto só. -->
+      <!-- GAPs — gestão dos GAPs de um cliente (fase, % concluído, datas,
+           dependências, Gantt). Edita a Task em nome do usuário logado. -->
+      <div id="tab-ggaps" data-painel-interno="ggaps" class="p-5 hidden"><div id="gg-root"></div></div>
       <div id="tab-cp" data-painel-interno="cp" class="p-5 hidden">
         <div class="cp">
           <div class="mb-4 flex items-center gap-2.5 flex-wrap text-sm">
@@ -10948,11 +10951,394 @@ $('#int-ambiente-sel').addEventListener('change', () => {
   };
 })();
 
+// ============================================================================
+//  GESTÃO DE GAPs (🧭 Interno → GAPs) — 15/10/2026
+// ============================================================================
+// Tabela / Gantt / Funil sobre os GAPs de UM cliente, e o modal de edição no
+// padrão "Ações 1-a-1" do Console de Triagem.
+//   % concluído, datas, status, responsável, estimativa, ocorrência → gravam NA
+//   TASK (Tasks SC) com a credencial do usuário logado ("🟢 TASK"); sem
+//   credencial o backend devolve 428 e abrimos 👤 Minha conta.
+//   Fase, observação e dependências → só Supabase ("🗄 PAINEL").
+(function () {
+  const gg = { clientes: null, customer: '', d: null, view: 'tabela', busca: '',
+               fase: '', cancel: false, carregando: false };
+  const hoje = new Date().toISOString().slice(0, 10);
+  const fmtD = (v) => v ? v.split('-').reverse().join('/') : '—';
+  const fmtN = (v) => (Math.round((+v || 0) * 10) / 10).toLocaleString('pt-BR');
+  const root = () => document.querySelector('#gg-root');
+  const faseDe = (id) => (gg.d?.fases || []).find(f => f.id === id);
+  const cancelado = (g) => /cancel/i.test(g.status_desc || g.status_tasks || '');
+  const resolvido = (g) => /resolvid/i.test(g.status_desc || '');
+  const atrasado = (g) => g.due_date && g.due_date < hoje && (g.progress || 0) < 100 && !resolvido(g) && !cancelado(g);
+  const porUuid = () => Object.fromEntries((gg.d?.gaps || []).map(g => [g.uuid_ticket, g]));
+
+  function visiveis() {
+    const b = semAcento(gg.busca);
+    return (gg.d?.gaps || []).filter(g =>
+      (gg.cancel || !cancelado(g)) &&
+      (!gg.fase || (gg.fase === 'sem' ? !g.fase_id : String(g.fase_id) === gg.fase)) &&
+      (!b || semAcento(`${g.id} ${g.titulo} ${g.responsavel_nome || ''} ${(g.tags || []).join(' ')}`).includes(b)));
+  }
+
+  // conflito de dependência: começo antes de a dependência terminar
+  function conflitos(g) {
+    const m = porUuid();
+    return (g.depende_de || []).map(u => m[u]).filter(d => d && (
+      (g.start_date && d.due_date && g.start_date < d.due_date) ||
+      ((g.progress || 0) > 0 && (d.progress || 0) < 100)));
+  }
+
+  window.initGestaoGaps = async function () {
+    if (!gg.clientes) {
+      root().innerHTML = '<p class="text-slate-400 py-8 text-center">Carregando clientes…</p>';
+      try { gg.clientes = (await api('/api/gestao-gaps/clientes')).clientes; }
+      catch (e) { root().innerHTML = `<p class="text-rose-600">${escapeHtml(e.message)}</p>`; return; }
+      try { gg.customer = localStorage.getItem('gg-cliente') || ''; } catch { }
+      if (!gg.clientes.some(c => c.customer === gg.customer)) gg.customer = '';
+    }
+    pinta();
+    if (gg.customer && !gg.d) carrega();
+  };
+
+  async function carrega() {
+    if (!gg.customer) { gg.d = null; pinta(); return; }
+    gg.carregando = true; pinta();
+    try { gg.d = await api(`/api/gestao-gaps/${encodeURIComponent(gg.customer)}`); }
+    catch (e) { gg.d = { erro: e.message }; }
+    gg.carregando = false; pinta();
+  }
+
+  function pinta() {
+    const el = root(); if (!el) return;
+    const opts = (gg.clientes || []).map(c =>
+      `<option value="${escapeAttr(c.customer)}" ${c.customer === gg.customer ? 'selected' : ''}>${escapeHtml(c.nome || c.customer)} (${c.gaps})</option>`).join('');
+    const fases = gg.d?.fases || [];
+    el.innerHTML = `
+      <div class="flex items-center gap-2 flex-wrap text-sm mb-4">
+        <span class="text-xs text-slate-500">Cliente</span>
+        <select id="gg-cli" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white max-w-[20rem]">
+          <option value="">Escolha o cliente…</option>${opts}</select>
+        <input id="gg-busca" value="${escapeAttr(gg.busca)}" placeholder="Buscar GAP, título, responsável, tag…"
+               class="px-3 py-1.5 border border-slate-300 rounded-md flex-1 min-w-[14rem]">
+        <select id="gg-fase" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white">
+          <option value="">Todas as fases</option><option value="sem" ${gg.fase === 'sem' ? 'selected' : ''}>Sem fase</option>
+          ${fases.map(f => `<option value="${f.id}" ${String(f.id) === gg.fase ? 'selected' : ''}>${escapeHtml(f.nome)}</option>`).join('')}
+        </select>
+        <label class="text-xs text-slate-600 flex items-center gap-1"><input id="gg-cancel" type="checkbox" ${gg.cancel ? 'checked' : ''}> cancelados</label>
+        <div class="inline-flex rounded-md border border-slate-300 overflow-hidden">
+          ${['tabela', 'gantt', 'funil'].map(v => `<button data-ggv="${v}" class="px-3 py-1.5 ${gg.view === v ? 'bg-totvs-blue text-totvs-petroleo font-semibold' : 'bg-white text-slate-600 hover:bg-slate-50'}">${{ tabela: 'Tabela', gantt: 'Gantt', funil: 'Funil' }[v]}</button>`).join('')}
+        </div>
+        <button id="gg-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+      </div>
+      <div id="gg-corpo">${corpo()}</div>`;
+    el.querySelector('#gg-cli').onchange = (e) => {
+      gg.customer = e.target.value; gg.d = null;
+      try { localStorage.setItem('gg-cliente', gg.customer); } catch { }
+      carrega();
+    };
+    const busca = el.querySelector('#gg-busca');
+    busca.oninput = (e) => { gg.busca = e.target.value; repinta(); };
+    el.querySelector('#gg-fase').onchange = (e) => { gg.fase = e.target.value; repinta(); };
+    el.querySelector('#gg-cancel').onchange = (e) => { gg.cancel = e.target.checked; repinta(); };
+    el.querySelectorAll('[data-ggv]').forEach(b => b.onclick = () => { gg.view = b.dataset.ggv; pinta(); });
+    el.querySelector('#gg-reload').onclick = carrega;
+    ligaLinhas();
+  }
+  function repinta() { const c = document.querySelector('#gg-corpo'); if (c) { c.innerHTML = corpo(); ligaLinhas(); } }
+  function ligaLinhas() {
+    document.querySelectorAll('#gg-corpo [data-gg]').forEach(r => r.onclick = () => abreGap(r.dataset.gg));
+  }
+
+  function corpo() {
+    if (!gg.customer) return '<p class="text-slate-400 py-10 text-center">Escolha um cliente para ver os GAPs.</p>';
+    if (gg.carregando) return '<p class="text-slate-400 py-10 text-center">Carregando GAPs…</p>';
+    if (gg.d?.erro) return `<p class="text-rose-600 py-6">${escapeHtml(gg.d.erro)}</p>`;
+    const lista = visiveis();
+    return kpis(lista) + (gg.view === 'gantt' ? gantt(lista) : gg.view === 'funil' ? funil(lista) : tabela(lista));
+  }
+
+  function kpis(l) {
+    const h = l.reduce((a, g) => a + (+g.time_estimate || 0), 0);
+    const pond = h ? l.reduce((a, g) => a + (+g.time_estimate || 0) * (g.progress || 0), 0) / h : 0;
+    const semData = l.filter(g => !g.due_date).length;
+    const atr = l.filter(atrasado).length;
+    const conf = l.filter(g => conflitos(g).length).length;
+    const k = (rot, v, sub, cls) => `<div class="rounded-lg p-3 ${cls}"><p class="text-xs opacity-80">${rot}</p>
+      <p class="text-xl font-totvs mt-0.5">${v}</p><p class="text-[11px] opacity-80">${sub}</p></div>`;
+    return `<div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      ${k('GAPs', l.length, `${fmtN(h)} h estimadas`, 'bg-totvs-petroleo text-white')}
+      ${k('% concluído', fmtN(pond) + '%', 'ponderado pelas horas', 'bg-totvs-blue text-totvs-petroleo')}
+      ${k('Atrasados', atr, 'vencimento passou e < 100%', atr ? 'bg-rose-100 text-rose-900' : 'bg-white border border-slate-200 text-totvs-petroleo')}
+      ${k('Sem vencimento', semData, 'não aparecem no Gantt', 'bg-white border border-slate-200 text-totvs-petroleo')}
+      ${k('Conflito de dependência', conf, 'começa antes da anterior acabar', conf ? 'bg-amber-100 text-amber-900' : 'bg-white border border-slate-200 text-totvs-petroleo')}
+    </div>`;
+  }
+
+  const pillFase = (g) => {
+    const f = faseDe(g.fase_id);
+    return f ? `<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full text-white whitespace-nowrap" style="background:${f.cor}">${escapeHtml(f.nome)}</span>`
+             : '<span class="text-[11px] text-slate-400">—</span>';
+  };
+  const barra = (p) => `<div class="flex items-center gap-2"><div class="h-2 w-20 bg-slate-100 rounded-full overflow-hidden">
+      <div class="h-full ${p >= 100 ? 'bg-emerald-500' : 'bg-totvs-blue'}" style="width:${Math.min(100, p || 0)}%"></div></div>
+      <span class="text-xs tabular-nums">${fmtN(p)}%</span></div>`;
+
+  function tabela(l) {
+    if (!l.length) return '<p class="text-slate-400 py-6 text-center">Nenhum GAP com esses filtros.</p>';
+    const m = porUuid();
+    const ord = l.slice().sort((a, b) => (a.due_date || '9999') .localeCompare(b.due_date || '9999') || (+b.time_estimate || 0) - (+a.time_estimate || 0));
+    return `<div class="overflow-x-auto bg-white border border-slate-200 rounded-lg"><table class="w-full text-sm">
+      <thead class="text-xs text-slate-500 border-b border-slate-200 text-left"><tr>
+        <th class="p-2">GAP</th><th class="p-2">Título</th><th class="p-2">Status</th><th class="p-2">Fase</th>
+        <th class="p-2">% concl.</th><th class="p-2">Responsável</th><th class="p-2">Início</th>
+        <th class="p-2">Vencimento</th><th class="p-2 text-right">Horas</th><th class="p-2">Depende de</th></tr></thead>
+      <tbody>${ord.map(g => {
+        const cf = conflitos(g);
+        return `<tr data-gg="${escapeAttr(g.uuid_ticket)}" class="border-t border-slate-100 hover:bg-slate-50 cursor-pointer ${cancelado(g) ? 'opacity-50' : ''}">
+          <td class="p-2 font-mono text-xs">${escapeHtml(g.id || '')}</td>
+          <td class="p-2">${escapeHtml(g.titulo || '')}</td>
+          <td class="p-2 text-xs">${escapeHtml(g.status_desc)}</td>
+          <td class="p-2">${pillFase(g)}</td>
+          <td class="p-2">${barra(g.progress)}</td>
+          <td class="p-2 text-xs">${escapeHtml(g.responsavel_nome || '—')}</td>
+          <td class="p-2 text-xs tabular-nums">${fmtD(g.start_date)}</td>
+          <td class="p-2 text-xs tabular-nums ${atrasado(g) ? 'text-rose-600 font-semibold' : ''}">${fmtD(g.due_date)}</td>
+          <td class="p-2 text-right tabular-nums">${fmtN(g.time_estimate)}</td>
+          <td class="p-2 text-xs">${(g.depende_de || []).map(u => `<span class="${cf.some(c => c.uuid_ticket === u) ? 'text-amber-700 font-semibold' : 'text-slate-500'}">#${escapeHtml(m[u]?.id || '?')}</span>`).join(' ') || '—'}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>`;
+  }
+
+  function gantt(l) {
+    const com = l.filter(g => g.due_date || g.start_date);
+    const sem = l.length - com.length;
+    if (!com.length) return `<p class="text-slate-500 py-6 text-center">Nenhum GAP com data. Abra um GAP e preencha
+      <b>início</b> e <b>vencimento</b> — eles gravam na Task.</p>`;
+    const ini = (g) => g.start_date || g.due_date, fim = (g) => g.due_date || g.start_date;
+    let a = com.map(ini).sort()[0], b = com.map(fim).sort().slice(-1)[0];
+    if (hoje < a) a = hoje; if (hoje > b) b = hoje;
+    const d0 = new Date(a + 'T00:00:00'), d1 = new Date(b + 'T00:00:00');
+    d0.setDate(1); d1.setMonth(d1.getMonth() + 1, 0);
+    const tot = (d1 - d0) / 864e5 + 1;
+    const x = (s) => ((new Date(s + 'T00:00:00') - d0) / 864e5) / tot * 100;
+    const meses = [];
+    for (let m = new Date(d0); m <= d1; m.setMonth(m.getMonth() + 1)) {
+      const fimM = new Date(m.getFullYear(), m.getMonth() + 1, 0);
+      meses.push({ l: m.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' }), x: x(m.toISOString().slice(0, 10)),
+                   w: ((fimM - m) / 864e5 + 1) / tot * 100 });
+    }
+    const m = porUuid();
+    const ord = com.slice().sort((p, q) => ini(p).localeCompare(ini(q)));
+    return `<div class="bg-white border border-slate-200 rounded-lg overflow-x-auto"><div class="min-w-[900px]">
+      <div class="flex border-b border-slate-200 text-[11px] text-slate-500">
+        <div class="w-72 shrink-0 p-2">GAP</div>
+        <div class="relative flex-1 h-7">${meses.map(mm => `<div class="absolute top-0 h-full border-l border-slate-200 pl-1 pt-1.5" style="left:${mm.x}%;width:${mm.w}%">${mm.l}</div>`).join('')}</div>
+      </div>
+      ${ord.map(g => {
+        const f = faseDe(g.fase_id), cf = conflitos(g);
+        const l0 = x(ini(g)), w = Math.max(0.6, x(fim(g)) - l0 + 100 / tot);
+        const cor = f ? f.cor : '#64748b';
+        return `<div data-gg="${escapeAttr(g.uuid_ticket)}" class="flex items-center border-b border-slate-100 hover:bg-slate-50 cursor-pointer">
+          <div class="w-72 shrink-0 p-2 text-xs truncate" title="${escapeAttr(g.titulo || '')}"><span class="font-mono text-slate-400">#${escapeHtml(g.id || '')}</span> ${escapeHtml(g.titulo || '')}
+            ${cf.length ? `<span class="text-amber-700" title="Começa antes de ${cf.map(c => '#' + c.id).join(', ')} terminar">⛓⚠</span>` : (g.depende_de || []).length ? `<span class="text-slate-400" title="Depende de ${(g.depende_de || []).map(u => '#' + (m[u]?.id || '?')).join(', ')}">⛓</span>` : ''}</div>
+          <div class="relative flex-1 h-8">
+            <div class="absolute top-0 h-full border-l-2 border-rose-400/60" style="left:${x(hoje)}%"></div>
+            <div class="absolute top-1.5 h-5 rounded ${atrasado(g) ? 'ring-2 ring-rose-500' : ''} ${cf.length ? 'outline outline-2 outline-amber-500' : ''}"
+                 style="left:${l0}%;width:${w}%;background:${cor}33;border:1px solid ${cor}"
+                 title="${fmtD(g.start_date)} → ${fmtD(g.due_date)} · ${fmtN(g.progress)}%">
+              <div class="h-full rounded-l" style="width:${Math.min(100, g.progress || 0)}%;background:${cor}"></div>
+            </div>
+          </div>
+        </div>`;
+      }).join('')}
+      </div></div>
+      <p class="text-xs text-slate-500 mt-2">Linha vermelha = hoje · preenchimento = % concluído · contorno âmbar = conflito de dependência ·
+        contorno vermelho = atrasado.${sem ? ` <b>${sem}</b> GAP(s) sem data ficaram de fora — veja na Tabela.` : ''}</p>`;
+  }
+
+  function funil(l) {
+    const linhas = [...(gg.d?.fases || []).map(f => ({ f, gs: l.filter(g => g.fase_id === f.id) })),
+                    { f: { nome: 'Sem fase', cor: '#cbd5e1' }, gs: l.filter(g => !g.fase_id) }];
+    const max = Math.max(1, ...linhas.map(x => x.gs.length));
+    return `<div class="bg-white border border-slate-200 rounded-lg p-4 space-y-2">${linhas.map(({ f, gs }) => {
+      const h = gs.reduce((a, g) => a + (+g.time_estimate || 0), 0);
+      return `<div class="flex items-center gap-3 text-sm">
+        <div class="w-48 shrink-0">${escapeHtml(f.nome)}</div>
+        <div class="flex-1 h-6 bg-slate-50 rounded"><div class="h-full rounded" style="width:${gs.length / max * 100}%;background:${f.cor}"></div></div>
+        <div class="w-40 text-right tabular-nums text-xs"><b>${gs.length}</b> GAP(s) · ${fmtN(h)} h</div></div>`;
+    }).join('')}</div>`;
+  }
+
+  // ── Modal de edição (padrão Console de Triagem) ───────────────────────────
+  function abreGap(uuid) {
+    const g = porUuid()[uuid]; if (!g) return;
+    const fundo = document.createElement('div');
+    fundo.className = 'fixed inset-0 z-50 bg-black/40 flex items-start justify-center p-4 overflow-y-auto';
+    const st = gg.d.status || [], us = gg.d.usuarios || [];
+    const stAtual = (st.find(s => s.nome.toLowerCase() === (g.status_desc || '').toLowerCase()) || {}).cod || '';
+    const outros = gg.d.gaps.filter(o => o.uuid_ticket !== uuid && !cancelado(o));
+    const card = (titulo, sub, selo, inner) => `
+      <div class="border border-slate-200 rounded-lg p-4">
+        <div class="flex items-start justify-between gap-2 mb-3"><div><p class="font-semibold text-slate-800">${titulo}</p>
+          <p class="text-xs text-slate-500">${sub}</p></div>${selo === 'task'
+            ? '<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 whitespace-nowrap">● TASK</span>'
+            : '<span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 whitespace-nowrap">● PAINEL</span>'}</div>
+        ${inner}</div>`;
+    const inp = 'px-3 py-1.5 border border-slate-300 rounded-md w-full';
+    const btn = (acao, txt) => `<button data-gga="${acao}" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">${txt}</button><span data-ggm="${acao}" class="text-xs ml-2"></span>`;
+    fundo.innerHTML = `
+      <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl mt-6 mb-6 overflow-hidden">
+        <div class="bg-totvs-petroleo text-white px-6 pt-5 pb-0">
+          <div class="flex items-start justify-between">
+            <div><p class="text-xs text-totvs-blue font-mono">Task #${escapeHtml(g.id || '')}
+                <span class="ml-2 px-2 py-0.5 rounded-full bg-white/10 text-white">${escapeHtml(g.status_desc)}</span></p>
+              <h3 class="font-totvs text-xl mt-1">${escapeHtml(g.titulo || '')}</h3>
+              <p class="text-xs text-white/70 mt-0.5">${escapeHtml((gg.clientes.find(c => c.customer === gg.customer) || {}).nome || gg.customer)} · ${escapeHtml(gg.customer)}</p></div>
+            <button data-fechar class="text-white/70 hover:text-white text-2xl leading-none">×</button>
+          </div>
+          <div class="flex gap-1 mt-4 text-sm">${[['acoes', 'Ações 1-a-1'], ['detalhes', 'Detalhes'], ['hist', 'Histórico']].map(([k, t], i) =>
+            `<button data-ggt="${k}" class="px-4 py-2 rounded-t-md ${i ? 'text-white/80 hover:text-white' : 'bg-white text-totvs-petroleo font-semibold'}">${t}</button>`).join('')}</div>
+        </div>
+        <div class="p-6 space-y-4 text-sm" data-ggp="acoes">
+          <p class="text-xs font-semibold text-slate-500 tracking-wide">GESTÃO DO GAP</p>
+          ${card('Fase e observação', 'Onde o GAP está na esteira. Fica só no painel, com histórico de cada troca.', 'painel', `
+            <div class="grid md:grid-cols-3 gap-3">
+              <select id="gg-f-fase" class="${inp}"><option value="">— sem fase —</option>${gg.d.fases.map(f =>
+                `<option value="${f.id}" ${f.id === g.fase_id ? 'selected' : ''}>${escapeHtml(f.nome)}${f.pct_padrao != null ? ` (${f.pct_padrao}%)` : ''}</option>`).join('')}</select>
+              <input id="gg-f-obs" class="${inp} md:col-span-2" placeholder="Observação (opcional)" value="${escapeAttr(g.observacao || '')}">
+            </div>
+            <label class="text-xs text-slate-600 mt-2 flex items-center gap-1"><input id="gg-f-sug" type="checkbox" checked>
+              ao trocar de fase, sugerir o % padrão dela no campo de % concluído (você ainda grava na Task)</label>
+            <div class="mt-3">${btn('fase', 'Salvar fase')}</div>`)}
+          ${card('% concluído e datas', 'Campos da própria Task — grava no Tasks SC em seu nome, na hora.', 'task', `
+            <div class="grid md:grid-cols-4 gap-3">
+              <label class="block"><span class="text-xs text-slate-500">% concluído</span>
+                <input id="gg-t-prog" type="number" min="0" max="100" step="5" class="${inp}" value="${g.progress || 0}"></label>
+              <label class="block"><span class="text-xs text-slate-500">Início</span><input id="gg-t-ini" type="date" class="${inp}" value="${g.start_date || ''}"></label>
+              <label class="block"><span class="text-xs text-slate-500">Vencimento</span><input id="gg-t-due" type="date" class="${inp}" value="${g.due_date || ''}"></label>
+              <label class="block"><span class="text-xs text-slate-500">Fim</span><input id="gg-t-fim" type="date" class="${inp}" value="${g.end_date || ''}"></label>
+            </div>
+            <div class="mt-3">${btn('task', 'Gravar na Task')}</div>`)}
+          ${card('Dependências', 'Este GAP só começa depois que estes terminarem. Fica só no painel; ciclo é recusado.', 'painel', `
+            <input id="gg-d-busca" class="${inp} mb-2" placeholder="Filtrar GAPs…">
+            <div id="gg-d-lista" class="max-h-48 overflow-y-auto border border-slate-100 rounded p-2 space-y-1">${outros.map(o =>
+              `<label class="flex items-center gap-2 text-xs" data-dtxt="${escapeAttr(semAcento(o.id + ' ' + o.titulo))}">
+                <input type="checkbox" value="${escapeAttr(o.uuid_ticket)}" ${(g.depende_de || []).includes(o.uuid_ticket) ? 'checked' : ''}>
+                <span class="font-mono text-slate-400">#${escapeHtml(o.id || '')}</span>${escapeHtml(o.titulo || '')}</label>`).join('')}</div>
+            <div class="mt-3">${btn('deps', 'Salvar dependências')}</div>`)}
+          <p class="text-xs font-semibold text-slate-500 tracking-wide pt-2">MUTAÇÃO NA TASK</p>
+          ${card('Status, responsável e estimativa', 'Grava no Tasks SC em seu nome, na hora.', 'task', `
+            <div class="grid md:grid-cols-3 gap-3">
+              <label class="block"><span class="text-xs text-slate-500">Status</span><select id="gg-m-st" class="${inp}">${st.map(s =>
+                `<option value="${s.cod}" ${s.cod === stAtual ? 'selected' : ''}>${escapeHtml(s.nome)}</option>`).join('')}</select></label>
+              <label class="block"><span class="text-xs text-slate-500">Responsável interno</span><select id="gg-m-resp" class="${inp}">
+                <option value="">—</option>${us.map(u => `<option value="${escapeAttr(u.codigo)}" ${u.codigo === g.user_assigned ? 'selected' : ''}>${escapeHtml(u.nome)}</option>`).join('')}</select></label>
+              <label class="block"><span class="text-xs text-slate-500">Estimativa (h)</span><input id="gg-m-est" type="number" min="0" step="1" class="${inp}" value="${Math.round(+g.time_estimate || 0)}"></label>
+            </div>
+            <div class="mt-3">${btn('mut', 'Gravar na Task')}</div>`)}
+          ${card('Adicionar ocorrência', 'Entra no histórico da Task em seu nome. Externo: o cliente vê.', 'task', `
+            <textarea id="gg-o-txt" rows="3" class="${inp}" placeholder="Escreva a ocorrência…"></textarea>
+            <div class="mt-2 flex items-center gap-3 text-xs"><label><input type="radio" name="gg-o-tp" value="1" checked> Externo</label>
+              <label><input type="radio" name="gg-o-tp" value="2"> Interno</label></div>
+            <div class="mt-3">${btn('ocorr', 'Gravar ocorrência')}</div>`)}
+        </div>
+        <div class="p-6 text-sm hidden" data-ggp="detalhes">
+          <dl class="grid md:grid-cols-2 gap-x-6 gap-y-2">${[
+            ['GAP', '#' + (g.id || '')], ['Status', g.status_desc], ['Fase', faseDe(g.fase_id)?.nome || '—'],
+            ['% concluído', fmtN(g.progress) + '%'], ['Responsável', g.responsavel_nome || '—'],
+            ['Horas estimadas', fmtN(g.time_estimate)], ['Horas apontadas', fmtN(g.time_spent)],
+            ['Abertura', fmtD(g.open_date)], ['Início', fmtD(g.start_date)], ['Vencimento', fmtD(g.due_date)],
+            ['Fim', fmtD(g.end_date)], ['Produto', g.produto || '—'], ['Etapa GAP', g.etapa_gap || '—'],
+            ['Tags', (g.tags || []).join(', ') || '—'],
+            ['Última alteração no painel', g.updated_by ? `${g.updated_by} · ${new Date(g.plano_em).toLocaleString('pt-BR')}` : '—'],
+          ].map(([k, v]) => `<div><dt class="text-xs text-slate-500">${k}</dt><dd>${escapeHtml(String(v))}</dd></div>`).join('')}</dl>
+        </div>
+        <div class="p-6 text-sm hidden" data-ggp="hist"><p class="text-slate-400">Carregando…</p></div>
+      </div>`;
+    document.body.appendChild(fundo);
+    const fecha = () => fundo.remove();
+    fundo.querySelector('[data-fechar]').onclick = fecha;
+    fundo.addEventListener('click', e => { if (e.target === fundo) fecha(); });
+    const $f = (s) => fundo.querySelector(s);
+
+    fundo.querySelectorAll('[data-ggt]').forEach(b => b.onclick = async () => {
+      fundo.querySelectorAll('[data-ggt]').forEach(x => x.className = 'px-4 py-2 rounded-t-md text-white/80 hover:text-white');
+      b.className = 'px-4 py-2 rounded-t-md bg-white text-totvs-petroleo font-semibold';
+      fundo.querySelectorAll('[data-ggp]').forEach(p => p.classList.toggle('hidden', p.dataset.ggp !== b.dataset.ggt));
+      if (b.dataset.ggt === 'hist') {
+        const box = $f('[data-ggp="hist"]');
+        try {
+          const [h, o] = await Promise.all([api(`/api/gestao-gaps/${uuid}/historico-fase`), api(`/api/gestao-gaps/${uuid}/ocorrencias`)]);
+          box.innerHTML = `<p class="text-xs font-semibold text-slate-500 mb-2">TROCAS DE FASE</p>
+            ${h.historico.length ? h.historico.map(x => `<p class="text-xs py-1 border-b border-slate-100">${new Date(x.em).toLocaleString('pt-BR')} · <b>${escapeHtml(x.de || '—')} → ${escapeHtml(x.para || '—')}</b> · ${escapeHtml(x.por || '')}</p>`).join('') : '<p class="text-xs text-slate-400">Nenhuma troca registrada.</p>'}
+            <p class="text-xs font-semibold text-slate-500 mt-5 mb-2">OCORRÊNCIAS DA TASK (espelho)</p>
+            ${o.ocorrencias.length ? o.ocorrencias.map(x => `<div class="py-2 border-b border-slate-100"><p class="text-[11px] text-slate-500">${x.occurred_at ? new Date(x.occurred_at).toLocaleString('pt-BR') : ''} · ${escapeHtml(x.autor || '')} · ${escapeHtml(String(x.tipo || ''))}</p>
+              <div class="text-xs whitespace-pre-wrap">${escapeHtml((x.details || '').replace(/<[^>]+>/g, ' ').trim())}</div></div>`).join('') : '<p class="text-xs text-slate-400">Sem ocorrências no espelho.</p>'}`;
+        } catch (e) { box.innerHTML = `<p class="text-rose-600">${escapeHtml(e.message)}</p>`; }
+      }
+    });
+
+    $f('#gg-f-fase').onchange = (e) => {
+      const f = faseDe(+e.target.value);
+      if (f && f.pct_padrao != null && $f('#gg-f-sug').checked) {
+        $f('#gg-t-prog').value = f.pct_padrao;
+        msg('task', `% sugerido pela fase (${f.pct_padrao}%) — clique em "Gravar na Task" para valer.`, true);
+      }
+    };
+    $f('#gg-d-busca').oninput = (e) => {
+      const b = semAcento(e.target.value);
+      fundo.querySelectorAll('#gg-d-lista [data-dtxt]').forEach(l => l.classList.toggle('hidden', !!b && !l.dataset.dtxt.includes(b)));
+    };
+    function msg(k, t, ok) { const s = $f(`[data-ggm="${k}"]`); if (s) { s.textContent = t; s.className = `text-xs ml-2 ${ok ? 'text-emerald-700' : 'text-rose-600'}`; } }
+    const post = (url, body) => api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    async function grava(k, botao, fn) {
+      botao.disabled = true; const t = botao.textContent; botao.textContent = 'Gravando…';
+      try { await fn(); msg(k, '✓ Gravado.', true); await carrega(); Object.assign(g, porUuid()[uuid] || {}); }
+      catch (e) {
+        if (e.status === 428) { msg(k, e.message, false); abreMinhaConta('tasks'); }
+        else msg(k, e.message, false);
+      } finally { botao.disabled = false; botao.textContent = t; }
+    }
+    fundo.querySelectorAll('[data-gga]').forEach(b => b.onclick = () => {
+      const a = b.dataset.gga;
+      if (a === 'fase') grava(a, b, () => post(`/api/gestao-gaps/${uuid}/fase`, { fase_id: $f('#gg-f-fase').value || null, observacao: $f('#gg-f-obs').value }));
+      if (a === 'task') {
+        const body = {};
+        const pr = $f('#gg-t-prog').value;
+        if (String(+pr) !== String(+(g.progress || 0))) body.progress = +pr;
+        [['start_date', '#gg-t-ini'], ['due_date', '#gg-t-due'], ['end_date', '#gg-t-fim']].forEach(([k, s]) => {
+          if (($f(s).value || '') !== (g[k] || '')) body[k] = $f(s).value || '';
+        });
+        if (body.start_date && body.due_date && body.start_date > body.due_date) { msg(a, 'Início depois do vencimento.'); return; }
+        if (!Object.keys(body).length) { msg(a, 'Nada mudou.'); return; }
+        grava(a, b, () => post(`/api/gestao-gaps/${uuid}/task`, body));
+      }
+      if (a === 'deps') grava(a, b, () => post(`/api/gestao-gaps/${uuid}/dependencias`,
+        { depende_de: [...fundo.querySelectorAll('#gg-d-lista input:checked')].map(i => i.value) }));
+      if (a === 'mut') {
+        const body = {};
+        if ($f('#gg-m-st').value !== stAtual) body.status = $f('#gg-m-st').value;
+        if ($f('#gg-m-resp').value && $f('#gg-m-resp').value !== (g.user_assigned || '')) body.user_assigned = $f('#gg-m-resp').value;
+        if (+$f('#gg-m-est').value !== Math.round(+g.time_estimate || 0)) body.time_estimate = +$f('#gg-m-est').value;
+        if (!Object.keys(body).length) { msg(a, 'Nada mudou.'); return; }
+        grava(a, b, () => post(`/api/gestao-gaps/${uuid}/task`, body));
+      }
+      if (a === 'ocorr') {
+        const texto = $f('#gg-o-txt').value.trim();
+        if (!texto) { msg(a, 'Escreva a ocorrência.'); return; }
+        grava(a, b, async () => { await post(`/api/gestao-gaps/${uuid}/ocorrencia`, { texto, tipo: fundo.querySelector('input[name="gg-o-tp"]:checked').value }); $f('#gg-o-txt').value = ''; });
+      }
+    });
+  }
+})();
+
 // ── Menu "Interno" — porta de entrada dos painéis que não são do cliente ────
 //  Acrescentar um painel aqui é: uma entrada em PAINEIS_INTERNOS, uma <div>
 //  com data-painel-interno dentro de #view-interno, e a função que a preenche.
 (function () {
   const PAINEIS_INTERNOS = [
+    { id: 'ggaps', label: 'GAPs', desc: 'Gestão dos GAPs: fase, % concluído, datas, dependências e Gantt', init: () => window.initGestaoGaps && window.initGestaoGaps() },
     { id: 'cp', label: 'CP', desc: 'Pendências de lançamento e de aceite dos meus projetos', init: () => window.initCP && window.initCP() },
     { id: 'raiox', label: 'Raio X', desc: 'Maturidade da equipe por módulo', init: () => window.initRaioX && window.initRaioX() },
   ];

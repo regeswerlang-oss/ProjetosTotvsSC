@@ -3793,6 +3793,389 @@ def api_conta_tasks_del():
     return _json({"ok": True})
 
 
+# ── GESTÃO DE GAPs (menu 🧭 Interno → GAPs) — 15/10/2026 ────────────────────
+# Painel de administração dos GAPs de um cliente: fase, % concluído, datas,
+# dependências, Gantt. DUAS ORIGENS, e misturar as duas é o erro a evitar:
+#   Task (Tasks SC)  → progress, start_date, due_date, end_date. A Task é a
+#                      verdade; o painel GRAVA LÁ (com a credencial do usuário
+#                      logado, nunca a conta de serviço) e guarda cópia em
+#                      cockpit.gap_plano.
+#   Só Supabase      → fase (cockpit.gap_fases + histórico) e dependências.
+# Leitura: o espelho totvs.tickets.payload (sync a cada 15 min). Logo após uma
+# gravação o espelho ainda está velho — por isso, quando gap_plano.updated_at é
+# mais novo que o synced_at do espelho, vale a cópia do painel.
+# Escrita na Task: GET → merge → PUT do ticket INTEIRO (a API não tem PATCH; o
+# PUT sem um campo apaga o campo). Port de buildPayload do cockpit
+# (src/lib/tasks-sc/mutations.ts) — mexeu num, mexa no outro.
+TASKS_API = f"{TASKS_BASE}/custom/tscst/tasks"
+STATUS_TASKS = [("001", "Novo"), ("002", "Aberto"), ("003", "Agendado"),
+                ("004", "Em Andamento"), ("005", "Em Validacao"), ("006", "Resolvido"),
+                ("007", "Em Espera"), ("008", "Impeditivo"), ("009", "Cancelado"),
+                ("010", "Em Validacao (Cliente)"), ("011", "Em Andamento (Cliente)")]
+
+SQL_GESTAO_GAPS = """
+  select t.uuid_ticket, t.raw->>'id' as id, t.titulo, t.status_tasks, t.produto,
+         t.etapa_gap, t.user_assigned, u.nome as responsavel_nome,
+         t.time_estimate, t.assigned_customer,
+         coalesce(p.payload, t.raw) as pl, p.synced_at as espelho_em,
+         g.fase_id, g.observacao, g.updated_by, g.updated_at as plano_em,
+         g.progress as g_progress, g.start_date as g_start, g.due_date as g_due,
+         g.end_date as g_end,
+         coalesce((select array_agg(x.raw_tag order by x.raw_tag)
+                     from cockpit.ticket_tags x
+                    where x.uuid_ticket = t.uuid_ticket and x.raw_tag <> 'GAP'), '{}') as tags,
+         coalesce((select array_agg(d.depende_de) from cockpit.gap_dependencias d
+                    where d.uuid_ticket = t.uuid_ticket), '{}') as depende_de
+    from cockpit.tickets t
+    join cockpit.ticket_tags tg on tg.uuid_ticket = t.uuid_ticket and tg.raw_tag = 'GAP'
+    left join totvs.tickets p on upper(p.uuid) = upper(t.uuid_ticket)
+    left join cockpit.usuarios u on u.codigo = t.user_assigned
+    left join cockpit.gap_plano g on g.uuid_ticket = t.uuid_ticket
+   where t.customer = %s
+"""
+
+
+def _data_ou_none(v):
+    v = (str(v or "")).strip()[:10]
+    return v if re.fullmatch(r"\d{4}-\d{2}-\d{2}", v) else None
+
+
+def _linha_gap(r):
+    pl = r.pop("pl") or {}
+    if isinstance(pl, str):
+        pl = json.loads(pl)
+    usa_plano = bool(r["plano_em"]) and (not r["espelho_em"] or r["plano_em"] > r["espelho_em"])
+    def campo(nome, copia):
+        return copia if (usa_plano and copia is not None) else pl.get(nome)
+    prog = campo("progress", r.pop("g_progress"))
+    r["progress"] = float(prog) if prog not in (None, "") else 0
+    r["start_date"] = _data_ou_none(campo("start_date", r.pop("g_start")))
+    r["due_date"] = _data_ou_none(campo("due_date", r.pop("g_due")))
+    r["end_date"] = _data_ou_none(campo("end_date", r.pop("g_end")))
+    r["time_spent"] = float(pl.get("time_spent") or 0)
+    r["open_date"] = _data_ou_none(pl.get("open_date"))
+    r["status_desc"] = (pl.get("status_description") or r.get("status_tasks") or "").strip()
+    r.pop("espelho_em", None)
+    return r
+
+
+@app.get("/api/gestao-gaps/clientes")
+def api_gestao_gaps_clientes():
+    if (r := require_interno()):
+        return r
+    return _json({"ok": True, "clientes": q("""
+        select t.customer, coalesce(c.nome, max(t.cliente)) as nome, count(*) as gaps
+          from cockpit.tickets t
+          join cockpit.ticket_tags g on g.uuid_ticket = t.uuid_ticket and g.raw_tag = 'GAP'
+          left join cockpit.clientes c on c.customer = t.customer
+         group by t.customer, c.nome
+         order by 2""")})
+
+
+@app.get("/api/gestao-gaps/<customer>")
+def api_gestao_gaps(customer):
+    if (r := require_interno()):
+        return r
+    gaps = [_linha_gap(dict(x)) for x in q(SQL_GESTAO_GAPS, (customer,))]
+    fases = q("select id, nome, ordem, pct_padrao, cor from cockpit.gap_fases "
+              "where ativo order by ordem")
+    usuarios = q("select codigo, nome from cockpit.usuarios "
+                 "where coalesce(ativo,true) order by nome")
+    return _json({"ok": True, "customer": customer, "gaps": gaps, "fases": fases,
+                  "status": [{"cod": c, "nome": n} for c, n in STATUS_TASKS],
+                  "usuarios": usuarios})
+
+
+def _tasks_req(method, url, body=None):
+    """Request no Tasks SC com o token do USUÁRIO LOGADO (renova 1x no 401)."""
+    for i in range(2):
+        tok = token_tasks_usuario(force=i > 0)
+        r = requests.request(method, url, json=body, timeout=(8, 40),
+                             headers={"Authorization": f"Bearer {tok}",
+                                      "Accept": "application/json"})
+        if r.status_code != 401:
+            break
+    if not r.ok:
+        raise RuntimeError(f"Tasks SC {method} → HTTP {r.status_code}: {r.text[:300]}")
+    txt = r.content.decode("utf-8", errors="replace")
+    if "�" in txt:
+        txt = r.content.decode("cp1252", errors="replace")
+    return json.loads(txt) if txt.strip() else {}
+
+
+def _s(v):
+    return ("" if v is None else str(v)).strip()
+
+
+def _payload_ticket(cur, tag_ids, changes):
+    """Port de buildPayload (cockpit). Preserva o estado atual e aplica changes."""
+    p = {
+        "uuid": cur.get("uuid"), "id": cur.get("id"),
+        "title": _s(cur.get("title")), "description": _s(cur.get("description")),
+        "customer": cur.get("customer"),
+        "status": _s(cur.get("status")) or "001",
+        "status_description": _s(cur.get("status_description")),
+        "service": _s(cur.get("service")),
+        "service_description": _s(cur.get("service_description")),
+        "user_assigned": _s(cur.get("user_assigned")),
+        "assigned_customer": _s(cur.get("assigned_customer")) or None,
+        "observer": [], "tags": tag_ids,
+        "start_date": _s(cur.get("start_date")), "start_time": _s(cur.get("start_time")),
+        "end_date": _s(cur.get("end_date")), "end_time": _s(cur.get("end_time")),
+        "due_date": _s(cur.get("due_date")), "reminder_date": _s(cur.get("reminder_date")),
+        "issue_totvs": _s(cur.get("issue_totvs")), "ticket_totvs": _s(cur.get("ticket_totvs")),
+        "ticket_customer": _s(cur.get("ticket_customer")),
+        "time_estimate": cur.get("time_estimate") if cur.get("time_estimate") is not None else 1,
+        "priority": cur.get("priority") or 0,
+        "progress": cur.get("progress") or 0,
+        "milestone": bool(cur.get("milestone")),
+        "project": _s(cur.get("project")) or None,
+        "activity": _s(cur.get("activity")),
+        "time_spent": cur.get("time_spent") or 0,
+        "_id_reference": "", "_keepChecklist": False, "obsArq": "",
+    }
+    p.update(changes)
+    return p
+
+
+def put_ticket_usuario(uuid, changes):
+    """GET → merge → PUT do ticket inteiro, em nome do usuário logado."""
+    cur = (_tasks_req("GET", f"{TASKS_API}/tickets/{uuid}").get("items") or [None])[0]
+    if not cur:
+        raise RuntimeError(f"Ticket {uuid} não encontrado no Tasks SC.")
+    tags = [_s(t.get("id")) for t in
+            (_tasks_req("GET", f"{TASKS_API}/tickets/tags/{uuid}").get("items") or [])
+            if _s(t.get("id"))]
+    _tasks_req("PUT", f"{TASKS_API}/tickets", _payload_ticket(cur, tags, changes))
+    return cur
+
+
+def _guarda_gap(uuid):
+    """Só GAP de cliente existente, e o customer vem do banco (nunca do front)."""
+    row = q("""select t.customer from cockpit.tickets t
+                 join cockpit.ticket_tags g on g.uuid_ticket = t.uuid_ticket and g.raw_tag='GAP'
+                where t.uuid_ticket = %s""", (uuid,), one=True)
+    return row["customer"] if row else None
+
+
+@app.post("/api/gestao-gaps/<uuid>/task")
+def api_gestao_gaps_task(uuid):
+    """% concluído e datas: grava NA TASK (credencial do usuário) e, só depois
+    que o Tasks aceitou, a cópia em gap_plano. Sem fila."""
+    if (r := require_interno()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de gravar.")
+    customer = _guarda_gap(uuid)
+    if not customer:
+        return _err(404, "GAP não encontrado.")
+    b = request.get_json(silent=True) or {}
+    changes, tipos = {}, []
+    if "progress" in b:
+        try:
+            pr = round(float(b["progress"]))
+        except (TypeError, ValueError):
+            return _err(400, "% concluído inválido.")
+        if not 0 <= pr <= 100:
+            return _err(400, "% concluído deve ficar entre 0 e 100.")
+        changes["progress"] = pr
+        tipos.append("progresso")
+    for k in ("start_date", "due_date", "end_date"):
+        if k in b:
+            v = b[k] or ""
+            if v and not _data_ou_none(v):
+                return _err(400, f"Data inválida em {k}: {v}")
+            changes[k] = v
+            if "datas" not in tipos:
+                tipos.append("datas")
+    if "status" in b:
+        cod = _s(b["status"])
+        nomes = dict(STATUS_TASKS)
+        if cod not in nomes:
+            return _err(400, f"Status inválido: {cod}")
+        changes["status"], changes["status_description"] = cod, nomes[cod]
+        tipos.append("status")
+    if "user_assigned" in b:
+        cod = _s(b["user_assigned"])
+        if not q("select 1 from cockpit.usuarios where codigo=%s", (cod,), one=True):
+            return _err(400, f"Responsável desconhecido: {cod}")
+        changes["user_assigned"] = cod
+        tipos.append("responsavel")
+    if "time_estimate" in b:
+        try:
+            he = round(float(b["time_estimate"]))
+        except (TypeError, ValueError):
+            return _err(400, "Estimativa inválida.")
+        if he < 0:
+            return _err(400, "Estimativa não pode ser negativa.")
+        changes["time_estimate"] = he
+        tipos.append("estimativa")
+    if not changes:
+        return _err(400, "Nada para gravar.")
+    eu = current_user()
+    try:
+        antes = put_ticket_usuario(uuid, changes)
+    except SemCredencialTasks:
+        raise
+    except Exception as e:
+        for tp in tipos:
+            execute("""insert into cockpit.action_queue
+                         (uuid_ticket, action_type, payload, status, error_message, created_by)
+                       values (%s,%s,%s,'erro',%s,%s)""",
+                    (uuid, tp, json.dumps(changes), str(e)[:500], eu))
+        return _err(502, f"O Tasks SC não aceitou a alteração: {e}")
+    for tp in tipos:
+        execute("""insert into cockpit.action_queue
+                     (uuid_ticket, action_type, payload, status, result, created_by, applied_at)
+                   values (%s,%s,%s,'aplicado',%s,%s, now())""",
+                (uuid, tp, json.dumps(changes),
+                 json.dumps({k: antes.get(k) for k in changes}), eu))
+    execute("""insert into cockpit.gap_plano
+                 (uuid_ticket, customer, progress, start_date, due_date, end_date,
+                  updated_by, updated_at)
+               values (%(u)s, %(c)s, %(p)s, %(s)s, %(d)s, %(e)s, %(by)s, now())
+               on conflict (uuid_ticket) do update set
+                 progress   = coalesce(%(p)s, cockpit.gap_plano.progress),
+                 start_date = case when %(ts)s then %(s)s else cockpit.gap_plano.start_date end,
+                 due_date   = case when %(td)s then %(d)s else cockpit.gap_plano.due_date end,
+                 end_date   = case when %(te)s then %(e)s else cockpit.gap_plano.end_date end,
+                 updated_by = %(by)s, updated_at = now()""",
+            {"u": uuid, "c": customer, "p": changes.get("progress"),
+             "s": changes.get("start_date") or None, "d": changes.get("due_date") or None,
+             "e": changes.get("end_date") or None,
+             "ts": "start_date" in changes, "td": "due_date" in changes,
+             "te": "end_date" in changes, "by": eu})
+    return _json({"ok": True, "uuid_ticket": uuid, "gravado": changes})
+
+
+@app.post("/api/gestao-gaps/<uuid>/ocorrencia")
+def api_gestao_gaps_ocorrencia(uuid):
+    """Ocorrência (histórico) na Task, em nome do usuário. tipo '1' = Externo
+    (o cliente vê), '2' = Interno."""
+    if (r := require_interno()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de gravar.")
+    if not _guarda_gap(uuid):
+        return _err(404, "GAP não encontrado.")
+    b = request.get_json(silent=True) or {}
+    texto = (b.get("texto") or "").strip()
+    tipo = "2" if str(b.get("tipo")) == "2" else "1"
+    if not texto:
+        return _err(400, "Escreva a ocorrência.")
+    eu = current_user()
+    corpo = {"type": tipo, "uuid_ticket": uuid, "uuid_history": "",
+             "details": texto, "duration": ""}
+    try:
+        res = _tasks_req("POST", f"{TASKS_API}/tickets/history", corpo)
+    except SemCredencialTasks:
+        raise
+    except Exception as e:
+        execute("""insert into cockpit.action_queue
+                     (uuid_ticket, action_type, payload, status, error_message, created_by)
+                   values (%s,'historico',%s,'erro',%s,%s)""",
+                (uuid, json.dumps(corpo), str(e)[:500], eu))
+        return _err(502, f"O Tasks SC não aceitou a ocorrência: {e}")
+    execute("""insert into cockpit.action_queue
+                 (uuid_ticket, action_type, payload, status, result, created_by, applied_at)
+               values (%s,'historico',%s,'aplicado',%s,%s, now())""",
+            (uuid, json.dumps(corpo), json.dumps(res), eu))
+    return _json({"ok": True})
+
+
+@app.get("/api/gestao-gaps/<uuid>/ocorrencias")
+def api_gestao_gaps_ocorrencias(uuid):
+    if (r := require_interno()):
+        return r
+    return _json({"ok": True, "ocorrencias": q("""
+        select tipo, details, autor, occurred_at from cockpit.ocorrencias
+         where uuid_ticket=%s order by occurred_at desc nulls last limit 30""", (uuid,))})
+
+
+@app.post("/api/gestao-gaps/<uuid>/fase")
+def api_gestao_gaps_fase(uuid):
+    """Fase e observação: SÓ Supabase. Cada troca de fase vira histórico."""
+    if (r := require_interno()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de gravar.")
+    customer = _guarda_gap(uuid)
+    if not customer:
+        return _err(404, "GAP não encontrado.")
+    b = request.get_json(silent=True) or {}
+    fase = b.get("fase_id")
+    fase = int(fase) if fase not in (None, "") else None
+    eu = current_user()
+    atual = q("select fase_id from cockpit.gap_plano where uuid_ticket=%s", (uuid,), one=True)
+    de = atual["fase_id"] if atual else None
+    execute("""insert into cockpit.gap_plano (uuid_ticket, customer, fase_id, observacao,
+                                              updated_by, updated_at)
+               values (%s,%s,%s,%s,%s, now())
+               on conflict (uuid_ticket) do update set
+                 fase_id=excluded.fase_id,
+                 observacao=coalesce(excluded.observacao, cockpit.gap_plano.observacao),
+                 updated_by=excluded.updated_by, updated_at=now()""",
+            (uuid, customer, fase, b.get("observacao"), eu))
+    if de != fase:
+        execute("""insert into cockpit.gap_fase_hist (uuid_ticket, fase_de, fase_para, por)
+                   values (%s,%s,%s,%s)""", (uuid, de, fase, eu))
+    return _json({"ok": True, "fase_id": fase})
+
+
+@app.get("/api/gestao-gaps/<uuid>/historico-fase")
+def api_gestao_gaps_hist(uuid):
+    if (r := require_interno()):
+        return r
+    return _json({"ok": True, "historico": q("""
+        select h.em, h.por, fd.nome as de, fp.nome as para
+          from cockpit.gap_fase_hist h
+          left join cockpit.gap_fases fd on fd.id = h.fase_de
+          left join cockpit.gap_fases fp on fp.id = h.fase_para
+         where h.uuid_ticket = %s order by h.em desc limit 50""", (uuid,))})
+
+
+@app.post("/api/gestao-gaps/<uuid>/dependencias")
+def api_gestao_gaps_deps(uuid):
+    """Substitui a lista de 'depende de' do GAP. Recusa ciclo (A→B→…→A) e GAP
+    de outro cliente."""
+    if (r := require_interno()):
+        return r
+    customer = _guarda_gap(uuid)
+    if not customer:
+        return _err(404, "GAP não encontrado.")
+    b = request.get_json(silent=True) or {}
+    novos = [str(x) for x in (b.get("depende_de") or []) if str(x) and str(x) != uuid]
+    if novos:
+        ok = {x["uuid_ticket"] for x in q("""select uuid_ticket from cockpit.tickets
+                                             where uuid_ticket = any(%s) and customer = %s""",
+                                          (novos, customer))}
+        fora = [x for x in novos if x not in ok]
+        if fora:
+            return _err(400, "Dependência com GAP de outro cliente ou inexistente.")
+    # grafo do cliente sem as arestas atuais deste GAP + as novas
+    arestas = {}
+    for x in q("""select d.uuid_ticket, d.depende_de from cockpit.gap_dependencias d
+                    join cockpit.tickets t on t.uuid_ticket = d.uuid_ticket
+                   where t.customer = %s and d.uuid_ticket <> %s""", (customer, uuid)):
+        arestas.setdefault(x["uuid_ticket"], set()).add(x["depende_de"])
+    arestas[uuid] = set(novos)
+    vistos, pilha = set(), list(novos)
+    while pilha:                      # alguém do qual eu dependo depende de mim?
+        n = pilha.pop()
+        if n == uuid:
+            return _err(400, "Essa dependência cria um ciclo (o GAP acabaria dependendo dele mesmo).")
+        if n in vistos:
+            continue
+        vistos.add(n)
+        pilha.extend(arestas.get(n, ()))
+    eu = current_user()
+    execute("delete from cockpit.gap_dependencias where uuid_ticket=%s", (uuid,))
+    for d in novos:
+        execute("""insert into cockpit.gap_dependencias (uuid_ticket, depende_de, criado_por)
+                   values (%s,%s,%s) on conflict do nothing""", (uuid, d, eu))
+    return _json({"ok": True, "depende_de": novos})
+
+
 @app.post("/api/gmail/rascunho")
 def api_gmail_rascunho():
     """Cria um rascunho HTML na conta do usuário logado (IMAP APPEND)."""
