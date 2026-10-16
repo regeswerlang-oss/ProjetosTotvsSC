@@ -5,7 +5,7 @@
 cd "$(dirname "$0")" || exit 1
 echo "==> Pasta: $(pwd)"
 
-if [ ! -d ".git" ]; then
+if [ ! -e ".git" ]; then
   echo "ERRO: esta pasta nao e um repositorio git (.git nao encontrado)."
   read -n 1 -s -r -p "Pressione qualquer tecla para fechar..."
   exit 1

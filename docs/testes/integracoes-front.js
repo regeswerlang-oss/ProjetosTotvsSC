@@ -216,6 +216,83 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   const rel = await pg.evaluate(() => { const r = relatorioDaAba(); return r && { titulo: r.titulo, base: r.base }; });
   t('exportar reconhece a aba', rel && rel.titulo === 'Monitoramento de Integrações' && rel.base === 'producao', JSON.stringify(rel));
 
+  // ── grupo TOTVS Transmite (16/10/2026): base de Compras, sem RH ───────────
+  const HOJE_RD = '2026-10-16';
+  const TINDS = [
+    IND('tra_sem_retorno', 'transmite', 'Classificadas sem retorno ao Transmite', 35, 'vermelho', 'CKO_STRAN ≠ 4. Por filial: 0101 31.'),
+    IND('tra_prazo', 'transmite', 'Prazo do evento (90 dias)', 8, 'vermelho', 'Emissão: 1 com o prazo vencido (> 90 dias).'),
+    IND('tra_hora_futura', 'transmite', 'Digitação com data/hora futura', 0, 'verde', 'Nenhuma nota.'),
+    IND('tra_revisao', 'transmite', 'Importador em revisão cadastral (B)', 6, 'amarelo', 'Parados no Importador.'),
+    IND('tra_fila', 'transmite', 'XML parados > 30 dias', 10, 'vermelho', 'DisponivelCancelamento.'),
+    IND('tra_entrada', 'transmite', 'Dias sem importar XML', 0, 'verde', 'Último XML importado em 16/10/2026.'),
+    IND('tra_sem_monitor', 'transmite', 'Lançadas fora do Importador', 2, 'amarelo', 'Sem SDS.'),
+    IND('tra_params', 'transmite', 'Parâmetros do Importador', '2/14', 'verde', 'MV_IMPXML = .T.'),
+  ];
+  const TBLOCOS = {
+    _meta: { desde: null, grupos: ['transmite'] },
+    tra_sem_retorno_lista: { ok: true, linhas: [
+      { FILIAL: '0101', DOC: '000013687', SERIE: '1', FORNECEDOR: 'F00001', LOJA: '01', EMISSAO: '20260804', DTDIGIT: '20261001',
+        HORA: '10:00:00', STRAN: '2', CODEDI: '109', DT_IMP: '20260805', DS_STATUS: 'B', CHAVE: '42261027968581000106550010000136871530601731' },
+      { FILIAL: '0102', DOC: '000000001', SERIE: '1', FORNECEDOR: 'F00002', LOJA: '01', EMISSAO: '20260701', DTDIGIT: '20261002',
+        HORA: '11:00:00', STRAN: '', CODEDI: '214', DT_IMP: '20260702', DS_STATUS: '', CHAVE: '4226<i>zz</i>' }] },
+    tra_sem_retorno: { ok: true, linhas: [{ FILIAL: '0101', QTD: '31', DIGIT_MAIS_ANTIGA: '20260905', EMISSAO_MAIS_ANTIGA: '20260701', VENCIDAS: '1', CRITICAS: '2', ATENCAO: '5' }] },
+    tra_futuras_lista: { ok: true, linhas: [] },
+    tra_revisao: { ok: true, linhas: [{ STATUS: 'B', QTD: '6', MAIS_ANTIGO: '20260920', MAIS_RECENTE: '20261010' }] },
+    tra_revisao_lista: { ok: false, erro: 'Não lido: o tempo da coleta acabou antes deste bloco.', linhas: [] },
+    tra_fila: { ok: true, linhas: [{ CODEDI: '109', STRAN: '4', QTD: '300', MAIS_ANTIGO: '20260701', MAIS_RECENTE: '20261016' }] },
+    tra_fila_antigos: { ok: true, linhas: [] }, tra_sem_monitor: { ok: true, linhas: [] },
+    tra_config: { ok: true, linhas: [{ PARAMETRO: 'MV_APITRAN', FILIAL: '', CONTEUDO: '(preenchido)' }] },
+  };
+  const RD_CFG = Object.assign({}, CFG, { environment: 'RDESERTO_PROD', integ_desde: null, integ_grupos: ['transmite'], tem_senha: false });
+  const RD = (o = {}) => Object.assign({ ok: true, customer: 'TFDPHR00', ambiente: 'producao', hoje: HOJE_RD,
+    ambiente_cfg: RD_CFG, coletas: [],
+    ultima: { id: 9, coletado_em: AGORA, duracao_ms: 5100, nivel: 'vermelho', indicadores: TINDS, blocos: TBLOCOS,
+              environment: 'RDESERTO_PROD', disparado_por: 'reges', health: { ok: false, mensagem: 'Grupo RH desligado nesta base.' } },
+    serie: [{ id: 9, coletado_em: AGORA, nivel: 'vermelho', indicadores: TINDS.map(i => ({ chave: i.chave, valor: i.valor, nivel: i.nivel })) }] }, o);
+  let rdLeitura = RD();
+  const gruposPost = [];
+  await pg.route('**/api/integracoes/TFDPHR00?*', r => r.fulfill({ json: rdLeitura }));
+  await pg.route('**/api/integracoes/TFDPHR00/grupos*', r => {
+    gruposPost.push(JSON.parse(r.request().postData() || '{}').grupos);
+    r.fulfill({ json: { ok: true, grupos: gruposPost[gruposPost.length - 1] } });
+  });
+  await pg.evaluate(() => {
+    state.selected = { cli: 'TFDPHR00', cod: 'TFDPHR0001', ver: '01', loja: '00', projeto: { nome_cliente_projeto: 'RIO DESERTO' } };
+    initIntegracoes();
+  });
+  await pg.waitForFunction(() => document.querySelector('[data-int-ind="tra_sem_retorno"]'), null, { timeout: 5000 }).catch(() => {});
+  const rd = await txt('#int-conteudo');
+  t('transmite: 8 cartões, nenhum de RH', (await pg.$$('[data-int-ind]')).length === 8 && await pg.$('[data-int-ind^="quirons"]') === null);
+  t('transmite: grupo nomeado', /TOTVS Transmite/.test(rd));
+  t('transmite: caixas de RH somem', await pg.$('[data-int-caixa="quirons"]') === null && await pg.$('[data-int-caixa="config"]') === null);
+  t('transmite: sem aviso de senha do RH', !/healthcheck da Quírons exige/.test(rd));
+  t('transmite: caixa aberta com a lista', /Classificadas no Protheus sem "Classificada"/.test(rd) && /000013687\/1/.test(rd));
+  const tl = await pg.$$eval('#int-conteudo table tr', trs => trs.map(tr => tr.textContent.replace(/\s+/g, ' ').trim()));
+  const l1 = tl.find(l => /000013687/.test(l)) || '', l2 = tl.find(l => /000000001/.test(l)) || '';
+  t('transmite: prazo em texto (73 d, faltam 17)', /! 73 d · faltam 17/.test(l1), l1);
+  t('transmite: vencido', /✕ 107 d · vencido/.test(l2), l2);
+  t('transmite: STRAN e tipo legíveis', /2 · não classificada/.test(l1) && /109 · NF-e/.test(l1) && /B · revisão cadastral/.test(l1));
+  t('transmite: STRAN vazio e sem SDS', /\(vazio\) · não classificada/.test(l2) && /sem SDS/.test(l2) && /214 · CT-e/.test(l2));
+  t('transmite: chave escapada', await pg.$('#int-conteudo i:has-text("zz")') === null && /4226<i>zz<\/i>/.test(rd));
+  t('transmite: bloco não lido explicado', /tempo da coleta acabou/.test(rd));
+  t('transmite: credencial mascarada', /\(preenchido\)/.test(rd));
+  t('transmite: checkboxes refletem a base', await pg.$eval('[data-int-grupo="transmite"]', n => n.checked)
+    && !(await pg.$eval('[data-int-grupo="rh"]', n => n.checked)));
+  if (!/Últimos disparos/.test(await txt('#int-conteudo'))) await pg.click('[data-int-caixa="historico"]');
+  const th = await pg.$$eval('#int-conteudo th', ns => ns.map(n => n.textContent.trim()));
+  t('histórico só com colunas do grupo', th.includes('Transm. sem retorno') && !th.includes('Fila Quírons'), th.join('|'));
+  rdLeitura = RD({ ambiente_cfg: Object.assign({}, RD_CFG, { integ_grupos: ['rh', 'transmite'] }) });
+  await pg.click('[data-int-grupo="rh"]');
+  await pg.waitForTimeout(400);
+  t('ligar RH grava os dois grupos', JSON.stringify(gruposPost[0]) === '["rh","transmite"]', JSON.stringify(gruposPost));
+  t('ligar grupo não coleta', !pedidos.some(p => p.includes('TFDPHR00/coletar')));
+  t('aviso de grupos alterados', /Grupos alterados/.test(await txt('#int-conteudo')));
+  rdLeitura = RD();
+  await pg.click('#int-reload'); await pg.waitForTimeout(300);
+  await pg.click('[data-int-grupo="transmite"]');            // desmarcar o único: bloqueado
+  await pg.waitForTimeout(300);
+  t('não deixa ficar sem grupo', gruposPost.length === 1 && await pg.$eval('[data-int-grupo="transmite"]', n => n.checked));
+
   t('zero erro de JS', erros.length === 0, erros.join(' | '));
   await b.close();
   console.log(`${ok.length} OK, ${bad.length} falha(s)`);

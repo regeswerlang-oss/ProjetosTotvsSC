@@ -250,5 +250,140 @@ par = ns['_integ_params']({'config': bloco({'PARAMETRO': 'MV_RHMSGNG', 'FILIAL':
                                             {'PARAMETRO': 'MV_RHMSGNG', 'FILIAL': '', 'CONTEUDO': '200'})})
 confere('parâmetro global vence', par['MV_RHMSGNG'] == '200')
 
+# ══ GRUPO TOTVS TRANSMITE (16/10/2026) ══════════════════════════════════════
+from datetime import datetime
+gr = ns['_integ_grupos']
+confere('grupos: nulo = rh', gr(None) == ('rh',) and gr([]) == ('rh',))
+confere('grupos: lista do Postgres', gr(['transmite']) == ('transmite',))
+confere('grupos: ordem fixa e sem lixo', gr(['TRANSMITE', 'xpto', 'rh']) == ('rh', 'transmite'))
+confere('grupos: texto {rh,transmite}', gr('{rh,transmite}') == ('rh', 'transmite'))
+confere('grupos: só desconhecido = rh', gr(['xpto']) == ('rh',))
+
+AGORA = datetime(2026, 10, 13, 10, 0, 0)
+hl = ns['_tra_hora_limite']
+confere('hora limite = agora + 10 min', hl(AGORA) == '10:10:00')
+confere('hora limite perto da meia-noite = só data', hl(datetime(2026, 10, 13, 23, 55)) is None)
+confere('hora limite sem agora', hl(None) is None)
+
+tra = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('transmite',), AGORA)
+tid = [s['id'] for s in tra]
+confere('transmite: 10 blocos', len(tra) == 10)
+confere('transmite: nenhum bloco de RH', not any(i in tid for i in ('config', 'rjp_fila', 'rum_resumo')))
+confere('transmite: resumos antes dos detalhes',
+        max(tid.index(i) for i in tid if not tra[tid.index(i)].get('detalhe'))
+        < min(tid.index(i) for i in tid if tra[tid.index(i)].get('detalhe')))
+for s in tra:
+    for sql in s['sqls']:
+        confere(f'{s["id"]}: SELECT', sql.startswith('SELECT'))
+        confere(f'{s["id"]}: sem ;', not sql.rstrip().endswith(';'))
+        confere(f'{s["id"]}: deletados', "D_E_L_E_T_ = ' '" in sql)
+        up = sql.upper()
+        for proib in ('INSERT', 'UPDATE', 'DELETE ', 'MERGE', 'DROP', 'EXEC ', ' INTO ', 'DBMS_', 'UTL_'):
+            confere(f'{s["id"]}: sem {proib}', proib not in up)
+        for relogio in ('SYSDATE', 'GETDATE', 'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'NOW()', 'TO_CHAR'):
+            confere(f'{s["id"]}: data vem do Python ({relogio})', relogio not in up)
+        confere(f'{s["id"]}: sem <> vazio (Oracle)', "<> ''" not in sql)
+    confere(f'{s["id"]}: sql = 1ª variante', s['sql'] == s['sqls'][0])
+T = {s['id']: s for s in tra}
+confere('CKOCOL sem sufixo', 'FROM CKOCOL' in T['tra_fila']['sql'] and 'CKOCOL010' not in T['tra_fila']['sql'])
+confere('SF1/SDS com sufixo', 'SF1010' in T['tra_sem_retorno']['sql'] and 'SDS010' in T['tra_sem_monitor']['sql'])
+confere('janela de 120 dias', "CKO_DT_IMP >= '20260615'" in T['tra_fila']['sql']
+        and "F1_DTDIGIT >= '20260615'" in T['tra_sem_retorno']['sql'])
+confere('prazo: faixas pela emissão', "F1_EMISSAO < '20260715'" in T['tra_sem_retorno']['sql']
+        and "'20260725'" in T['tra_sem_retorno']['sql'] and "'20260814'" in T['tra_sem_retorno']['sql'])
+confere('sem retorno: só classificadas', "RTRIM(SF1.F1_STATUS) > ' '" in T['tra_sem_retorno']['sql'])
+confere('sem retorno: STRAN vazio conta como não classificado',
+        "((RTRIM(CKO.CKO_STRAN) IS NULL OR RTRIM(CKO.CKO_STRAN) = '') OR RTRIM(CKO.CKO_STRAN) <> '4')"
+        in T['tra_sem_retorno']['sql'])
+confere('sem retorno: EXISTS não duplica reimportação', 'EXISTS (SELECT 1 FROM CKOCOL CKO' in T['tra_sem_retorno']['sql'])
+confere('nota própria fora', "F1_FORMUL <> 'S'" in T['tra_sem_retorno']['sql'])
+confere('futuras: data e hora com folga', "F1_DTDIGIT > '20261013'" in T['tra_futuras']['sql']
+        and "F1_HORA > '10:10:00'" in T['tra_futuras']['sql'])
+sem_hora = {s['id']: s['sql'] for s in ns['_integ_scripts']('010', HOJE, None, 'oracle', ('transmite',), None)}
+confere('futuras sem agora: só data', 'F1_HORA >' not in sem_hora['tra_futuras'])
+confere('MV_APITRAN mascarado', "IN ('MV_APITRAN') THEN" in T['tra_config']['sql'] and '(preenchido)' in T['tra_config']['sql'])
+confere('revisão: 3 variantes (DATAIMP, EMISSA, sem data)', len(T['tra_revisao']['sqls']) == 3
+        and 'DS_DATAIMP' in T['tra_revisao']['sqls'][0] and 'DS_EMISSA' in T['tra_revisao']['sqls'][1]
+        and 'DS_' not in T['tra_revisao']['sqls'][2].replace('DS_STATUS', ''))
+confere('fila antiga: > 30 dias', "CKO_DT_IMP <= '20260913'" in T['tra_fila_antigos']['sql'])
+cor = {s['id']: s['sql'] for s in ns['_integ_scripts']('010', HOJE, date(2026, 10, 1), 'oracle', ('transmite',), AGORA)}
+confere('corte encurta a janela', "F1_DTDIGIT >= '20261001'" in cor['tra_sem_retorno'] and "'20260615'" not in cor['tra_fila'])
+velho = {s['id']: s['sql'] for s in ns['_integ_scripts']('010', HOJE, date(2025, 1, 1), 'oracle', ('transmite',), AGORA)}
+confere('corte mais antigo não alarga a janela', "'20260615'" in velho['tra_fila'])
+ambos = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('rh', 'transmite'), AGORA)
+confere('rh + transmite = 20 blocos', len(ambos) == 20 and ambos[0]['id'] == 'config')
+confere('padrão continua só RH', len(ns['_integ_scripts']('010', HOJE)) == 10)
+
+# ── indicadores Transmite ───────────────────────────────────────────────────
+tra_ok = {
+    'tra_config': bloco({'PARAMETRO': 'MV_IMPXML', 'FILIAL': '', 'CONTEUDO': '.T.'},
+                        {'PARAMETRO': 'MV_DTINITR', 'FILIAL': '', 'CONTEUDO': '20260501'}),
+    'tra_fila': bloco({'CODEDI': '109', 'STRAN': '4', 'QTD': '500', 'MAIS_ANTIGO': '20260616',
+                       'MAIS_RECENTE': '20261013', 'PARADOS_AMARELO': '400', 'PARADOS_VERMELHO': '300'},
+                      {'CODEDI': '109', 'STRAN': '1', 'QTD': '20', 'MAIS_ANTIGO': '20261001',
+                       'MAIS_RECENTE': '20261013', 'PARADOS_AMARELO': '0', 'PARADOS_VERMELHO': '0'}),
+    'tra_sem_retorno': bloco(),
+    'tra_futuras': bloco(),
+    'tra_revisao': bloco({'STATUS': 'P', 'QTD': '480', 'MAIS_ANTIGO': '20260616', 'MAIS_RECENTE': '20261013'}),
+    'tra_sem_monitor': bloco(),
+}
+ti = ns['_integ_indicadores'](tra_ok, {'ok': False}, HOJE, ('transmite',))
+confere('transmite: 8 indicadores, nenhum de RH', len(ti) == 8 and all(i['grupo'] == 'transmite' for i in ti))
+confere('transmite saudável = verde', ns['_integ_pior'](i['nivel'] for i in ti) == 'verde')
+confere('classificada (4) não conta como parada', ind(ti, 'tra_fila')['valor'] == 0)
+confere('última importação hoje = 0 dias', ind(ti, 'tra_entrada')['valor'] == 0)
+confere('parâmetros 2/14', ind(ti, 'tra_params')['valor'] == '2/14' and '01/05/2026' in ind(ti, 'tra_params')['texto'])
+
+tra_ruim = dict(tra_ok)
+tra_ruim['tra_config'] = bloco({'PARAMETRO': 'MV_IMPXML', 'FILIAL': '', 'CONTEUDO': '.F.'})
+tra_ruim['tra_fila'] = bloco({'CODEDI': '109', 'STRAN': '2', 'QTD': '24', 'MAIS_ANTIGO': '20260710',
+                              'MAIS_RECENTE': '20261007', 'PARADOS_AMARELO': '10', 'PARADOS_VERMELHO': '3'})
+tra_ruim['tra_sem_retorno'] = bloco(
+    {'FILIAL': '0101', 'QTD': '31', 'DIGIT_MAIS_ANTIGA': '20260905', 'EMISSAO_MAIS_ANTIGA': '20260701',
+     'VENCIDAS': '1', 'CRITICAS': '2', 'ATENCAO': '5'},
+    {'FILIAL': '0102', 'QTD': '4', 'DIGIT_MAIS_ANTIGA': '20261012', 'EMISSAO_MAIS_ANTIGA': '20261001',
+     'VENCIDAS': '0', 'CRITICAS': '0', 'ATENCAO': '0'})
+tra_ruim['tra_futuras'] = bloco({'FILIAL': '0101', 'DTDIGIT': '20261016', 'QTD': '3', 'PRIMEIRA': '08:00', 'ULTIMA': '09:00'},
+                                {'FILIAL': '0101', 'DTDIGIT': '20261013', 'QTD': '1', 'PRIMEIRA': '15:00', 'ULTIMA': '15:00'})
+tra_ruim['tra_revisao'] = bloco({'STATUS': 'B', 'QTD': '6', 'MAIS_ANTIGO': '20260920', 'MAIS_RECENTE': '20261010'},
+                                {'STATUS': 'P', 'QTD': '400', 'MAIS_ANTIGO': '20260616', 'MAIS_RECENTE': '20261013'})
+tra_ruim['tra_sem_monitor'] = bloco({'FILIAL': '0101', 'ESPECIE': 'SPED', 'QTD': '2', 'MAIS_ANTIGO': '20261001', 'MAIS_RECENTE': '20261002'})
+ti = ns['_integ_indicadores'](tra_ruim, {'ok': False}, HOJE, ('transmite',))
+sr = ind(ti, 'tra_sem_retorno')
+confere('sem retorno somado e vermelho', sr['valor'] == 35 and sr['nivel'] == 'vermelho')
+confere('sem retorno cita filial e revisão B', '0101 31' in sr['texto'] and '6 documento(s) em revisão' in sr['texto'])
+pz = ind(ti, 'tra_prazo')
+confere('prazo: 8 em risco, vermelho', pz['valor'] == 8 and pz['nivel'] == 'vermelho' and 'vencido' in pz['texto'])
+confere('hora futura vermelho com data adiantada', ind(ti, 'tra_hora_futura')['valor'] == 4
+        and ind(ti, 'tra_hora_futura')['nivel'] == 'vermelho' and '16/10/2026' in ind(ti, 'tra_hora_futura')['texto'])
+rv = ind(ti, 'tra_revisao')
+confere('revisão B há 23 dias = vermelho', rv['valor'] == 6 and rv['nivel'] == 'vermelho' and 'P 400' in rv['texto'])
+confere('fila parada > 60 dias = vermelho', ind(ti, 'tra_fila')['valor'] == 10 and ind(ti, 'tra_fila')['nivel'] == 'vermelho')
+confere('6 dias sem importar = vermelho', ind(ti, 'tra_entrada')['valor'] == 6 and ind(ti, 'tra_entrada')['nivel'] == 'vermelho')
+confere('fora do Importador = amarelo', ind(ti, 'tra_sem_monitor')['nivel'] == 'amarelo')
+confere('MV_IMPXML .F. e DTINITR vazio', ind(ti, 'tra_params')['nivel'] == 'amarelo'
+        and 'MV_IMPXML = .F.' in ind(ti, 'tra_params')['texto'] and 'MV_DTINITR vazio' in ind(ti, 'tra_params')['texto'])
+
+so_atencao = dict(tra_ok)
+so_atencao['tra_sem_retorno'] = bloco({'FILIAL': '01', 'QTD': '2', 'DIGIT_MAIS_ANTIGA': '20261013',
+                                       'EMISSAO_MAIS_ANTIGA': '20260801', 'VENCIDAS': '0', 'CRITICAS': '0', 'ATENCAO': '2'})
+ti = ns['_integ_indicadores'](so_atencao, {'ok': False}, HOJE, ('transmite',))
+confere('classificada hoje = amarelo', ind(ti, 'tra_sem_retorno')['nivel'] == 'amarelo')
+confere('só faixa 60–80 = amarelo', ind(ti, 'tra_prazo')['nivel'] == 'amarelo' and ind(ti, 'tra_prazo')['valor'] == 2)
+
+falhos = {'tra_sem_retorno': {'ok': False, 'ausente': True, 'erro': 'A tabela CKOCOL não existe nesta base', 'linhas': []}}
+ti = ns['_integ_indicadores'](falhos, {'ok': False}, HOJE, ('transmite',))
+confere('bloco ausente = cinza (sem retorno e prazo)', ind(ti, 'tra_sem_retorno')['nivel'] == 'cinza'
+        and ind(ti, 'tra_prazo')['nivel'] == 'cinza' and 'CKOCOL' in ind(ti, 'tra_prazo')['texto'])
+confere('tudo não lido = cinza geral', ns['_integ_pior'](i['nivel'] for i in ti) == 'cinza')
+sem_import = dict(tra_ok, tra_fila=bloco())
+confere('nenhum XML na janela = vermelho',
+        ind(ns['_integ_indicadores'](sem_import, {'ok': False}, HOJE, ('transmite',)), 'tra_entrada')['nivel'] == 'vermelho')
+sem_data = dict(tra_ok, tra_revisao=dict(bloco({'STATUS': 'B', 'QTD': '2'}), variante=2))
+rv = ind(ns['_integ_indicadores'](sem_data, {'ok': False}, HOJE, ('transmite',)), 'tra_revisao')
+confere('revisão sem campo de data = amarelo e avisa', rv['nivel'] == 'amarelo' and 'sem janela' in rv['texto'])
+ambos_i = ns['_integ_indicadores'](dict(saudavel, **tra_ok), health_ok, HOJE, ('rh', 'transmite'))
+confere('rh + transmite = 16 indicadores', len(ambos_i) == 16)
+
 print(f'{ok} asserções OK, {falhou} falha(s)')
 raise SystemExit(1 if falhou else 0)

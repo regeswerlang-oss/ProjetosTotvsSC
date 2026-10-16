@@ -7149,12 +7149,54 @@ INTEG_NIVEIS = ("cinza", "verde", "amarelo", "vermelho")
 INTEG_LOTE_PADRAO = 100            # MV_RHMSGNG ausente = 100 (TDN)
 INTEG_TEMPO_MIN = 4                # s mínimos para valer a pena abrir mais um bloco
 
+# Grupos que uma base pode monitorar (protheus_ambientes.integ_grupos). Nulo =
+# só RH, que é como a aba nasceu: base de RH não paga consulta de Compras e
+# base de Compras (Rio Deserto) não vê 8 cartões cinza de Quírons/Ahgora.
+INTEG_GRUPOS_BASE = ("rh", "transmite")
+INTEG_GRUPOS_PADRAO = ("rh",)
+
+# ── TOTVS Transmite (16/10/2026) ──────────────────────────────────────────
+# Caminho do XML de entrada: SEFAZ → Transmite → SCHEDIMPTRA/COMXCOL grava
+# CKOCOL + SDS (Importador XML / Monitor) → usuário classifica (SF1) →
+# SCHEDUPDTRA grava CKO_STRAN = 4 e devolve "Classificada" → o Transmite
+# manifesta a Confirmação da Operação na SEFAZ, com a data/hora da SF1.
+# Spec: docs/specs/2026-10-16-integracoes-transmite.md
+TRA_PARAMS = ("MV_NGINN", "MV_NGLIDOS", "MV_IMPXML", "MV_DTINITR", "MV_XMLDIAS",
+              "MV_COLEDI", "MV_EXCEDI", "MV_APITRAN", "MV_DOCIMP", "MV_COMCOL1",
+              "MV_COMCOL2", "MV_COMCOL3", "MV_HORARMT", "MV_HORANFE")
+TRA_MASCARA = ("MV_APITRAN",)      # pode guardar chave de API: só "preenchido" ou vazio
+TRA_CKO = "CKOCOL"                 # tabela do TOTVS Colaboração: nome fixo, sem sufixo
+TRA_JANELA = 120                   # dias de SF1/CKO lidos (o prazo do evento é 90)
+TRA_PRAZO = 90                     # prazo do evento contado da emissão (diagnóstico 16/10)
+TRA_PRAZO_AMARELO, TRA_PRAZO_VERMELHO = 60, 80
+TRA_FILA_AMARELO, TRA_FILA_VERMELHO = 30, 60   # dias na CKOCOL sem classificar
+TRA_FOLGA_MIN = 10                 # min de folga entre o relógio do painel e o do AppServer
+TRA_STRAN = {"4": "Classificada"}  # único código documentado; os outros vão crus
+TRA_DS_STATUS = {"B": "revisão cadastral"}
+
 
 def _integ_vazio(col):
     """Campo caractere VAZIO nos dois bancos. No Oracle o DBAccess grava o
     campo com espaços e RTRIM('    ') vira NULL; no SQL Server vira ''. Um
     `= ' '` comparado com VARCHAR2 de 8 posições nunca casa."""
     return f"(RTRIM({col}) IS NULL OR RTRIM({col}) = '')"
+
+
+def _integ_preenchido(col):
+    """Campo caractere PREENCHIDO nos três bancos. `<> ''` não serve: no
+    Oracle '' é NULL e a comparação nunca é verdadeira. `> ' '` vale para
+    qualquer texto visível e é falso para vazio/NULL em Oracle, SQL Server e
+    Postgres."""
+    return f"RTRIM({col}) > ' '"
+
+
+def _integ_grupos(v):
+    """protheus_ambientes.integ_grupos → tupla válida na ordem de
+    INTEG_GRUPOS_BASE. Nulo, vazio ou só valores desconhecidos = RH."""
+    if isinstance(v, str):
+        v = [x for x in re.split(r"[\s,;{}]+", v) if x]
+    g = {str(x).strip().lower() for x in (v or [])}
+    return tuple(x for x in INTEG_GRUPOS_BASE if x in g) or INTEG_GRUPOS_PADRAO
 
 
 def _integ_desde(v):
@@ -7186,7 +7228,25 @@ def _integ_memo_exprs(col, banco, n=400):
             f"DBMS_LOB.SUBSTR({col}, {n}, 1)", None]
 
 
-def _integ_scripts(sufixo, hoje, desde=None, banco=None):
+def _integ_scripts(sufixo, hoje, desde=None, banco=None, grupos=None, agora=None):
+    """Blocos dos grupos ligados na base. `grupos` nulo = só RH (como antes).
+    Ordem dentro de cada grupo = resumos antes dos detalhes; a coleta ainda
+    reordena tudo (resumos de todos os grupos primeiro)."""
+    grupos = _integ_grupos(grupos)
+    lista = []
+    if "rh" in grupos:
+        lista += _integ_scripts_rh(sufixo, hoje, desde, banco)
+    if "transmite" in grupos:
+        lista += _tra_scripts(sufixo, hoje, desde, agora)
+    for b in lista:
+        if "sqls" in b:
+            b["sql"] = b["sqls"][0]
+        else:
+            b["sqls"] = [b["sql"]]
+    return lista
+
+
+def _integ_scripts_rh(sufixo, hoje, desde=None, banco=None):
     """Os blocos da coleta, já com o sufixo da base e as datas como literal.
 
     `desde` (corte por base, 13/10/2026): só entra movimento a partir dessa
@@ -7489,10 +7549,10 @@ def _integ_health_itens(obj, saida=None):
     return saida
 
 
-def _integ_params(blocos):
+def _integ_params(blocos, bloco="config"):
     """{PARAMETRO: conteúdo}. Com o mesmo parâmetro em várias filiais vale o
     de filial em branco (o global) — é o que o JOB lê quando roda por grupo."""
-    b = blocos.get("config") or {}
+    b = blocos.get(bloco) or {}
     out = {}
     for ln in b.get("linhas") or []:
         p = ln.get("PARAMETRO", "")
@@ -7514,7 +7574,18 @@ def _integ_bloco_falhou(b, chave, grupo, rotulo):
     return _integ_ind(chave, grupo, rotulo, None, "cinza", b.get("erro") or "Não lido.")
 
 
-def _integ_indicadores(blocos, health, hoje):
+def _integ_indicadores(blocos, health, hoje, grupos=None):
+    """Indicadores dos grupos ligados na base. `grupos` nulo = só RH."""
+    grupos = _integ_grupos(grupos)
+    out = []
+    if "rh" in grupos:
+        out += _integ_indicadores_rh(blocos, health, hoje)
+    if "transmite" in grupos:
+        out += _tra_indicadores(blocos, hoje)
+    return out
+
+
+def _integ_indicadores_rh(blocos, health, hoje):
     """Indicadores da seção 4 da proposta de monitoramento (12/10/2026). Função
     PURA: recebe os blocos já lidos e a data de hoje — testada em
     docs/testes/integracoes-back.py."""
@@ -7681,6 +7752,317 @@ def _integ_indicadores(blocos, health, hoje):
     return out
 
 
+# ── TOTVS Transmite: blocos e indicadores ──────────────────────────────────
+def _tra_hora_limite(agora):
+    """Hora (HH:MM:SS) a partir da qual uma F1_HORA de HOJE é "futura": agora
+    + folga, para o relógio do AppServer adiantado alguns minutos não virar
+    alarme. Sem `agora`, ou se a folga passar da meia-noite, só a DATA futura
+    conta."""
+    if not agora:
+        return None
+    t = agora + timedelta(minutes=TRA_FOLGA_MIN)
+    return t.strftime("%H:%M:%S") if t.date() == agora.date() else None
+
+
+def _tra_scripts(sufixo, hoje, desde=None, agora=None):
+    """Blocos do grupo Transmite. Mesmas regras do RH: datas calculadas aqui
+    (nada de SYSDATE/GETDATE/CURRENT_DATE), sem ';', só SELECT, vazio robusto.
+    A CKOCOL é a tabela do TOTVS Colaboração — nome fixo, sem o sufixo.
+
+    Janela: SF1/CKO/SDS dos últimos TRA_JANELA dias (o prazo do evento é
+    TRA_PRAZO); com `desde` mais recente, vale o corte da base."""
+    s = (sufixo or "010").strip()
+    ini = hoje - timedelta(days=TRA_JANELA)
+    if desde and desde > ini:
+        ini = desde
+    j = ini.strftime("%Y%m%d")
+    h = hoje.strftime("%Y%m%d")
+    dia = lambda n: (hoje - timedelta(days=n)).strftime("%Y%m%d")
+    e_vc, e_vm, e_am = dia(TRA_PRAZO), dia(TRA_PRAZO_VERMELHO), dia(TRA_PRAZO_AMARELO)
+    f_am, f_vm = dia(TRA_FILA_AMARELO), dia(TRA_FILA_VERMELHO)
+    hl = _tra_hora_limite(agora)
+    cko = TRA_CKO
+    params = ", ".join(f"'{p}'" for p in TRA_PARAMS)
+    masc = ", ".join(f"'{p}'" for p in TRA_MASCARA)
+    # Nota de TERCEIRO com chave (NF-e/CT-e recebida). Formulário próprio
+    # (F1_FORMUL = 'S') é nota que a própria empresa emitiu: não passa pelo Transmite.
+    terc = f"{_integ_preenchido('SF1.F1_CHVNFE')} AND SF1.F1_FORMUL <> 'S'"
+    classif = _integ_preenchido("SF1.F1_STATUS")          # F1_STATUS vazio = pré-nota
+    nao4 = f"({_integ_vazio('CKO.CKO_STRAN')} OR RTRIM(CKO.CKO_STRAN) <> '4')"
+    mesma_chave = "RTRIM(CKO.CKO_CHVDOC) = RTRIM(SF1.F1_CHVNFE) AND CKO.D_E_L_E_T_ = ' '"
+    futura = (f"(SF1.F1_DTDIGIT > '{h}'"
+              + (f" OR (SF1.F1_DTDIGIT = '{h}' AND SF1.F1_HORA > '{hl}')" if hl else "") + ")")
+    sds_datas = ("DS_DATAIMP", "DS_EMISSA")              # a 1ª que a base tiver
+    return [
+        {"id": "tra_config", "rotulo": "Transmite — parâmetros do Importador (SX6)",
+         "tabela": f"SX6{s}", "limite": 200,
+         "sql": (f"SELECT RTRIM(X6_VAR) AS PARAMETRO, RTRIM(X6_FIL) AS FILIAL, "
+                 f"CASE WHEN RTRIM(X6_VAR) IN ({masc}) THEN CASE WHEN "
+                 f"{_integ_preenchido('X6_CONTEUD')} THEN '(preenchido)' ELSE '' END "
+                 f"ELSE RTRIM(X6_CONTEUD) END AS CONTEUDO FROM SX6{s} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND RTRIM(X6_VAR) IN ({params}) "
+                 f"ORDER BY X6_VAR, X6_FIL")},
+        {"id": "tra_fila", "rotulo": "Transmite — XML importados por situação (CKOCOL)",
+         "tabela": cko, "limite": 200,
+         "sql": (f"SELECT RTRIM(CKO_CODEDI) AS CODEDI, RTRIM(CKO_STRAN) AS STRAN, "
+                 f"COUNT(*) AS QTD, MIN(CKO_DT_IMP) AS MAIS_ANTIGO, MAX(CKO_DT_IMP) AS MAIS_RECENTE, "
+                 f"SUM(CASE WHEN CKO_DT_IMP <= '{f_am}' THEN 1 ELSE 0 END) AS PARADOS_AMARELO, "
+                 f"SUM(CASE WHEN CKO_DT_IMP <= '{f_vm}' THEN 1 ELSE 0 END) AS PARADOS_VERMELHO "
+                 f"FROM {cko} WHERE D_E_L_E_T_ = ' ' AND CKO_DT_IMP >= '{j}' "
+                 f"GROUP BY CKO_CODEDI, CKO_STRAN ORDER BY CODEDI, STRAN")},
+        # EXISTS e não JOIN: XML reimportado gera 2 linhas na CKOCOL e dobraria a contagem.
+        {"id": "tra_sem_retorno", "rotulo": "Transmite — classificadas sem 'Classificada' (SF1 × CKOCOL)",
+         "tabela": f"SF1{s}", "limite": 200,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, COUNT(*) AS QTD, "
+                 f"MIN(SF1.F1_DTDIGIT) AS DIGIT_MAIS_ANTIGA, MIN(SF1.F1_EMISSAO) AS EMISSAO_MAIS_ANTIGA, "
+                 f"SUM(CASE WHEN SF1.F1_EMISSAO < '{e_vc}' THEN 1 ELSE 0 END) AS VENCIDAS, "
+                 f"SUM(CASE WHEN SF1.F1_EMISSAO >= '{e_vc}' AND SF1.F1_EMISSAO <= '{e_vm}' "
+                 f"THEN 1 ELSE 0 END) AS CRITICAS, "
+                 f"SUM(CASE WHEN SF1.F1_EMISSAO > '{e_vm}' AND SF1.F1_EMISSAO <= '{e_am}' "
+                 f"THEN 1 ELSE 0 END) AS ATENCAO "
+                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} "
+                 f"AND SF1.F1_DTDIGIT >= '{j}' AND EXISTS (SELECT 1 FROM {cko} CKO "
+                 f"WHERE {mesma_chave} AND {nao4}) "
+                 f"GROUP BY SF1.F1_FILIAL ORDER BY QTD DESC")},
+        {"id": "tra_futuras", "rotulo": "Transmite — digitação com data/hora no futuro (SF1)",
+         "tabela": f"SF1{s}", "limite": 200,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, SF1.F1_DTDIGIT AS DTDIGIT, COUNT(*) AS QTD, "
+                 f"MIN(SF1.F1_HORA) AS PRIMEIRA, MAX(SF1.F1_HORA) AS ULTIMA "
+                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {terc} AND {futura} "
+                 f"GROUP BY SF1.F1_FILIAL, SF1.F1_DTDIGIT ORDER BY DTDIGIT, FILIAL")},
+        # Variantes: o campo de data da SDS muda entre releases. Sem nenhum,
+        # conta tudo (sem janela) — o número de B continua valendo.
+        {"id": "tra_revisao", "rotulo": "Transmite — Importador XML por status (SDS)",
+         "tabela": f"SDS{s}", "limite": 100,
+         "sqls": [(f"SELECT RTRIM(DS_STATUS) AS STATUS, COUNT(*) AS QTD, MIN({c}) AS MAIS_ANTIGO, "
+                   f"MAX({c}) AS MAIS_RECENTE FROM SDS{s} WHERE D_E_L_E_T_ = ' ' AND {c} >= '{j}' "
+                   f"GROUP BY DS_STATUS ORDER BY STATUS") for c in sds_datas]
+                 + [f"SELECT RTRIM(DS_STATUS) AS STATUS, COUNT(*) AS QTD FROM SDS{s} "
+                    f"WHERE D_E_L_E_T_ = ' ' GROUP BY DS_STATUS ORDER BY STATUS"]},
+        {"id": "tra_sem_monitor", "rotulo": "Transmite — classificadas sem passar pelo Importador (SF1 sem SDS)",
+         "tabela": f"SF1{s}", "limite": 200,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_ESPECIE) AS ESPECIE, COUNT(*) AS QTD, "
+                 f"MIN(SF1.F1_DTDIGIT) AS MAIS_ANTIGO, MAX(SF1.F1_DTDIGIT) AS MAIS_RECENTE "
+                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} "
+                 f"AND SF1.F1_DTDIGIT >= '{j}' AND NOT EXISTS (SELECT 1 FROM SDS{s} SDS "
+                 f"WHERE RTRIM(SDS.DS_CHAVENF) = RTRIM(SF1.F1_CHVNFE) AND SDS.D_E_L_E_T_ = ' ') "
+                 f"GROUP BY SF1.F1_FILIAL, SF1.F1_ESPECIE ORDER BY QTD DESC")},
+        # ── detalhes: as notas para agir ───────────────────────────────────
+        {"id": "tra_sem_retorno_lista", "rotulo": "Transmite — notas classificadas sem retorno",
+         "tabela": f"SF1{s}", "limite": 300, "detalhe": True,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_DOC) AS DOC, RTRIM(SF1.F1_SERIE) AS SERIE, "
+                 f"RTRIM(SF1.F1_FORNECE) AS FORNECEDOR, RTRIM(SF1.F1_LOJA) AS LOJA, "
+                 f"SF1.F1_EMISSAO AS EMISSAO, SF1.F1_DTDIGIT AS DTDIGIT, RTRIM(SF1.F1_HORA) AS HORA, "
+                 f"RTRIM(CKO.CKO_STRAN) AS STRAN, RTRIM(CKO.CKO_CODEDI) AS CODEDI, "
+                 f"CKO.CKO_DT_IMP AS DT_IMP, RTRIM(SDS.DS_STATUS) AS DS_STATUS, "
+                 f"RTRIM(SF1.F1_CHVNFE) AS CHAVE "
+                 f"FROM SF1{s} SF1 INNER JOIN {cko} CKO ON {mesma_chave} AND {nao4} "
+                 f"LEFT JOIN SDS{s} SDS ON RTRIM(SDS.DS_CHAVENF) = RTRIM(SF1.F1_CHVNFE) "
+                 f"AND SDS.D_E_L_E_T_ = ' ' "
+                 f"WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} AND SF1.F1_DTDIGIT >= '{j}' "
+                 f"ORDER BY SF1.F1_EMISSAO, SF1.F1_FILIAL, SF1.F1_DOC")},
+        {"id": "tra_futuras_lista", "rotulo": "Transmite — notas com data/hora no futuro",
+         "tabela": f"SF1{s}", "limite": 100, "detalhe": True,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_DOC) AS DOC, RTRIM(SF1.F1_SERIE) AS SERIE, "
+                 f"RTRIM(SF1.F1_FORNECE) AS FORNECEDOR, SF1.F1_EMISSAO AS EMISSAO, "
+                 f"SF1.F1_DTDIGIT AS DTDIGIT, RTRIM(SF1.F1_HORA) AS HORA, "
+                 f"RTRIM(SF1.F1_STATUS) AS STATUS, RTRIM(SF1.F1_CHVNFE) AS CHAVE "
+                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {terc} AND {futura} "
+                 f"ORDER BY SF1.F1_DTDIGIT, SF1.F1_HORA")},
+        {"id": "tra_fila_antigos", "rotulo": f"Transmite — XML há mais de {TRA_FILA_AMARELO} dias sem 'Classificada'",
+         "tabela": cko, "limite": 200, "detalhe": True,
+         "sql": (f"SELECT RTRIM(CKO.CKO_CODEDI) AS CODEDI, RTRIM(CKO.CKO_STRAN) AS STRAN, "
+                 f"CKO.CKO_DT_IMP AS DT_IMP, RTRIM(CKO.CKO_DOC) AS DOC, RTRIM(CKO.CKO_CHVDOC) AS CHAVE, "
+                 f"RTRIM(SF1.F1_FILIAL) AS FILIAL_SF1, RTRIM(SF1.F1_STATUS) AS F1_STATUS "
+                 f"FROM {cko} CKO LEFT JOIN SF1{s} SF1 ON RTRIM(SF1.F1_CHVNFE) = RTRIM(CKO.CKO_CHVDOC) "
+                 f"AND SF1.D_E_L_E_T_ = ' ' "
+                 f"WHERE CKO.D_E_L_E_T_ = ' ' AND {nao4} AND CKO.CKO_DT_IMP >= '{j}' "
+                 f"AND CKO.CKO_DT_IMP <= '{f_am}' ORDER BY CKO.CKO_DT_IMP")},
+        {"id": "tra_revisao_lista", "rotulo": "Transmite — documentos em revisão cadastral (SDS, status B)",
+         "tabela": f"SDS{s}", "limite": 200, "detalhe": True,
+         "sqls": [(f"SELECT DS_FILIAL AS FILIAL, RTRIM(DS_DOC) AS DOC, RTRIM(DS_SERIE) AS SERIE, "
+                   f"RTRIM(DS_FORNEC) AS FORNECEDOR, DS_EMISSA AS EMISSAO, DS_DATAIMP AS DT_IMP, "
+                   f"RTRIM(DS_CHAVENF) AS CHAVE FROM SDS{s} WHERE D_E_L_E_T_ = ' ' "
+                   f"AND RTRIM(DS_STATUS) = 'B' AND DS_DATAIMP >= '{j}' ORDER BY DS_DATAIMP"),
+                  (f"SELECT DS_FILIAL AS FILIAL, RTRIM(DS_DOC) AS DOC, RTRIM(DS_SERIE) AS SERIE, "
+                   f"RTRIM(DS_CHAVENF) AS CHAVE FROM SDS{s} WHERE D_E_L_E_T_ = ' ' "
+                   f"AND RTRIM(DS_STATUS) = 'B' ORDER BY DS_FILIAL, DS_DOC")]},
+    ]
+
+
+def _tra_soma(linhas, campo="QTD"):
+    return sum(_integ_int(x.get(campo)) for x in linhas)
+
+
+def _tra_min_data(linhas, campo):
+    ds = [d for d in (_integ_data(x.get(campo)) for x in linhas) if d]
+    return min(ds) if ds else None
+
+
+def _tra_indicadores(blocos, hoje):
+    """Indicadores do grupo Transmite. Função PURA (blocos + hoje), testada em
+    docs/testes/integracoes-back.py. A pergunta de cada cartão é a da Kelen:
+    "a nota que eu classifiquei vai ter a Confirmação na SEFAZ a tempo?"."""
+    G = "transmite"
+    out = []
+    par = _integ_params(blocos, "tra_config")
+
+    # Revisão cadastral (B) é lida antes: ela explica o cartão de sem retorno.
+    br = blocos.get("tra_revisao")
+    rev_n = None
+    if br and br.get("ok"):
+        rev = [x for x in br["linhas"] if x.get("STATUS") == "B"]
+        rev_n = _tra_soma(rev)
+
+    # ── 1. Classificadas no Protheus sem "Classificada" no Transmite ──────
+    b = blocos.get("tra_sem_retorno")
+    rot = "Classificadas sem retorno ao Transmite"
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "tra_sem_retorno", G, rot))
+        out.append(_integ_bloco_falhou(b, "tra_prazo", G, f"Prazo do evento ({TRA_PRAZO} dias)"))
+    else:
+        ls = b["linhas"]
+        n = _tra_soma(ls)
+        antiga = _tra_min_data(ls, "DIGIT_MAIS_ANTIGA")
+        idade = (hoje - antiga).days if antiga else 0
+        if n == 0:
+            nivel, txt = "verde", "Toda nota classificada no período já voltou ao Transmite (CKO_STRAN = 4)."
+        else:
+            nivel = "vermelho" if idade >= 2 else "amarelo"
+            fil = " · ".join(f"{x.get('FILIAL') or '—'} {_integ_int(x.get('QTD'))}" for x in ls[:6])
+            txt = (f"CKO_STRAN ≠ 4: o SCHEDUPDTRA não devolveu 'Classificada' e o Transmite não "
+                   f"manifesta a Confirmação. Mais antiga digitada em {_integ_ddmm(antiga)} "
+                   f"({idade} dia(s)). Por filial: {fil}.")
+            if rev_n:
+                txt += f" {rev_n} documento(s) em revisão cadastral (B) no Importador."
+        out.append(_integ_ind("tra_sem_retorno", G, rot, n, nivel, txt))
+
+        # ── 2. Prazo do evento, contado da emissão ────────────────────────
+        venc, crit, aten = (_tra_soma(ls, c) for c in ("VENCIDAS", "CRITICAS", "ATENCAO"))
+        risco = venc + crit + aten
+        nivel = ("vermelho" if venc or crit else "amarelo" if aten else "verde")
+        if risco == 0:
+            txt = (f"Nenhuma nota sem retorno com mais de {TRA_PRAZO_AMARELO} dias de emissão."
+                   if n else "Nada pendente.")
+        else:
+            partes = [f"{venc} com o prazo vencido (> {TRA_PRAZO} dias)" if venc else "",
+                      f"{crit} entre {TRA_PRAZO_VERMELHO} e {TRA_PRAZO} dias" if crit else "",
+                      f"{aten} entre {TRA_PRAZO_AMARELO} e {TRA_PRAZO_VERMELHO} dias" if aten else ""]
+            txt = ("Emissão: " + "; ".join(p for p in partes if p) +
+                   ". Sem a Confirmação no prazo, a nota cai na malha fiscal estadual.")
+        out.append(_integ_ind("tra_prazo", G, f"Prazo do evento ({TRA_PRAZO} dias)", risco, nivel, txt))
+
+    # ── 3. Data/hora de digitação no futuro ───────────────────────────────
+    b = blocos.get("tra_futuras")
+    rot = "Digitação com data/hora futura"
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "tra_hora_futura", G, rot))
+    else:
+        ls = b["linhas"]
+        n = _tra_soma(ls)
+        datas = sorted({d for d in (_integ_data(x.get("DTDIGIT")) for x in ls) if d and d > hoje})
+        if n == 0:
+            nivel, txt = "verde", (f"Nenhuma nota com F1_DTDIGIT/F1_HORA à frente do relógio "
+                                   f"(folga de {TRA_FOLGA_MIN} min).")
+        else:
+            nivel = "vermelho"
+            txt = ("O evento sai com esse horário e a SEFAZ recusa. Correção de produto: "
+                   "DMANMAT02-56222 (12.1.2510); conferir também o PE A140IGRV.")
+            if datas:
+                txt = (f"Data de digitação adiantada ({', '.join(_integ_ddmm(d) for d in datas[:3])}) — "
+                       f"data-base do sistema à frente? " + txt)
+        out.append(_integ_ind("tra_hora_futura", G, rot, n, nivel, txt))
+
+    # ── 4. Importador XML: revisão cadastral (B) ──────────────────────────
+    rot = "Importador em revisão cadastral (B)"
+    if not br or not br.get("ok"):
+        out.append(_integ_bloco_falhou(br, "tra_revisao", G, rot))
+    else:
+        rev = [x for x in br["linhas"] if x.get("STATUS") == "B"]
+        antiga = _tra_min_data(rev, "MAIS_ANTIGO")
+        idade = (hoje - antiga).days if antiga else None
+        outros = " · ".join(f"{x.get('STATUS') or '(vazio)'} {_integ_int(x.get('QTD'))}"
+                            for x in br["linhas"] if x.get("STATUS") != "B")
+        if not rev_n:
+            nivel, txt = "verde", "Nenhum documento aguardando revisão de cadastro."
+        else:
+            nivel = "vermelho" if (idade or 0) >= 7 else "amarelo"
+            txt = ("Parados no Importador (COMXCOL) por cadastro: produto × fornecedor, TES, pedido. "
+                   "Não viram documento e não têm o que devolver ao Transmite (ticket 30316540).")
+            if antiga:
+                txt += f" Mais antigo de {_integ_ddmm(antiga)} ({idade} dia(s))."
+        if outros:
+            txt += f" Demais status: {outros}."
+        if br.get("variante") == 2:
+            txt += " A SDS desta base não tem DS_DATAIMP/DS_EMISSA: contado sem janela de datas."
+        out.append(_integ_ind("tra_revisao", G, rot, rev_n, nivel, txt))
+
+    # ── 5. Fila parada e 6. última importação (CKOCOL) ────────────────────
+    b = blocos.get("tra_fila")
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "tra_fila", G, f"XML parados > {TRA_FILA_AMARELO} dias"))
+        out.append(_integ_bloco_falhou(b, "tra_entrada", G, "Dias sem importar XML"))
+    else:
+        ls = b["linhas"]
+        pend = [x for x in ls if x.get("STRAN") != "4"]
+        n = _tra_soma(pend)
+        p_am, p_vm = _tra_soma(pend, "PARADOS_AMARELO"), _tra_soma(pend, "PARADOS_VERMELHO")
+        nivel = "vermelho" if p_vm else "amarelo" if p_am else "verde"
+        txt = (f"{n} XML da janela ainda sem 'Classificada'; {p_am} há mais de {TRA_FILA_AMARELO} dias"
+               f" ({p_vm} há mais de {TRA_FILA_VERMELHO}).")
+        if p_am:
+            txt += (" Inclui os que o Transmite recusa por estarem em DisponivelCancelamento — "
+                    "o Protheus repete o envio a cada execução.")
+        out.append(_integ_ind("tra_fila", G, f"XML parados > {TRA_FILA_AMARELO} dias", p_am, nivel, txt))
+
+        ult = max((d for d in (_integ_data(x.get("MAIS_RECENTE")) for x in ls) if d), default=None)
+        if not ult:
+            out.append(_integ_ind("tra_entrada", G, "Dias sem importar XML", None, "vermelho",
+                                  f"Nenhum XML na CKOCOL nos últimos {TRA_JANELA} dias: SCHEDIMPTRA / "
+                                  f"COMXCOL parado, ou MV_IMPXML / MV_DTINITR impedindo a leitura."))
+        else:
+            atraso = (hoje - ult).days
+            nivel = "verde" if atraso <= 2 else "amarelo" if atraso <= 4 else "vermelho"
+            txt = f"Último XML importado em {_integ_ddmm(ult)}."
+            if nivel != "verde":
+                txt += " Confira o SCHEDIMPTRA / COMXCOL no Schedule."
+            out.append(_integ_ind("tra_entrada", G, "Dias sem importar XML", atraso, nivel, txt))
+
+    # ── 7. Classificadas fora do Importador ───────────────────────────────
+    b = blocos.get("tra_sem_monitor")
+    rot = "Lançadas fora do Importador"
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "tra_sem_monitor", G, rot))
+    else:
+        n = _tra_soma(b["linhas"])
+        out.append(_integ_ind(
+            "tra_sem_monitor", G, rot, n, "amarelo" if n else "verde",
+            "Todas as notas de terceiro com chave passaram pelo Importador." if not n else
+            "Notas com chave digitadas direto no Documento de Entrada (sem SDS). Confira no "
+            "Transmite se elas recebem 'Classificada' e a Confirmação."))
+
+    # ── 8. Parâmetros ─────────────────────────────────────────────────────
+    b = blocos.get("tra_config")
+    rot = "Parâmetros do Importador"
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "tra_params", G, rot))
+    else:
+        probs = []
+        if _integ_logico(par.get("MV_IMPXML")) is False:
+            probs.append("MV_IMPXML = .F.: o Importador não lê o XML do Transmite")
+        dt = _integ_data(par.get("MV_DTINITR"))
+        if "MV_DTINITR" not in par or not (par.get("MV_DTINITR") or "").strip():
+            probs.append("MV_DTINITR vazio")
+        elif not dt:
+            probs.append(f"MV_DTINITR = {par.get('MV_DTINITR')}: não é uma data AAAAMMDD")
+        ok_txt = (f"MV_IMPXML = {par.get('MV_IMPXML') or '—'} · "
+                  f"MV_DTINITR = {_integ_ddmm(dt) if dt else '—'}.")
+        out.append(_integ_ind("tra_params", G, rot, f"{len(par)}/{len(TRA_PARAMS)}",
+                              "amarelo" if probs else "verde",
+                              ("; ".join(probs) + ". " if probs else "") + ok_txt))
+    return out
+
+
 def _integ_health(cfg, customer, amb, timeout):
     """GET <raiz REST>/api/rh/v1/integrationcheck/healthcheck com o Basic do
     ⚙ Ambiente. A raiz sai da URL do TSCMONITREST (…/rest/tscmonit → …/rest).
@@ -7749,6 +8131,7 @@ def _integ_payload(customer, amb, n=60):
                                             "empresa", "filial", "ativo", "ultimo_teste_ok",
                                             "ultimo_teste_msg", "ultimo_teste_em",
                                             "integ_desde")}
+        amb_cfg["integ_grupos"] = list(_integ_grupos(cfg.get("integ_grupos")))
         amb_cfg["tem_token"] = bool(cfg.get("token_enc"))
         amb_cfg["tem_senha"] = bool(cfg.get("senha_enc"))
     return {"ok": True, "customer": customer, "ambiente": amb,
@@ -7799,6 +8182,34 @@ def api_integracoes_corte(customer):
                   "desde": desde.isoformat() if desde else None})
 
 
+@app.post("/api/integracoes/<customer>/grupos")
+def api_integracoes_grupos(customer):
+    """Liga/desliga os grupos monitorados na base: {"grupos": ["rh", "transmite"]}.
+    Pelo menos um. Como o corte, não coleta — vale a partir da próxima coleta.
+
+        POST /api/integracoes/TFDPHR00/grupos?ambiente=producao
+    """
+    erro, amb = _guarda_ambiente(customer, request.args.get("ambiente") or "producao",
+                                 escrita=True)
+    if erro:
+        return erro
+    if (d := deny_aba(customer, "integracoes")):
+        return d
+    if not _cfg_ambiente(customer, amb):
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
+    bruto = (request.get_json(silent=True) or {}).get("grupos")
+    if not isinstance(bruto, list) or not bruto:
+        return _err(400, "Informe ao menos um grupo: " + ", ".join(INTEG_GRUPOS_BASE) + ".")
+    pedidos = {str(x).strip().lower() for x in bruto}
+    if pedidos - set(INTEG_GRUPOS_BASE):
+        return _err(400, "Grupo desconhecido: " + ", ".join(sorted(pedidos - set(INTEG_GRUPOS_BASE)))
+                    + ". Use " + ", ".join(INTEG_GRUPOS_BASE) + ".")
+    grupos = list(_integ_grupos(list(pedidos)))
+    execute("""update cockpit.protheus_ambientes set integ_grupos=%s, updated_by=%s, updated_at=now()
+                where customer=%s and ambiente=%s""", (grupos, current_user(), customer, amb))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "grupos": grupos})
+
+
 @app.get("/api/integracoes/<customer>/scripts")
 def api_integracoes_scripts(customer):
     """Os SQL exatamente como a coleta manda — para rodar no console TCloud
@@ -7810,13 +8221,15 @@ def api_integracoes_scripts(customer):
         return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
     cfg = _cfg_ambiente(customer, amb) or {}
     suf = (cfg.get("sufixo") or "").strip()
+    grupos = _integ_grupos(cfg.get("integ_grupos"))
     return _json({"ok": True, "customer": customer, "ambiente": amb,
                   "sufixo": suf or None, "sufixo_usado": suf or "010",
-                  "desde": cfg.get("integ_desde"),
+                  "desde": cfg.get("integ_desde"), "grupos": list(grupos),
                   "scripts": [{k: s[k] for k in ("id", "rotulo", "tabela", "sql")}
                               for s in _integ_scripts(suf or "010", _cp_hoje(),
                                                       _integ_desde(cfg.get("integ_desde")),
-                                                      cfg.get("banco"))]})
+                                                      cfg.get("banco"), grupos,
+                                                      datetime.now(TZ_SP))]})
 
 
 @app.post("/api/integracoes/<customer>/coletar")
@@ -7840,7 +8253,7 @@ def api_integracoes_coletar(customer):
     suf = (cfg.get("sufixo") or "").strip()
     if not suf:
         return _err(409, "Informe o sufixo das tabelas no ⚙ Ambiente (ex.: 010) — "
-                         "as filas RJP/RUM/RJE são lidas com ele.")
+                         "as tabelas das integrações (RJP/RUM/RJE, SF1/SDS) são lidas com ele.")
 
     ini = time.time()
     try:
@@ -7855,7 +8268,8 @@ def api_integracoes_coletar(customer):
     blocos, ambiente_srv, linhas_tot, conectou = {}, None, 0, False
 
     desde = _integ_desde(cfg.get("integ_desde"))
-    scripts = _integ_scripts(suf, hoje, desde, cfg.get("banco"))
+    grupos = _integ_grupos(cfg.get("integ_grupos"))
+    scripts = _integ_scripts(suf, hoje, desde, cfg.get("banco"), grupos, datetime.now(TZ_SP))
     # Ordem: resumos → healthcheck → detalhes. Se o tempo acabar, falta a
     # lista, não o número.
     resumos = [s for s in scripts if not s.get("detalhe")]
@@ -7929,9 +8343,13 @@ def api_integracoes_coletar(customer):
         _log_coleta(customer, amb, "integracoes", ini, False, erro=msg)
         return _err(502, msg)
 
-    health = (_integ_health(cfg, customer, amb, prazo - time.time())
-              if prazo - time.time() >= INTEG_TEMPO_MIN else
-              {"ok": False, "mensagem": "Não consultado: o tempo da coleta acabou."})
+    # O healthcheck é do RH (Quírons): base sem o grupo RH não paga a chamada.
+    if "rh" not in grupos:
+        health = {"ok": False, "mensagem": "Grupo RH desligado nesta base."}
+    elif prazo - time.time() >= INTEG_TEMPO_MIN:
+        health = _integ_health(cfg, customer, amb, prazo - time.time())
+    else:
+        health = {"ok": False, "mensagem": "Não consultado: o tempo da coleta acabou."}
     for s in detalhes:
         roda(s)
 
@@ -7944,11 +8362,11 @@ def api_integracoes_coletar(customer):
     if bm and bm.get("ok"):
         bm["resumo"] = _integ_motivos(bm["linhas"])
         bm["linhas"] = []                  # só o resumo vai para o histórico
-    inds = _integ_indicadores(blocos, health, hoje)
+    inds = _integ_indicadores(blocos, health, hoje, grupos)
     nivel = _integ_pior(i["nivel"] for i in inds)
     # O corte usado fica GRAVADO com a coleta: trocar o corte depois não pode
     # fazer um número antigo parecer medido com a regra nova.
-    blocos["_meta"] = {"desde": desde.isoformat() if desde else None}
+    blocos["_meta"] = {"desde": desde.isoformat() if desde else None, "grupos": list(grupos)}
     duracao = int((time.time() - ini) * 1000)
     q("""insert into cockpit.integ_medicoes
            (customer, ambiente, duracao_ms, nivel, indicadores, blocos, health,

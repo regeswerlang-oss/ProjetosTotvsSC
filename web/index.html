@@ -787,6 +787,11 @@
               A partir de
               <input id="int-desde" type="date" class="px-2 py-1 border border-slate-300 rounded-md bg-white text-sm text-slate-800">
             </label>
+            <span id="int-grupos" class="flex items-center gap-2 text-xs text-slate-500" title="O que esta base monitora. Vale a partir da próxima coleta.">
+              Monitorar
+              <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="rh"> RH</label>
+              <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="transmite"> TOTVS Transmite</label>
+            </span>
             <button id="int-coletar-topo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde disabled:opacity-50">⚡ Coletar agora</button>
             <button id="int-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
           </div>
@@ -9366,19 +9371,22 @@ $('#est-comparar').addEventListener('click', () => { setTab('compara'); rodaComp
 $('#btn-acessos').addEventListener('click', abreAcessos);
 
 // ============================================================================
-//  ABA INTEGRAÇÕES — filas das integrações de RH da base do cliente
+//  ABA INTEGRAÇÕES — filas das integrações da base do cliente
 // ----------------------------------------------------------------------------
 //  A pergunta é "as integrações estão rodando, quanto atrasaram e o que
 //  falhou?". Três parceiros, três filas no Protheus:
 //    Quírons  → RJP (fila) + RU7 (erros) + healthcheck do GPEM926
 //    Ahgora   → RUM (status 0/3/4/6)
 //    eSocial  → RJE, eventos S-2210/2220/2240 que o Quírons manda
+//  Grupo Transmite (Compras, 16/10/2026): XML de entrada CKOCOL → SDS → SF1
+//  e a volta "Classificada" que libera a Confirmação da Operação na SEFAZ.
+//  Cada base liga os grupos que usa (☐ RH ☐ TOTVS Transmite na barra).
 //  Abrir a aba LÊ O SUPABASE (última coleta + série). A base do cliente só é
 //  tocada no ⚡ Coletar agora — cada coleta consome licença no REST.
 // ============================================================================
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
-                abertas: new Set(['quirons', 'ahgora', 'esocial']) };
+                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite']) };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
 const INT_NIVEL = {
@@ -9391,7 +9399,16 @@ const INT_GRUPOS = [
   { id: 'quirons', rot: 'Quírons (NG)', sub: 'cadastros de RH enviados pelo JOB GPEM923 · fila RJP · erros RU7' },
   { id: 'ahgora',  rot: 'Ahgora PontoWeb', sub: 'funcionários e afastamentos · JOB GPEM943 / tela GPEM929 · fila RUM' },
   { id: 'esocial', rot: 'eSocial SST (Middleware)', sub: 'S-2210, S-2220 e S-2240 vindos do Quírons · fila RJE' },
+  { id: 'transmite', rot: 'TOTVS Transmite', sub: 'XML de entrada · Importador (COMXCOL / IMPTRATOOL) · CKOCOL, SDS e SF1' },
 ];
+// Grupos da base (⚙ protheus_ambientes.integ_grupos). Nulo = só RH.
+const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'] };
+const intGruposCfg = () => integ.dados?.ambiente_cfg?.integ_grupos || ['rh'];
+// Transmite: só o 4 é documentado (Classificada); o resto aparece cru.
+const INT_TRA_STRAN = { '4': 'Classificada' };
+const INT_TRA_DS = { B: 'revisão cadastral' };
+const INT_TRA_EDI = { '109': 'NF-e', '214': 'CT-e' };
+const INT_TRA_PRAZO = 90, INT_TRA_AMARELO = 60, INT_TRA_VERMELHO = 80;   // = TRA_PRAZO* (api)
 const INT_TIPO_RUM = { '1': 'Funcionário', '2': 'Afastamento' };
 const INT_STATUS_RUM = { '0': 'Não integrado', '3': 'Inconsistência', '4': 'Aguardando retorno', '6': 'Integrado' };
 const INT_OPER = { I: 'Inclusão', A: 'Alteração', D: 'Alteração', E: 'Exclusão' };
@@ -9462,6 +9479,8 @@ const INT_HIST = [
   ['quirons_fila', 'Fila Quírons'], ['quirons_erros', 'Erros Quírons'],
   ['ahgora_inconsistencias', 'Ahgora incons.'], ['ahgora_aguardando', 'Ahgora ret. perdido'],
   ['ahgora_nao_enviados', 'Ahgora não env.'], ['sst_pendentes', 'SST pend.'],
+  ['tra_sem_retorno', 'Transm. sem retorno'], ['tra_prazo', 'Transm. prazo'],
+  ['tra_hora_futura', 'Hora futura'], ['tra_revisao', 'Revisão (B)'],
 ];
 
 const intData = (s) => {
@@ -9503,8 +9522,11 @@ async function coletaIntegracoes() {
   if (!integ.customer) { alert('Abra um projeto antes de coletar.'); return; }
   if (integ.coletando) return;
   const base = (AMB[integ.ambiente] || AMB.producao).label;
-  if (!confirm(`Coletar agora na ${base}?\n\nSão 9 consultas só de leitura pela REST da base ` +
-               `(TSCMONITREST) e o healthcheck da Quírons. Cada chamada usa licença no REST.`)) return;
+  const g = intGruposCfg();
+  const oque = [g.includes('rh') ? 'filas de RH + healthcheck da Quírons' : '',
+                g.includes('transmite') ? 'TOTVS Transmite (CKOCOL, SDS, SF1)' : ''].filter(Boolean).join(' e ');
+  if (!confirm(`Coletar agora na ${base}?\n\nConsultas só de leitura pela REST da base ` +
+               `(TSCMONITREST): ${oque}. Cada chamada usa licença no REST.`)) return;
   integ.coletando = true; integ.erroColeta = null; renderIntegracoes();
   try {
     integ.dados = await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/coletar?ambiente=${integ.ambiente}`,
@@ -9524,7 +9546,7 @@ function intEstado(d) {
   if (integ.coletando) {
     return barra('border-sky-200 bg-sky-50 text-sky-900',
       `<span class="inline-block animate-spin mr-2">⟳</span><b>Coletando na base…</b>
-       9 consultas de leitura e o healthcheck. Pode levar até 50 s.`);
+       Consultas só de leitura${intGruposCfg().includes('rh') ? ' e o healthcheck' : ''}. Pode levar até 50 s.`);
   }
   const cfg = d?.ambiente_cfg;
   const base = (AMB[integ.ambiente] || AMB.producao).label;
@@ -9541,7 +9563,7 @@ function intEstado(d) {
   } else if (!cfg.sufixo) {
     partes.push(barra('border-amber-200 bg-amber-50 text-amber-900',
       `<b>Falta o sufixo das tabelas</b> (ex.: 010) no cadastro da ${base}.${btnAmb}`));
-  } else if (!cfg.tem_senha) {
+  } else if (!cfg.tem_senha && intGruposCfg().includes('rh')) {
     partes.push(barra('border-amber-200 bg-amber-50 text-amber-900',
       `Sem usuário/senha no ⚙ Ambiente: as filas são lidas, mas o healthcheck da Quírons exige Basic.${btnAmb}`));
   }
@@ -9554,6 +9576,14 @@ function intEstado(d) {
     partes.push(barra('border-amber-200 bg-amber-50 text-amber-900',
       `<b>Corte alterado:</b> a última coleta usou ${corteUsado ? 'movimentos a partir de ' + intData(corteUsado.replace(/-/g, '')) : 'todo o histórico'};
        a base agora está com ${corteBase ? 'a partir de ' + intData(corteBase.replace(/-/g, '')) : 'todo o histórico'}.
+       Clique em <b>⚡ Coletar agora</b> para aplicar.`));
+  }
+  // Grupos: os ligados na BASE × os que a última coleta LEU.
+  const gBase = intGruposCfg().slice().sort().join(',');
+  const gUsado = u ? (u.blocos?._meta?.grupos || ['rh']).slice().sort().join(',') : gBase;
+  if (u && gBase !== gUsado) {
+    partes.push(barra('border-amber-200 bg-amber-50 text-amber-900',
+      `<b>Grupos alterados:</b> a última coleta leu ${escapeHtml(gUsado)}; a base agora monitora ${escapeHtml(gBase)}.
        Clique em <b>⚡ Coletar agora</b> para aplicar.`));
   }
   if (!u) {
@@ -9646,6 +9676,11 @@ function renderIntegracoes() {
     inpDesde.value = (integ.dados?.ambiente_cfg?.integ_desde || '').slice(0, 10);
   }
   if (inpDesde) inpDesde.disabled = !integ.dados?.ambiente_cfg || integ.coletando;
+  const gCfg = intGruposCfg();
+  $$('#int-grupos [data-int-grupo]').forEach(cb => {
+    cb.checked = gCfg.includes(cb.dataset.intGrupo);
+    cb.disabled = !integ.dados?.ambiente_cfg || integ.coletando;
+  });
   if (!integ.customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver as integrações do cliente.'); return; }
   if (integ.carregando && !integ.dados) {
     box.innerHTML = `<div class="bg-white rounded-lg border border-slate-200 p-10 text-center text-slate-500">Lendo a última coleta…</div>`;
@@ -9672,6 +9707,8 @@ function renderIntegracoes() {
       html += `<div class="mb-4"><p class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">${escapeHtml(g.rot)}</p>
         <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">${cs.map(intCartao).join('')}</div></div>`;
     }
+    const gU = u.blocos?._meta?.grupos || ['rh'];
+    if (gU.includes('rh')) {
     html += intCaixa('quirons', 'Quírons — fila, envios e erros', INT_GRUPOS[0].sub, nivelGrupo('quirons'), () =>
       intSub('Fila pendente por tabela', B.rjp_fila, (ls) => intTabela([
         { k: 'FILIAL', rot: 'Filial' }, { k: 'TABELA', rot: 'Tabela' },
@@ -9732,12 +9769,15 @@ function renderIntegracoes() {
                 : `<p class="text-xs text-slate-500">${escapeHtml(h.mensagem || 'Não consultado.')}</p>`}
          ${h.url ? `<p class="text-xs text-slate-400 mt-1">${escapeHtml(h.url)}</p>` : ''}</div>`;
     });
+    }
+    if (gU.includes('transmite')) html += intCaixaTransmite(B, d.hoje, nivelGrupo('transmite'));
   }
   const serie = (d.serie || []).slice().reverse();
   if (serie.length || (d.coletas || []).length) {
     html += intCaixa('historico', 'Histórico de coletas', `${serie.length} coleta(s) gravada(s) nesta base`, null, () =>
       intTabela([{ rot: 'Coleta', fmt: s => intQuando(s.coletado_em) }, { rot: 'Situação', fmt: s => intPill(s.nivel) },
-        ...INT_HIST.map(([ch, rot]) => ({ rot, dir: 1, fmt: s => {
+        ...INT_HIST.filter(([ch]) => serie.some(s => (s.indicadores || []).some(x => x.chave === ch)))
+          .map(([ch, rot]) => ({ rot, dir: 1, fmt: s => {
           const i = (s.indicadores || []).find(x => x.chave === ch);
           return i && i.valor !== null && i.valor !== undefined ? escapeHtml(String(i.valor)) : '—';
         } }))], serie, 'Nenhuma coleta gravada.') +
@@ -9750,6 +9790,82 @@ function renderIntegracoes() {
   }
   box.innerHTML = html;
   ligaIntegracoes();
+}
+
+/** Dias entre AAAAMMDD e o "hoje" do servidor (fuso de Florianópolis). */
+function intDias(aaaammdd, hoje) {
+  const t = String(aaaammdd || '').trim();
+  if (!/^\d{8}$/.test(t) || !hoje) return null;
+  const a = Date.UTC(+t.slice(0, 4), +t.slice(4, 6) - 1, +t.slice(6, 8));
+  const [y, m, dd] = String(hoje).slice(0, 10).split('-').map(Number);
+  return Math.round((Date.UTC(y, m - 1, dd) - a) / 864e5);
+}
+/** Prazo do evento a partir da emissão: texto + ícone, nunca só a cor. */
+function intPrazo(emissao, hoje) {
+  const n = intDias(emissao, hoje);
+  if (n === null) return '—';
+  const nivel = n > INT_TRA_PRAZO || n >= INT_TRA_VERMELHO ? 'vermelho' : n >= INT_TRA_AMARELO ? 'amarelo' : 'verde';
+  const txt = n > INT_TRA_PRAZO ? `${n} d · vencido` : `${n} d · faltam ${INT_TRA_PRAZO - n}`;
+  return `<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${INT_NIVEL[nivel].pill}">${INT_NIVEL[nivel].ico} ${txt}</span>`;
+}
+const intNw = (t) => `<span class="whitespace-nowrap">${escapeHtml(t)}</span>`;
+const intStran = (v) => intNw(v ? `${v} · ${INT_TRA_STRAN[v] || 'não classificada'}` : '(vazio) · não classificada');
+const intEdi = (v) => intNw(v ? `${v}${INT_TRA_EDI[v] ? ' · ' + INT_TRA_EDI[v] : ''}` : '—');
+const intChave = (v) => `<span class="font-mono text-[11px] text-slate-500 select-all">${escapeHtml(v || '')}</span>`;
+
+function intCaixaTransmite(B, hoje, nivel) {
+  return intCaixa('transmite', 'TOTVS Transmite — classificação e evento na SEFAZ', INT_GRUPOS[3].sub, nivel, () =>
+    intSub('Classificadas no Protheus sem "Classificada" no Transmite', B.tra_sem_retorno_lista, (ls) => intTabela([
+      { k: 'FILIAL', rot: 'Filial' }, { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`) },
+      { rot: 'Fornecedor', fmt: l => escapeHtml(`${l.FORNECEDOR}-${l.LOJA}`) },
+      { rot: 'Emissão', fmt: l => intData(l.EMISSAO) }, { rot: 'Prazo do evento', fmt: l => intPrazo(l.EMISSAO, hoje) },
+      { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}` },
+      { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) }, { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) },
+      { rot: 'Importador', fmt: l => escapeHtml(l.DS_STATUS ? `${l.DS_STATUS}${INT_TRA_DS[l.DS_STATUS] ? ' · ' + INT_TRA_DS[l.DS_STATUS] : ''}` : 'sem SDS') },
+      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Toda nota classificada já voltou ao Transmite.')) +
+    intSub('Sem retorno por filial', B.tra_sem_retorno, (ls) => intTabela([
+      { k: 'FILIAL', rot: 'Filial' }, { k: 'QTD', rot: 'Notas', dir: 1 },
+      { rot: 'Digitada mais antiga', fmt: l => intData(l.DIGIT_MAIS_ANTIGA) },
+      { rot: 'Emissão mais antiga', fmt: l => intData(l.EMISSAO_MAIS_ANTIGA) },
+      { k: 'ATENCAO', rot: `${INT_TRA_AMARELO}–${INT_TRA_VERMELHO} d`, dir: 1 },
+      { k: 'CRITICAS', rot: `${INT_TRA_VERMELHO}–${INT_TRA_PRAZO} d`, dir: 1 },
+      { k: 'VENCIDAS', rot: `> ${INT_TRA_PRAZO} d`, dir: 1 }], ls, 'Nada pendente.')) +
+    intSub('Data/hora de digitação no futuro', B.tra_futuras_lista, (ls) => intTabela([
+      { k: 'FILIAL', rot: 'Filial' }, { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`) },
+      { k: 'FORNECEDOR', rot: 'Fornecedor' }, { rot: 'Emissão', fmt: l => intData(l.EMISSAO) },
+      { rot: 'Digitação gravada', fmt: l => `<b>${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}</b>` },
+      { rot: 'Classificada', fmt: l => escapeHtml(l.STATUS ? 'sim' : 'pré-nota') },
+      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhuma nota com data/hora à frente do relógio.')) +
+    intSub('Importador XML por status (SDS)', B.tra_revisao, (ls) => intTabela([
+      { rot: 'Status', fmt: l => escapeHtml(`${l.STATUS || '(vazio)'}${INT_TRA_DS[l.STATUS] ? ' · ' + INT_TRA_DS[l.STATUS] : ''}`) },
+      { k: 'QTD', rot: 'Documentos', dir: 1 }, { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) },
+      { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }], ls, 'Nenhum documento no Importador.')) +
+    intSub('Em revisão cadastral (B)', B.tra_revisao_lista, (ls) => intTabela([
+      { k: 'FILIAL', rot: 'Filial' }, { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`) },
+      ...(ls.some(l => 'FORNECEDOR' in l) ? [{ k: 'FORNECEDOR', rot: 'Fornecedor' },
+        { rot: 'Emissão', fmt: l => intData(l.EMISSAO) }, { rot: 'Prazo do evento', fmt: l => intPrazo(l.EMISSAO, hoje) },
+        { rot: 'Importado', fmt: l => intData(l.DT_IMP) }] : []),
+      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhum documento em revisão.')) +
+    intSub('XML importados por situação (CKOCOL)', B.tra_fila, (ls) => intTabela([
+      { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) }, { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) },
+      { k: 'QTD', rot: 'XML', dir: 1 }, { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) },
+      { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }], ls, 'Nenhum XML importado na janela.')) +
+    intSub('XML há mais de 30 dias sem "Classificada"', B.tra_fila_antigos, (ls) => intTabela([
+      { rot: 'Importado', fmt: l => intData(l.DT_IMP) }, { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) },
+      { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) }, { k: 'DOC', rot: 'Documento' },
+      { rot: 'Na SF1', fmt: l => escapeHtml(l.FILIAL_SF1 ? `filial ${l.FILIAL_SF1}${l.F1_STATUS ? ' · classificada' : ' · pré-nota'}` : 'não lançada') },
+      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhum XML parado.')) +
+    intSub('Lançadas fora do Importador (SF1 sem SDS)', B.tra_sem_monitor, (ls) => intTabela([
+      { k: 'FILIAL', rot: 'Filial' }, { k: 'ESPECIE', rot: 'Espécie' }, { k: 'QTD', rot: 'Notas', dir: 1 },
+      { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGO) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
+      ls, 'Todas passaram pelo Importador.')) +
+    intSub('Parâmetros do Importador (SX6)', B.tra_config, (ls) => intTabela([
+      { k: 'PARAMETRO', rot: 'Parâmetro' }, { rot: 'Filial', fmt: l => escapeHtml(l.FILIAL || '(todas)') },
+      { k: 'CONTEUDO', rot: 'Conteúdo' }], ls, 'Nenhum dos parâmetros existe nesta base.')) +
+    `<p class="text-xs text-slate-500">Caminho: o <b>SCHEDIMPTRA</b>/<b>COMXCOL</b> importa o XML (CKOCOL + SDS), o usuário
+       classifica (SF1) e o <b>SCHEDUPDTRA</b> grava <b>CKO_STRAN = 4</b> e devolve "Classificada" ao Transmite, que
+       manifesta a Confirmação da Operação com a data/hora da SF1. Prazo contado da emissão (${INT_TRA_PRAZO} dias).
+       A ciência/confirmação em si fica no portal do Transmite — o painel lê só o lado Protheus.</p>`);
 }
 
 function ligaIntegracoes() {
@@ -9808,6 +9924,16 @@ $('#int-desde').addEventListener('change', async () => {
   } catch (e) { alert('Não consegui gravar o corte: ' + e.message); }
   carregaIntegracoes();
 });
+$$('#int-grupos [data-int-grupo]').forEach(cb => cb.addEventListener('change', async () => {
+  const grupos = $$('#int-grupos [data-int-grupo]').filter(x => x.checked).map(x => x.dataset.intGrupo);
+  if (!grupos.length) { cb.checked = true; alert('Deixe ao menos um grupo ligado.'); return; }
+  try {
+    await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/grupos?ambiente=${integ.ambiente}`,
+              { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ grupos }) });
+  } catch (e) { alert('Não consegui gravar os grupos: ' + e.message); }
+  carregaIntegracoes();
+}));
 $('#int-ambiente-sel').addEventListener('change', () => {
   integ.ambiente = $('#int-ambiente-sel').value; integ.dados = null; integ.erroColeta = null;
   carregaIntegracoes();

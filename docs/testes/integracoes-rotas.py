@@ -262,5 +262,90 @@ d = cli.get("/api/integracoes/TFEHM600/scripts?ambiente=producao").get_json()
 confere("scripts sem cadastro usam 010", d["sufixo_usado"] == "010" and len(d["scripts"]) == 10)
 confere("scripts sem ;", all(not s["sql"].rstrip().endswith(";") for s in d["scripts"]))
 
+# ── 8. grupo TOTVS Transmite (16/10/2026) ───────────────────────────────────
+# Base de Compras (Rio Deserto): só o grupo transmite. A SDS fingida não tem
+# DS_DATAIMP — a 1ª variante da revisão falha e a 2ª (DS_EMISSA) vale.
+TRA_CSV = {
+    "cfg": "PARAMETRO;FILIAL;CONTEUDO\nMV_IMPXML;;.T.\nMV_DTINITR;;20260501\nMV_APITRAN;;(preenchido)\n",
+    "fila": f"CODEDI;STRAN;QTD;MAIS_ANTIGO;MAIS_RECENTE;PARADOS_AMARELO;PARADOS_VERMELHO\n109;4;300;20260701;{HOJE};250;200\n109;2;24;20260922;{HOJE};24;0\n",
+    "sem_ret": "FILIAL;QTD;DIGIT_MAIS_ANTIGA;EMISSAO_MAIS_ANTIGA;VENCIDAS;CRITICAS;ATENCAO\n0101;3;20261001;20260801;0;0;3\n",
+    "fut": "FILIAL;DTDIGIT;QTD;PRIMEIRA;ULTIMA\n",
+    "rev": "STATUS;QTD;MAIS_ANTIGO;MAIS_RECENTE\nB;2;20261010;20261012\nP;290;20260701;20261012\n",
+    "mon": "FILIAL;ESPECIE;QTD;MAIS_ANTIGO;MAIS_RECENTE\n",
+    "lista": "FILIAL;DOC;SERIE;FORNECEDOR;LOJA;EMISSAO;DTDIGIT;HORA;STRAN;CODEDI;DT_IMP;DS_STATUS;CHAVE\n"
+             "0101;000013687;1;F00001;01;20260801;20261001;10:00:00;2;109;20260802;B;42261027968581000106550010000136871530601731\n",
+    "vazio": "X\n",
+}
+
+
+def fake_post_tra(url, json=None, headers=None, auth=None, params=None, timeout=None, verify=None):
+    sql = json["sql"]
+    if not any(t in sql for t in ("CKOCOL", "SF1010", "SDS010", "MV_IMPXML")):
+        return fake_post(url, json, headers, auth, params, timeout, verify)
+    CHAMADAS.append({"url": url, "sql": sql, "token": headers.get("X-TSC-Token"),
+                     "tipo": json["tipo"], "auth": auth, "limite": json["limite"]})
+    assert not sql.rstrip().endswith(";")
+    if "DS_DATAIMP" in sql:
+        return R(200, {"ok": False, "erro": 'ORA-00904: "DS_DATAIMP": invalid identifier'})
+    k = ("cfg" if "MV_IMPXML" in sql else
+         "lista" if "INNER JOIN CKOCOL" in sql else
+         "sem_ret" if "EXISTS (SELECT 1 FROM CKOCOL" in sql else
+         "fila" if "FROM CKOCOL WHERE" in sql else
+         "rev" if "FROM SDS010 WHERE" in sql and "COUNT(*)" in sql else
+         "mon" if "NOT EXISTS" in sql else
+         "fut" if "F1_DTDIGIT >" in sql and "COUNT(*)" in sql else "vazio")
+    return R(200, {"ok": True, "csv": TRA_CSV[k], "linhas": TRA_CSV[k].count("\n") - 1,
+                   "truncado": False, "environment": "RDESERTO_PROD"})
+
+
+m.requests.post = fake_post_tra
+aad_rd = m._aad("TFDPHR00", "producao")          # credencial cifrada amarra cliente+base
+CFG["cfg"] = dict(BASE_CFG, customer="TFDPHR00", integ_grupos=["transmite"], integ_desde=None,
+                  senha_enc=m._cifra("s3nha", aad_rd), token_enc=m._cifra("tok123", aad_rd))
+CHAMADAS.clear()
+DB["medicoes"].clear()
+r = cli.post("/api/integracoes/TFDPHR00/coletar?ambiente=producao")
+d = r.get_json()
+confere("transmite: coleta 200", r.status_code == 200 and d["ok"])
+q_tra = [c for c in CHAMADAS if "/query" in c["url"]]
+confere("transmite: nenhuma consulta de RH", not any(t in c["sql"] for c in q_tra
+                                                  for t in ("RJP010", "RUM010", "RU7010", "RJE010")))
+confere("transmite: sem healthcheck da Quírons", not any("healthcheck" in c["url"] for c in CHAMADAS))
+confere("transmite: 12 consultas (10 blocos + 2 variantes da SDS)", len(q_tra) == 12)
+ult = d["ultima"]
+inds = {i["chave"]: i for i in ult["indicadores"]}
+confere("transmite: só indicadores do grupo", set(i["grupo"] for i in ult["indicadores"]) == {"transmite"})
+confere("transmite: revisão pela variante DS_EMISSA", ult["blocos"]["tra_revisao"]["variante"] == 1
+        and inds["tra_revisao"]["valor"] == 2)
+confere("transmite: sem retorno 3, amarelo de prazo", inds["tra_sem_retorno"]["valor"] == 3
+        and inds["tra_prazo"]["nivel"] == "amarelo")
+confere("transmite: fila parada 24", inds["tra_fila"]["valor"] == 24)
+confere("transmite: grupos gravados na coleta", ult["blocos"]["_meta"]["grupos"] == ["transmite"])
+confere("transmite: cfg devolve grupos", d["ambiente_cfg"]["integ_grupos"] == ["transmite"])
+confere("transmite: detalhe com a nota", ult["blocos"]["tra_sem_retorno_lista"]["linhas"][0]["DOC"] == "000013687")
+d = cli.get("/api/integracoes/TFDPHR00/scripts?ambiente=producao").get_json()
+confere("transmite: scripts do grupo", d["grupos"] == ["transmite"] and len(d["scripts"]) == 10
+        and all(s["id"].startswith("tra_") for s in d["scripts"]))
+
+# rota /grupos
+UPG = []
+def exec_grupos(sql, params=None):
+    if "set integ_grupos" in sql:
+        UPG.append(params); CFG["cfg"] = dict(CFG["cfg"], integ_grupos=params[0]); return
+    return _exec_orig(sql, params)
+m.execute = exec_grupos
+r = cli.post("/api/integracoes/TFDPHR00/grupos?ambiente=producao", json={"grupos": ["transmite", "RH"]})
+confere("grupos: grava na ordem fixa", r.status_code == 200 and r.get_json()["grupos"] == ["rh", "transmite"]
+        and UPG[-1][0] == ["rh", "transmite"])
+r = cli.post("/api/integracoes/TFDPHR00/grupos?ambiente=producao", json={"grupos": []})
+confere("grupos: vazio recusado", r.status_code == 400)
+r = cli.post("/api/integracoes/TFDPHR00/grupos?ambiente=producao", json={"grupos": ["fiscal"]})
+confere("grupos: desconhecido recusado", r.status_code == 400 and "fiscal" in r.get_json()["error"])
+CFG["cfg"] = None
+r = cli.post("/api/integracoes/TFDPHR00/grupos?ambiente=producao", json={"grupos": ["rh"]})
+confere("grupos: sem ambiente = 404", r.status_code == 404)
+m.execute = _exec_orig
+m.requests.post = fake_post
+
 print(f"{ok} asserções OK, {falhou} falha(s)")
 raise SystemExit(1 if falhou else 0)
