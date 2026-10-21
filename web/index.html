@@ -6400,6 +6400,39 @@ function empFaixa(matriz, t) {
   return misto ? `${t.modulo} · ${tipo}` : t.modulo;
 }
 
+/** Agrupa a SM0 pelo que o LEIAUTE diz que é a chave de gestão.
+ *  Sem unidade de negócio, uma linha por empresa. Com UU no leiaute (Cresol:
+ *  EEUUFFFF), uma linha por EMPRESA + UNIDADE — os caracteres de empresa e os
+ *  dois de unidade do M0_CODFIL (0126 = empresa 01, unidade 26). É nesse nível
+ *  que o compartilhamento E·E·C é decidido: listar 300 filiais soltas numa
+ *  célula só esconde a cooperativa, que é o que o cliente reconhece. */
+function sm0Grupos(sm0) {
+  const grupos = new Map();
+  sm0.forEach(r => {
+    const lei = (r.leiaute || '').trim().toUpperCase();
+    const ne = (lei.match(/E/g) || []).length, nu = (lei.match(/U/g) || []).length;
+    const fil = (r.filial || '').trim();
+    const un = nu && fil.length >= ne + nu ? fil.slice(0, ne + nu) : null;
+    const k = `${r.empresa}|${un || ''}`;
+    if (!grupos.has(k)) grupos.set(k, { empresa: r.empresa, unidade: un, cod_unidade: un ? un.slice(ne) : null,
+                                         r0: r, filiais: [] });
+    grupos.get(k).filiais.push(r);
+  });
+  return [...grupos.values()].sort((a, b) => String(a.empresa).localeCompare(String(b.empresa))
+    || String(a.unidade || '').localeCompare(String(b.unidade || '')));
+}
+
+/** Chips das filiais. Muitas (cooperativa com dezenas de agências) recolhem
+ *  num <details> com a contagem — a linha continua legível fechada. */
+function sm0FiliaisHtml(fs) {
+  const chips = fs.map(f => `<span class="inline-block mr-1 mb-1 px-1.5 py-0.5 rounded bg-slate-100"
+      title="${escapeHtml(f.cnpj || '')}"><b class="font-mono">${escapeHtml(f.filial)}</b> ${escapeHtml(f.nome_filial || '')}</span>`).join('');
+  if (fs.length <= 12) return chips;
+  return `<details><summary class="cursor-pointer text-slate-600">${fs.length} filiais
+      <span class="text-slate-400">· ${escapeHtml(fs[0].filial)} … ${escapeHtml(fs[fs.length - 1].filial)}</span></summary>
+    <div class="mt-1">${chips}</div></details>`;
+}
+
 function empSM0Html(sm0) {
   if (!sm0.length) {
     return `<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
@@ -6415,17 +6448,27 @@ function empSM0Html(sm0) {
   const porEmp = new Map();
   sm0.forEach(r => { if (!porEmp.has(r.empresa)) porEmp.set(r.empresa, []); porEmp.get(r.empresa).push(r); });
   const total = LISTA_EMP_ESCOPO();
-  const linhas = [...porEmp.entries()].map(([e, fs]) => {
-    const r0 = fs[0];
-    return `<tr class="border-t border-slate-100 align-top">
+  const grupos = sm0Grupos(sm0);
+  const comUn = grupos.some(g => g.unidade);
+  const nUn = grupos.filter(g => g.unidade).length;
+  // Dicionário e tabelas do escopo são do GRUPO (SX2 por M0_CODIGO): aparecem uma
+  // vez por empresa, em rowspan, e não repetidos em cada unidade.
+  const span = {};
+  grupos.forEach(g => { span[g.empresa] = (span[g.empresa] || 0) + 1; });
+  const vistos = new Set();
+  const linhas = grupos.map(g => {
+    const r0 = g.r0, e = g.empresa, prim = !vistos.has(e);
+    vistos.add(e);
+    return `<tr class="border-t border-slate-100 align-top" data-sm0-grupo="${escapeHtml(e + '|' + (g.unidade || ''))}">
       <td class="px-3 py-2 font-mono font-semibold">${escapeHtml(e)}</td>
+      ${comUn ? `<td class="px-3 py-2 font-mono font-semibold whitespace-nowrap">${g.unidade
+        ? `${escapeHtml(g.unidade)} <span class="text-[10px] text-slate-400 font-normal">un. ${escapeHtml(g.cod_unidade)}</span>` : '—'}</td>` : ''}
       <td class="px-3 py-2">${escapeHtml(r0.nome_empresa || '')}</td>
       <td class="px-3 py-2 font-mono text-xs">${escapeHtml(r0.leiaute || '—')}${r0.sizefil ? ` <span class="text-slate-400">(${r0.sizefil})</span>` : ''}</td>
-      <td class="px-3 py-2 text-xs">${fs.map(f => `<span class="inline-block mr-1 mb-1 px-1.5 py-0.5 rounded bg-slate-100"
-            title="${escapeHtml(f.cnpj || '')}"><b class="font-mono">${escapeHtml(f.filial)}</b> ${escapeHtml(f.nome_filial || '')}</span>`).join('')}</td>
-      <td class="px-3 py-2 text-xs">${r0.sx2 ? 'SX2' + escapeHtml(e) + '0' : '<span class="text-rose-700 font-semibold">sem SX2</span>'}</td>
-      <td class="px-3 py-2 text-xs"><b>${r0.qtd_tabelas ?? '—'}</b>/${total}
-        <div class="text-[10px] text-slate-400 font-mono">${escapeHtml(r0.tabelas || '')}</div></td>
+      <td class="px-3 py-2 text-xs">${sm0FiliaisHtml(g.filiais)}</td>
+      ${prim ? `<td class="px-3 py-2 text-xs" rowspan="${span[e]}">${r0.sx2 ? 'SX2' + escapeHtml(e) + '0' : '<span class="text-rose-700 font-semibold">sem SX2</span>'}</td>
+      <td class="px-3 py-2 text-xs" rowspan="${span[e]}"><b>${r0.qtd_tabelas ?? '—'}</b>/${total}
+        <div class="text-[10px] text-slate-400 font-mono">${escapeHtml(r0.tabelas || '')}</div></td>` : ''}
     </tr>`;
   }).join('');
   const r0 = sm0[0];
@@ -6439,12 +6482,12 @@ function empSM0Html(sm0) {
   return `<div class="bg-white rounded-lg border border-slate-200 overflow-x-auto">
     <div class="px-4 py-2 border-b border-slate-200 flex items-center gap-2 text-sm">
       <h3 class="font-semibold text-slate-700">Estrutura da SM0</h3>
-      <span class="text-xs text-slate-500">${porEmp.size} empresa(s) · ${sm0.length} filial(is) ·
+      <span class="text-xs text-slate-500">${porEmp.size} empresa(s) · ${comUn ? `${nUn} empresa+unidade(s) · ` : ''}${sm0.length} filial(is) ·
         lida em ${escapeHtml(r0.lido_em || fmtDataHora(r0.updated_at))} por ${escapeHtml(r0.updated_by || '—')}</span>
     </div>
     ${velha}
     <table class="w-full text-sm"><thead class="bg-slate-50 text-xs text-slate-500 text-left">
-      <tr><th class="px-3 py-2">Emp.</th><th class="px-3 py-2">Nome</th><th class="px-3 py-2">Leiaute</th>
+      <tr><th class="px-3 py-2">Emp.</th>${comUn ? '<th class="px-3 py-2" title="Empresa + unidade de negócio: os caracteres de empresa e os dois de unidade do código da filial">Empresa + unidade</th>' : ''}<th class="px-3 py-2">Nome</th><th class="px-3 py-2">Leiaute</th>
       <th class="px-3 py-2">Filiais</th><th class="px-3 py-2">Dicionário</th><th class="px-3 py-2">Tabelas do escopo</th></tr></thead>
       <tbody>${linhas}</tbody></table></div>`;
 }
@@ -8411,18 +8454,21 @@ function estBlocoSM0(d, cfg) {
   sm0.forEach(r => { if (!porEmp.has(r.empresa)) porEmp.set(r.empresa, []); porEmp.get(r.empresa).push(r); });
   const difLeiaute = [...new Set(sm0.map(r => (r.leiaute || '').trim().toUpperCase()))]
     .filter(l => l && l !== (cfg.leiaute || '').toUpperCase());
-  const linhas = [...porEmp.entries()].map(([e, fs]) => `<tr class="border-t border-slate-100 align-top">
-      <td class="px-3 py-2 font-mono font-semibold">${escapeHtml(e)}</td>
-      <td class="px-3 py-2">${escapeHtml(fs[0].nome_empresa || '')}</td>
-      <td class="px-3 py-2 font-mono text-xs">${escapeHtml(fs[0].leiaute || '—')}</td>
-      <td class="px-3 py-2 text-xs">${fs.map(f => `<span class="inline-block mr-1 mb-1 px-1.5 py-0.5 rounded bg-slate-100"
-          title="${escapeHtml(f.cnpj || '')}"><b class="font-mono">${escapeHtml(f.filial)}</b> ${escapeHtml(f.nome_filial || '')}</span>`).join('')}</td>
+  const grupos = sm0Grupos(sm0);
+  const comUn = grupos.some(g => g.unidade);
+  const linhas = grupos.map(g => `<tr class="border-t border-slate-100 align-top" data-sm0-grupo="${escapeHtml(g.empresa + '|' + (g.unidade || ''))}">
+      <td class="px-3 py-2 font-mono font-semibold">${escapeHtml(g.empresa)}</td>
+      ${comUn ? `<td class="px-3 py-2 font-mono font-semibold whitespace-nowrap">${g.unidade
+        ? `${escapeHtml(g.unidade)} <span class="text-[10px] text-slate-400 font-normal">un. ${escapeHtml(g.cod_unidade)}</span>` : '—'}</td>` : ''}
+      <td class="px-3 py-2">${escapeHtml(g.r0.nome_empresa || '')}</td>
+      <td class="px-3 py-2 font-mono text-xs">${escapeHtml(g.r0.leiaute || '—')}</td>
+      <td class="px-3 py-2 text-xs">${sm0FiliaisHtml(g.filiais)}</td>
     </tr>`).join('');
   return `<div class="mt-4 bg-white rounded-lg border border-slate-200 overflow-x-auto">
     <div class="px-4 py-2 border-b border-slate-200 flex items-center gap-2 flex-wrap text-sm">
       <h3 class="font-semibold text-slate-700">Empresas da base</h3>
       <span class="px-2 py-0.5 rounded-full text-xs ${amb.cls}">${escapeHtml(amb.label)}</span>
-      <span class="text-xs text-slate-500">${porEmp.size} empresa(s) · ${sm0.length} filial(is) ·
+      <span class="text-xs text-slate-500">${porEmp.size} empresa(s) · ${comUn ? `${grupos.filter(g => g.unidade).length} empresa+unidade(s) · ` : ''}${sm0.length} filial(is) ·
         lida em ${escapeHtml(r0.lido_em || fmtDataHora(r0.updated_at))}</span>
       <span class="text-xs text-slate-400">só referência — não entra na árvore</span>
     </div>
@@ -8430,7 +8476,7 @@ function estBlocoSM0(d, cfg) {
       A base está com leiaute <b class="font-mono">${escapeHtml(difLeiaute.join(', '))}</b> e a definição acima diz
       <b class="font-mono">${escapeHtml(cfg.leiaute || '—')}</b>. Um dos dois está errado, e é o código da filial que paga.</div>` : ''}
     <table class="w-full text-sm"><thead class="bg-slate-50 text-xs text-slate-500 text-left">
-      <tr><th class="px-3 py-2">Emp.</th><th class="px-3 py-2">Nome</th>
+      <tr><th class="px-3 py-2">Emp.</th>${comUn ? '<th class="px-3 py-2">Empresa + unidade</th>' : ''}<th class="px-3 py-2">Nome</th>
       <th class="px-3 py-2">Leiaute</th><th class="px-3 py-2">Filiais</th></tr></thead>
       <tbody>${linhas}</tbody></table></div>`;
 }

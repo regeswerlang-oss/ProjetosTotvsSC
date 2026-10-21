@@ -267,3 +267,22 @@ produziu.
 `docs/sql/2026-09-18-monitemp.sql` (aplicada no Supabase em 18/09/2026): três
 tabelas novas com RLS sem policy, e os CHECKs de `monitcad_scripts.tipo` e
 `protheus_coletas.tipo` passam a aceitar `sm0` e `empresas`.
+
+## SM0 agrupada por empresa + unidade de negócio (21/10/2026)
+
+Pedido do Reges com a SM0 da Cresol (leiaute `EEUUFFFF`, centenas de filiais
+num grupo só). Com **UU no leiaute**, a listagem da SM0 — nesta aba e no bloco
+"Empresas da base" da aba Estrutura — passa a ter **uma linha por empresa +
+unidade de negócio**: os caracteres de empresa e os dois de unidade do
+`M0_CODFIL` (`0126` = empresa 01, unidade 26), com coluna própria.
+
+- É nesse nível que o compartilhamento `E E C` é decidido; 300 filiais numa
+  célula só escondiam a cooperativa, que é o que o cliente reconhece.
+- O tamanho de cada nível sai do `M0_LEIAUTE` da própria linha (`sm0Grupos`).
+  Sem UU, nada muda: uma linha por empresa, sem a coluna nova.
+- Dicionário e "Tabelas do escopo" são do grupo (SX2 por `M0_CODIGO`): ficam em
+  `rowspan`, uma vez por empresa.
+- Unidade com mais de 12 filiais recolhe as filiais num `<details>` com a
+  contagem e a primeira/última.
+
+Teste: `docs/testes/sm0-unidade-front.js` (os dois blocos, com e sem UU).
