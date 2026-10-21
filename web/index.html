@@ -9510,31 +9510,38 @@ function audLinhas(d) {
 function audAlertas(d, L) {
   const al = [];
   const base = { teste: 'Teste', producao: 'Produção' };
+  // Alias sozinho ("F22") não diz nada para quem não decorou o dicionário:
+  // todo ponto de atenção leva a descrição — da Estrutura, ou o X2_NOME lido.
+  const desc = {};
+  L.forEach(x => { desc[x.e.tabela] = x.e.descricao || x.lt.t?.nome || x.lp.t?.nome || ''; });
+  ['teste', 'producao'].forEach(amb => Object.entries(d.coletas[amb]?.tabelas || {})
+    .forEach(([k, t]) => { if (!desc[k]) desc[k] = t.nome || ''; }));
+  const rt = k => desc[k] ? `${k} · ${desc[k]}` : k;
   ['teste', 'producao'].forEach(amb => {
     const col = d.coletas[amb];
     if (!col) { al.push(['info', `${base[amb]}: ainda sem coleta. Use ⚡ Coletar ${base[amb]} (a REST precisa estar cadastrada em ⚙ Ambiente).`]); return; }
     const sx = k => { const l = audLeitura(col, k); return l.t ? l.t.sx2 : null; };
     const fora = L.filter(x => (amb === 'teste' ? x.sT : x.sP)[1] === 'Fora da SX2' && x.e.papel === 'escopo').map(x => x.e.tabela);
-    if (fora.length) al.push(['bad', `${base[amb]}: ${fora.length} tabela(s) do alvo não encontradas na SX2${col.sufixo}: ${fora.join(', ')}. Confirme o alias.`]);
+    if (fora.length) al.push(['bad', `${base[amb]}: ${fora.length} tabela(s) do alvo não encontradas na SX2${col.sufixo}: ${fora.map(rt).join(', ')}. Confirme o alias.`]);
     const zero = L.filter(x => { const l = amb === 'teste' ? x.lt : x.lp; return l.alias && l.alias !== x.e.tabela; });
-    zero.forEach(x => al.push(['info', `${base[amb]}: ${x.e.tabela} está na SX2 como ${(amb === 'teste' ? x.lt : x.lp).alias} (com zero).`]));
-    const conv = L.filter(x => (amb === 'teste' ? x.foraT : x.foraP) > 0).map(x => `${x.e.tabela} (${audN(amb === 'teste' ? x.foraT : x.foraP)})`);
+    zero.forEach(x => al.push(['info', `${base[amb]}: ${rt(x.e.tabela)} está na SX2 como ${(amb === 'teste' ? x.lt : x.lp).alias} (com zero).`]));
+    const conv = L.filter(x => (amb === 'teste' ? x.foraT : x.foraP) > 0).map(x => `${rt(x.e.tabela)} (${audN(amb === 'teste' ? x.foraT : x.foraP)})`);
     if (conv.length) al.push(['warn', `${base[amb]}: _FILIAL a converter para o modo alvo: ${conv.join(', ')}.`]);
     AUD_PERFIL_CAD.forEach(([p, c]) => {
       const a = sx(p), b = sx(c);
       if (audOk(a) && audOk(b) && audMaisExclusivo(a, b))
-        al.push(['bad', `${base[amb]}: ${p} (${audSp(a)}) está mais exclusiva que ${c} (${audSp(b)}). O cadastro de ${c} pode não gravar até a ${p} ir para o alvo.`]);
+        al.push(['bad', `${base[amb]}: ${rt(p)} (${audSp(a)}) está mais exclusiva que ${rt(c)} (${audSp(b)}). O cadastro de ${c} pode não gravar até a ${p} ir para o alvo.`]);
     });
     [[AUD_PERFIS_F, 'perfis', 'O F20 tem de estar no mesmo nível de todos os filhos.'],
      [AUD_CIN_F, 'regras de cálculo', 'A fórmula CIN é única para todas as regras.']].forEach(([ks, nome, porque]) => {
       const v = ks.map(k => [k, sx(k)]).filter(([, m]) => audOk(m));
       if (new Set(v.map(([, m]) => m)).size > 1)
-        al.push(['bad', `${base[amb]}: ${nome} em níveis diferentes (${v.map(([k, m]) => `${k} ${audSp(m)}`).join(', ')}). ${porque}`]);
+        al.push(['bad', `${base[amb]}: ${nome} em níveis diferentes (${v.map(([k, m]) => `${rt(k)}: ${audSp(m)}`).join('; ')}). ${porque}`]);
     });
   });
   if (d.coletas.teste && d.coletas.producao) {
     const est = L.filter(x => x.e.papel === 'estrutural' && x.lt.t && x.lp.t && x.lt.t.sx2 !== x.lp.t.sx2);
-    est.forEach(x => al.push(['bad', `${x.e.tabela} é estrutural (FISA170) e está ${audSp(x.lt.t.sx2)} em Teste e ${audSp(x.lp.t.sx2)} em Produção.`]));
+    est.forEach(x => al.push(['bad', `${rt(x.e.tabela)} é estrutural (FISA170) e está ${audSp(x.lt.t.sx2)} em Teste e ${audSp(x.lp.t.sx2)} em Produção.`]));
   }
   const dx3 = d.dicionario?.x3, dx6 = d.dicionario?.x6;
   if (dx3) {
@@ -9550,9 +9557,9 @@ function audAlertas(d, L) {
   ['teste', 'producao'].forEach(amb => { const c = d.coletas[amb];
     if (c && c.erro_dic) al.push(['warn', `${amb === 'teste' ? 'Teste' : 'Produção'}: dicionário incompleto na última coleta — ${c.erro_dic}`]); });
   const semAlvo = L.filter(x => x.e.papel === 'escopo' && !audOk(x.e.alvo)).map(x => x.e.tabela);
-  if (semAlvo.length) al.push(['warn', `Sem compartilhamento definido na Estrutura: ${semAlvo.join(', ')}.`]);
+  if (semAlvo.length) al.push(['warn', `Sem compartilhamento definido na Estrutura: ${semAlvo.map(rt).join(', ')}.`]);
   const disc = L.filter(x => x.prop.length).map(x => x.e.tabela);
-  if (disc.length) al.push(['info', `Em discussão na Estrutura (proposta aberta): ${disc.join(', ')}.`]);
+  if (disc.length) al.push(['info', `Em discussão na Estrutura (proposta aberta): ${disc.map(rt).join(', ')}.`]);
   return al;
 }
 const AUD_PERFIL_CAD = [['F22', 'SA1'], ['F22', 'SA2'], ['F24', 'SB1']];
@@ -9601,24 +9608,29 @@ function renderAuditoria() {
 
   let corpo = '', ult = null;
   L.filter(visivel).forEach(x => {
-    if (x.e.grupo !== ult) { ult = x.e.grupo; corpo += `<tr class="bg-slate-50"><td colspan="10" class="px-3 py-1.5 text-xs font-semibold text-totvs-petroleo">${escapeHtml(ult)}</td></tr>`; }
-    const md = l => l.t ? `<span class="font-mono font-semibold tracking-widest">${audSp(l.t.sx2)}</span>` : '<span class="text-slate-300">—</span>';
+    if (x.e.grupo !== ult) { ult = x.e.grupo; corpo += `<tr class="bg-slate-50"><td colspan="11" class="px-3 py-1.5 text-xs font-semibold text-totvs-petroleo">${escapeHtml(ult)}</td></tr>`; }
+    const md = l => l.t ? `<span class="font-mono font-semibold tracking-widest whitespace-nowrap">${audSp(l.t.sx2)}</span>` : '<span class="text-slate-300">—</span>';
+    // Variações do campo filial = quantos conteúdos distintos a tabela tem naquela base.
+    const vari = l => l.t ? l.t.filiais.filter(f => f.qtd > 0).length : null;
+    const vT = vari(x.lt), vP = vari(x.lp);
+    const aberto = aud.abertos.has(x.e.tabela);
     const alvo = x.e.papel === 'estrutural' ? audPill(['bad', 'Não alterar'])
-      : audOk(x.e.alvo) ? `<span class="font-mono font-semibold tracking-widest text-totvs-petroleo">${audSp(x.e.alvo)}</span>`
+      : audOk(x.e.alvo) ? `<span class="font-mono font-semibold tracking-widest whitespace-nowrap text-totvs-petroleo">${audSp(x.e.alvo)}</span>`
       : (x.e.papel === 'escopo' ? audPill(['warn', 'Definir']) : '<span class="text-slate-300">—</span>');
     const prop = x.prop.length ? ` <span title="${escapeHtml(x.prop.map(p => `Proposta ${audSp(p.compart)}: ${p.motivo}`).join('\n'))}" class="cursor-help">💬</span>` : '';
     const nome = x.e.descricao || x.lt.t?.nome || x.lp.t?.nome || '';
     const fora = v => v === null ? '<span class="text-slate-300">—</span>' : v ? `<b class="text-rose-700">${audN(v)}</b>` : '0';
     corpo += `<tr data-aud-linha="${x.e.tabela}" class="border-t border-slate-100 hover:bg-slate-50/60 cursor-pointer">
-      <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(x.e.tabela)}${prop}</td>
+      <td class="px-3 py-1.5 font-mono font-semibold whitespace-nowrap"><span class="text-slate-400 inline-block w-3">${aberto ? '▾' : '▸'}</span>${escapeHtml(x.e.tabela)}${prop}</td>
       <td class="px-3 py-1.5 text-slate-600" title="${escapeHtml(x.e.observacao || '')}">${escapeHtml(nome)}</td>
       <td class="px-3 py-1.5">${alvo}</td>
       <td class="px-3 py-1.5">${md(x.lt)}</td><td class="px-3 py-1.5">${audPill(x.sT)}</td>
       <td class="px-3 py-1.5">${md(x.lp)}</td><td class="px-3 py-1.5">${audPill(x.sP)}</td>
       <td class="px-3 py-1.5 text-right tabular-nums">${x.totT === null ? '—' : audN(x.totT)}</td>
       <td class="px-3 py-1.5 text-right tabular-nums">${x.totP === null ? '—' : audN(x.totP)}</td>
+      <td class="px-3 py-1.5 text-right tabular-nums whitespace-nowrap" title="Conteúdos distintos do campo filial: Teste / Produção">${vT === null ? '—' : vT} / ${vP === null ? '—' : vP}</td>
       <td class="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">${fora(x.foraT)} / ${fora(x.foraP)}</td></tr>`;
-    if (aud.abertos.has(x.e.tabela)) corpo += `<tr class="bg-slate-50/70"><td colspan="10" class="px-4 py-3 text-xs">${audDetalhe(x, d)}</td></tr>`;
+    if (aberto) corpo += `<tr class="bg-slate-50/70"><td colspan="11" class="px-4 py-3 text-xs">${audDetalhe(x, d)}</td></tr>`;
   });
 
   box.innerHTML = `
@@ -9642,7 +9654,7 @@ function renderAuditoria() {
       <select id="aud-f-st" class="px-2 py-1 border border-slate-300 rounded-md bg-white">${opt('', 'Teste: todas', f.st)}${sits.map(s => opt(s, 'Teste: ' + s, f.st)).join('')}</select>
       <select id="aud-f-sp" class="px-2 py-1 border border-slate-300 rounded-md bg-white">${opt('', 'Produção: todas', f.sp)}${sits.map(s => opt(s, 'Produção: ' + s, f.sp)).join('')}</select>
       <input id="aud-f-txt" value="${escapeHtml(f.txt)}" placeholder="filtrar tabela ou descrição" class="px-2 py-1 border border-slate-300 rounded-md w-56">
-      <span class="text-xs text-slate-400">Clique na linha para ver o volume por filial e por cooperativa. Modo: Empresa · Unidade · Filial.</span>
+      <span class="text-xs text-slate-400">Clique na linha (▸) para ver a quantidade de registros por variação do campo filial, Teste × Produção. Modo: Empresa · Unidade · Filial.</span>
     </div>
     <div class="bg-white rounded-lg border border-slate-200 overflow-x-auto mb-6">
       <table class="w-full text-sm">
@@ -9651,9 +9663,10 @@ function renderAuditoria() {
           <th class="px-3 py-2 text-left">Teste SX2</th><th class="px-3 py-2 text-left">Situação</th>
           <th class="px-3 py-2 text-left">Produção SX2</th><th class="px-3 py-2 text-left">Situação</th>
           <th class="px-3 py-2 text-right">Reg. Teste</th><th class="px-3 py-2 text-right">Reg. Prod.</th>
+          <th class="px-3 py-2 text-right" title="Conteúdos distintos do campo filial em cada base — clique na linha para ver a quantidade por variação">Variações filial T / P</th>
           <th class="px-3 py-2 text-right" title="Registros com o campo filial fora do padrão do modo alvo — convertem junto com a SX2">_FILIAL a converter T / P</th>
         </tr></thead>
-        <tbody>${corpo || `<tr><td colspan="10" class="px-3 py-6 text-center text-slate-400">Nada com este filtro.</td></tr>`}</tbody>
+        <tbody>${corpo || `<tr><td colspan="11" class="px-3 py-6 text-center text-slate-400">Nada com este filtro.</td></tr>`}</tbody>
       </table>
     </div>
     ${audBlocoX3(d)}
@@ -9671,20 +9684,53 @@ function audCoop(fil, lei) {
 }
 
 function audDetalhe(x, d) {
-  const um = (amb, l) => {
+  // Situação de cada base, numa linha, quando não há o que contar.
+  const estado = (amb, l) => {
     const A = AMB[amb];
-    if (!l.col) return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-slate-400">sem coleta</span></div>`;
-    if (!l.t) return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-slate-400">tabela não está na SX2</span></div>`;
-    if (!l.t.existe) return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-rose-700">na SX2, mas a tabela física ${escapeHtml(l.t.arquivo)} não existe</span></div>`;
-    const lei = d.leiaute[amb], cp = {};
-    l.t.filiais.forEach(fl => { const c = audCoop(fl.filial, lei); cp[c] = (cp[c] || 0) + fl.qtd; });
-    const chip = (t, n, cls = 'bg-slate-100 text-slate-700') => `<span class="inline-block px-2 py-0.5 rounded-full ${cls} mr-1 mb-1 font-mono">${escapeHtml(t)}: ${audN(n)}</span>`;
-    return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-slate-500">${escapeHtml(l.t.arquivo)}${l.t.tem_filial ? '' : ' · sem campo filial'}</span>
-      <div class="mt-1"><b>Por cooperativa:</b> ${Object.keys(cp).sort().map(c => chip(c, cp[c], 'bg-sky-100 text-sky-800')).join('') || '<span class="text-slate-400">vazia</span>'}</div>
-      <div class="mt-1"><b>Por filial:</b> ${l.t.filiais.map(fl => chip(fl.filial || '(branco)', fl.qtd)).join('') || '<span class="text-slate-400">vazia</span>'}</div></div>`;
+    const sel = `<span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span>`;
+    if (!l.col) return `${sel} <span class="text-slate-400">sem coleta</span>`;
+    if (!l.t) return `${sel} <span class="text-slate-400">tabela não está na SX2</span>`;
+    if (!l.t.existe) return `${sel} <span class="text-rose-700">na SX2, mas a tabela física ${escapeHtml(l.t.arquivo)} não existe</span>`;
+    return `${sel} <span class="text-slate-500">${escapeHtml(l.t.arquivo)} · ${audSp(l.t.sx2)}${l.t.tem_filial ? '' : ' · sem campo filial'}</span>`;
   };
+  // Uma linha por VARIAÇÃO do campo filial, as duas bases lado a lado: é aqui
+  // que se vê "a mesma tabela tem 01 em Teste e 0126 em Produção".
+  const fT = x.lt.t?.existe ? x.lt.t.filiais : [], fP = x.lp.t?.existe ? x.lp.t.filiais : [];
+  const mapa = {};
+  fT.forEach(f => { (mapa[f.filial] = mapa[f.filial] || { t: 0, p: 0 }).t += f.qtd; });
+  fP.forEach(f => { (mapa[f.filial] = mapa[f.filial] || { t: 0, p: 0 }).p += f.qtd; });
+  const lei = d.leiaute.teste || d.leiaute.producao;
+  const esp = audOk(x.e.alvo) ? audEsperado(x.e.alvo, lei) : null;
+  const sitFil = fil => {
+    if (fil === '*') return ['na', 'sem campo filial'];
+    if (!audOk(x.e.alvo)) return ['na', '—'];
+    const n = fil.length;
+    const ok = esp === null ? n > lei.emp + lei.un : n === esp;
+    if (ok) return ['ok', 'no padrão do alvo'];
+    if (esp === 0) return ['bad', 'preenchida — alvo compartilhado'];
+    if (!n) return ['bad', 'em branco — alvo exclusivo'];
+    return ['bad', `tamanho ${n}, alvo espera ${esp === null ? 'o código inteiro' : esp}`];
+  };
+  const chaves = Object.keys(mapa).sort((a, b) => (mapa[b].t + mapa[b].p) - (mapa[a].t + mapa[a].p) || a.localeCompare(b));
+  const tot = chaves.reduce((a, k) => ({ t: a.t + mapa[k].t, p: a.p + mapa[k].p }), { t: 0, p: 0 });
+  const dif = (k) => mapa[k].t !== mapa[k].p ? 'text-amber-800 font-semibold' : '';
+  const tabela = chaves.length ? `<table class="mt-2 text-xs bg-white border border-slate-200 rounded">
+      <thead class="bg-slate-50 text-slate-500 uppercase tracking-wide"><tr>
+        <th class="px-3 py-1.5 text-left">Filial (conteúdo)</th><th class="px-3 py-1.5 text-left">Cooperativa</th>
+        <th class="px-3 py-1.5 text-right">Registros Teste</th><th class="px-3 py-1.5 text-right">Registros Prod.</th>
+        <th class="px-3 py-1.5 text-left">Contra o alvo ${audOk(x.e.alvo) ? audSp(x.e.alvo) : ''}</th></tr></thead>
+      <tbody>${chaves.map(k => `<tr class="border-t border-slate-100" data-aud-fil="${escapeHtml(k)}">
+        <td class="px-3 py-1 font-mono">${escapeHtml(k === '' ? '(branco)' : k)}</td>
+        <td class="px-3 py-1 font-mono text-slate-500">${escapeHtml(audCoop(k, lei))}</td>
+        <td class="px-3 py-1 text-right tabular-nums ${dif(k)}">${mapa[k].t ? audN(mapa[k].t) : '—'}</td>
+        <td class="px-3 py-1 text-right tabular-nums ${dif(k)}">${mapa[k].p ? audN(mapa[k].p) : '—'}</td>
+        <td class="px-3 py-1">${audPill(sitFil(k))}</td></tr>`).join('')}
+        <tr class="border-t border-slate-300 font-semibold"><td class="px-3 py-1">${chaves.length} variação(ões)</td><td></td>
+          <td class="px-3 py-1 text-right tabular-nums">${audN(tot.t)}</td><td class="px-3 py-1 text-right tabular-nums">${audN(tot.p)}</td><td></td></tr>
+      </tbody></table>` : '<p class="mt-2 text-slate-400">Nenhum registro nas bases coletadas.</p>';
   const prop = x.prop.map(p => `<div class="mt-1 text-amber-900">💬 Proposta ${escapeHtml(audSp(p.compart))} · ${escapeHtml(p.motivo)} <span class="text-slate-400">(${escapeHtml(p.autor || '')})</span></div>`).join('');
-  return `<div class="grid md:grid-cols-2 gap-4">${um('teste', x.lt)}${um('producao', x.lp)}</div>
+  return `<div class="flex flex-col gap-1"><div>${estado('teste', x.lt)}</div><div>${estado('producao', x.lp)}</div></div>
+    ${tabela}
     ${x.e.observacao ? `<div class="mt-2 text-slate-500">${escapeHtml(x.e.observacao)}</div>` : ''}${prop}`;
 }
 

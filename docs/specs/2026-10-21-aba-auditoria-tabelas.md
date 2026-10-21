@@ -214,6 +214,18 @@ que existe, upload do passo 2 completando a coleta sem duplicar, **mesmo
    `sys.columns`) na collation do banco. As duas comparações do Script 1 levam
    `COLLATE DATABASE_DEFAULT` nos dois lados. Vale também para a coleta pela REST.
 
+### Detalhamento por filial e descrição nos alertas (21/10/2026)
+
+- Coluna **Variações filial T / P**: quantos conteúdos distintos o campo filial
+  tem em cada base. A linha abre (▸) uma tabela **uma linha por variação**, com
+  Teste e Produção lado a lado, a cooperativa (prefixo empresa + unidade) e a
+  situação daquela variação contra o modo alvo ("tamanho 8, alvo espera 4",
+  "preenchida — alvo compartilhado", "em branco — alvo exclusivo"). Contagens
+  diferentes entre as bases ficam destacadas.
+- **Pontos de atenção levam a descrição da tabela** junto do alias
+  (`F22 · Perfil trib. de participantes`): da Estrutura, ou o X2_NOME lido.
+- Modo (`C C C`) não quebra mais em duas linhas na grade.
+
 **Não testado:** Oracle e SQL Server reais (o SQL passou pela trava do
 SqlSeguro e pelo stub, não por um banco) e a base da Cresol, que ainda não tem
 o TSCMONITREST publicado nem o ⚙ Ambiente cadastrado.

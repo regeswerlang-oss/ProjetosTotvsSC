@@ -77,12 +77,12 @@ const VAZIO = Object.assign({}, PAYLOAD, { coletas: { teste: null, producao: nul
 
   const corpo = await txt('#aud-conteudo');
   t('KPI no alvo teste', corpo.includes('No alvo · Teste'));
-  t('alerta F22 x SA2 em Teste', corpo.includes('Teste: F22 (E C C) está mais exclusiva que SA2 (C C C)'));
+  t('alerta F22 x SA2 em Teste, com descrição', corpo.includes('Teste: F22 · Desc F22 (E C C) está mais exclusiva que SA2 · Tabela SA2 (C C C)'), corpo.slice(0, 400));
   t('variante com zero', corpo.includes('FOV está na SX2 como F0V'));
   t('estrutural divergente', corpo.includes('F2D é estrutural'));
   t('_FILIAL a converter', corpo.includes('_FILIAL a converter para o modo alvo'));
-  t('sem alvo CI6', corpo.includes('Sem compartilhamento definido na Estrutura: CI6'));
-  t('proposta CK3', corpo.includes('Em discussão na Estrutura (proposta aberta): CK3'));
+  t('sem alvo CI6 com descrição', corpo.includes('Sem compartilhamento definido na Estrutura: CI6 · Desc CI6'));
+  t('proposta CK3 com descrição', corpo.includes('Em discussão na Estrutura (proposta aberta): CK3 · Desc CK3'));
   t('perfis em níveis diferentes', corpo.includes('perfis em níveis diferentes'));
 
   const linhaF22 = await txt('tr[data-aud-linha="F22"]');
@@ -90,7 +90,10 @@ const VAZIO = Object.assign({}, PAYLOAD, { coletas: { teste: null, producao: nul
   await pg.click('tr[data-aud-linha="F27"]');
   await pg.waitForTimeout(150);
   const det = await txt('#aud-conteudo');
-  t('detalhe por cooperativa', det.includes('Por cooperativa') && det.includes('0126'));
+  const fils = await pg.$$eval('[data-aud-fil]', ns => ns.map(n => n.innerText.replace(/\s+/g, ' ').trim()));
+  t('detalhe por variação de filial, Teste x Produção', fils.length >= 4 && fils.some(f => f.startsWith('01260001')) && fils.some(f => f.startsWith('0126 ')), fils.join(' | '));
+  t('variação fora do padrão do alvo', fils.some(f => f.startsWith('01260001') && f.includes('tamanho 8, alvo espera 4')), fils.join(' | '));
+  t('coluna de variações', (await txt('tr[data-aud-linha="F27"]')).includes('2 / 3'), await txt('tr[data-aud-linha="F27"]'));
 
   await pg.selectOption('#aud-f-st', 'A alterar');
   await pg.waitForTimeout(150);
