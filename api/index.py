@@ -6652,14 +6652,19 @@ def _aud_sql_sx2(aliases, sufixo, banco):
     coluna que existem, e por isso não derruba a consulta inteira (ORA-00904)."""
     lista = ",".join(f"'{a}'" for a in aliases)
     if banco == "mssql":
-        fil = ("CASE WHEN LEFT(X.X2_CHAVE,1) = 'S' THEN SUBSTRING(X.X2_CHAVE,2,2) "
-               "ELSE RTRIM(X.X2_CHAVE) END + '_FILIAL'")
+        # COLLATE DATABASE_DEFAULT nos DOIS lados: a SX2 do Protheus costuma vir
+        # em Latin1_General_BIN e o catálogo (sys.tables/sys.columns) na
+        # collation do banco — sem isso dá erro 468 "Cannot resolve the
+        # collation conflict" (base de Testes da Cresol, 21/10/2026).
+        fil = ("(CASE WHEN LEFT(X.X2_CHAVE,1) = 'S' THEN SUBSTRING(X.X2_CHAVE,2,2) "
+               "ELSE RTRIM(X.X2_CHAVE) END + '_FILIAL') COLLATE DATABASE_DEFAULT")
         return (f"SELECT RTRIM(X.X2_CHAVE) AS CHAVE, RTRIM(X.X2_NOME) AS NOME, "
                 f"RTRIM(X.X2_ARQUIVO) AS ARQ, X.X2_MODOEMP AS MODOEMP, X.X2_MODOUN AS MODOUN, "
                 f"X.X2_MODO AS MODO, "
-                f"(SELECT COUNT(*) FROM sys.tables T WHERE T.name = RTRIM(X.X2_ARQUIVO)) AS EXISTE, "
+                f"(SELECT COUNT(*) FROM sys.tables T WHERE T.name COLLATE DATABASE_DEFAULT = "
+                f"RTRIM(X.X2_ARQUIVO) COLLATE DATABASE_DEFAULT) AS EXISTE, "
                 f"(SELECT COUNT(*) FROM sys.columns C WHERE C.object_id = OBJECT_ID(RTRIM(X.X2_ARQUIVO)) "
-                f"AND C.name = {fil}) AS TEMFIL "
+                f"AND C.name COLLATE DATABASE_DEFAULT = {fil}) AS TEMFIL "
                 f"FROM SX2{sufixo} X WHERE X.D_E_L_E_T_ = ' ' AND X.X2_CHAVE IN ({lista}) "
                 f"ORDER BY X.X2_CHAVE")
     fil = ("CASE WHEN SUBSTR(X.X2_CHAVE,1,1) = 'S' THEN SUBSTR(X.X2_CHAVE,2,2) "

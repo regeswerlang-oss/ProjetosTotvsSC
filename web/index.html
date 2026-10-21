@@ -9855,7 +9855,14 @@ async function abreScriptsAuditoria(ambIni) {
   const cli = aud.customer;
   if (!cli) { alert('Abra um projeto antes.'); return; }
   let amb = ambIni || (aud.dados?.ambientes?.teste ? 'producao' : 'teste');
-  let banco = '', sufixo = '';
+  // Sem ⚙ Ambiente o servidor não sabe o banco: a escolha fica lembrada por
+  // cliente × base neste navegador. Script de Oracle numa base SQL Server cai
+  // em "SYS_CONTEXT is not a recognized built-in function" — erro que não diz
+  // que o problema é o dialeto.
+  const prefKey = a => `aud-scr-${cli}-${a}`;
+  const lePref = a => { try { return JSON.parse(localStorage.getItem(prefKey(a)) || '{}'); } catch { return {}; } };
+  const gravaPref = () => { try { localStorage.setItem(prefKey(amb), JSON.stringify({ banco, sufixo })); } catch { /* sem storage */ } };
+  let { banco = '', sufixo = '' } = lePref(amb);
   const m = modal('Scripts SQL · coleta pelo console TCloud', '<div id="aud-scr">Montando os scripts…</div>', 'Subir resultado');
   m.el.firstElementChild.classList.replace('max-w-lg', 'max-w-3xl');
   const pinta = async () => {
@@ -9877,12 +9884,14 @@ async function abreScriptsAuditoria(ambIni) {
             <option value="mssql" ${j.banco === 'mssql' ? 'selected' : ''}>SQL Server</option></select></label>
         <label class="text-xs text-slate-500">Sufixo
           <input id="aud-scr-suf" value="${escapeHtml(j.sufixo)}" maxlength="3" class="ml-1 w-16 px-2 py-1 border border-slate-300 rounded-md font-mono" ${j.ambiente_cadastrado ? 'disabled' : ''}></label>
-        <span class="text-xs text-slate-400">${j.ambiente_cadastrado ? 'banco e sufixo vêm do ⚙ Ambiente' : 'sem ⚙ Ambiente cadastrado — confira banco e sufixo'}</span>
+        <span class="text-xs text-slate-400">${j.ambiente_cadastrado ? 'banco e sufixo vêm do ⚙ Ambiente' : 'sem ⚙ Ambiente cadastrado — confira banco e sufixo (a escolha fica lembrada)'}</span>
       </div>
       <ol class="text-xs text-slate-600 list-decimal pl-5 space-y-1">
         <li><b>Passo 1:</b> rode os Scripts <b>1, 3 e 4</b> no console TCloud da ${escapeHtml(AMB[amb].label)}, exporte cada resultado em <b>CSV com cabeçalho</b> e suba os três juntos.</li>
         <li><b>Passo 2:</b> reabra esta tela — o <b>Script 2</b> (contagem por filial) é montado com as tabelas que o Script 1 achou. Rode, exporte e suba.</li>
         <li>Cada arquivo é reconhecido pelo cabeçalho; não precisa renomear. Só leitura, sem <span class="font-mono">;</span> no fim.</li>
+        <li class="text-slate-500">Erro <span class="font-mono">SYS_CONTEXT is not a recognized built-in function</span> = a base é SQL Server: troque o banco acima.
+          <span class="font-mono">ORA-00904/00942</span> = a base é Oracle.</li>
       </ol>
       ${j.scripts.map(sc => `<details class="border border-slate-200 rounded" ${sc.id === 'contagem' && sc.sql ? 'open' : ''}>
         <summary class="px-3 py-2 cursor-pointer text-xs font-semibold flex items-center gap-2">${escapeHtml(sc.rotulo)}
@@ -9893,9 +9902,10 @@ async function abreScriptsAuditoria(ambIni) {
           <button data-aud-baixa="${sc.id}" data-n="${sc.n}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50">Baixar .sql</button></div>`
           : `<p class="px-3 pb-2 text-xs text-slate-500">${escapeHtml(sc.pendente || '')}</p>`}
       </details>`).join('')}`;
-    box.querySelectorAll('input[name="aud-scr-amb"]').forEach(r => r.addEventListener('change', ev => { amb = ev.target.value; banco = sufixo = ''; pinta(); }));
-    box.querySelector('#aud-scr-banco').addEventListener('change', ev => { banco = ev.target.value; pinta(); });
-    box.querySelector('#aud-scr-suf').addEventListener('change', ev => { sufixo = ev.target.value.trim(); pinta(); });
+    box.querySelectorAll('input[name="aud-scr-amb"]').forEach(r => r.addEventListener('change', ev => {
+      amb = ev.target.value; ({ banco = '', sufixo = '' } = lePref(amb)); pinta(); }));
+    box.querySelector('#aud-scr-banco').addEventListener('change', ev => { banco = ev.target.value; gravaPref(); pinta(); });
+    box.querySelector('#aud-scr-suf').addEventListener('change', ev => { sufixo = ev.target.value.trim(); gravaPref(); pinta(); });
     box.querySelectorAll('[data-aud-copia]').forEach(b => b.addEventListener('click', async () => {
       const t = box.querySelector(`[data-aud-sql="${b.dataset.audCopia}"]`).value;
       try { await navigator.clipboard.writeText(t); m.erro('Copiado.'); } catch { m.erro('O navegador bloqueou a cópia — selecione e copie à mão.'); }

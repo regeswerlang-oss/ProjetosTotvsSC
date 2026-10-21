@@ -202,6 +202,18 @@ que existe, upload do passo 2 completando a coleta sem duplicar, **mesmo
 `fora_padrao` (62) da coleta pela REST**, e o 409 do Script 2 sem o 1.
 `auditoria-front.js`: modal de scripts e upload de dois arquivos.
 
+### Primeira execução real — base de Testes da Cresol (SQL Server, 21/10/2026)
+
+1. `'SYS_CONTEXT' is not a recognized built-in function name` — o modal gerou o
+   dialeto Oracle (padrão sem ⚙ Ambiente). A escolha de banco/sufixo passou a
+   ficar lembrada por cliente × base no navegador, e o modal traduz os dois
+   erros típicos de dialeto trocado.
+2. Erro **468** `Cannot resolve the collation conflict between
+   "Latin1_General_BIN" and "Latin1_General_100_CI_AS_KS_WS_SC"` — a SX2 do
+   Protheus vem em `Latin1_General_BIN` e o catálogo (`sys.tables`,
+   `sys.columns`) na collation do banco. As duas comparações do Script 1 levam
+   `COLLATE DATABASE_DEFAULT` nos dois lados. Vale também para a coleta pela REST.
+
 **Não testado:** Oracle e SQL Server reais (o SQL passou pela trava do
 SqlSeguro e pelo stub, não por um banco) e a base da Cresol, que ainda não tem
 o TSCMONITREST publicado nem o ⚙ Ambiente cadastrado.

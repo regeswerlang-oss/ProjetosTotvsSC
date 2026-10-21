@@ -267,6 +267,12 @@ for k, v in sc.items():
         confere(sql_seguro(corpo_sql) is None and not v["sql"].rstrip().endswith(";"), f"script {k} seguro e sem ';'")
         confere(all(ord(ch) < 128 for ch in v["sql"]), f"script {k} em ASCII")
 
+# SQL Server: SX2 em Latin1_General_BIN × catálogo na collation do banco dava
+# erro 468 na base de Testes da Cresol. Os dois lados levam COLLATE.
+scm = {x["id"]: x for x in cli.get(f"/api/auditoria/{C}/scripts?ambiente=teste&banco=mssql").get_json()["scripts"]}
+confere(scm["sx2"]["sql"].count("COLLATE DATABASE_DEFAULT") == 4 and "SYS_CONTEXT" not in scm["sx2"]["sql"],
+        "script 1 SQL Server com COLLATE e sem função de Oracle")
+
 # Simula o console: CSV com VÍRGULA, cabeçalho entre aspas e BOM — o que o
 # SQL Developer e o export do TCloud costumam gerar.
 def csv_virgula(cab, linhas):
