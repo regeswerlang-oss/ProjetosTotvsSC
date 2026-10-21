@@ -35,3 +35,7 @@ create index if not exists audtab_sx6_coleta_idx on cockpit.audtab_sx6 (coleta_i
 
 alter table cockpit.audtab_sx3 enable row level security;
 alter table cockpit.audtab_sx6 enable row level security;
+
+-- Coleta sem REST (21/10/2026): scripts no console TCloud + upload do CSV.
+-- 'rest' = TSCMONITREST; 'upload' = resultado subido na aba.
+alter table cockpit.audtab_coletas add column if not exists origem text not null default 'rest';

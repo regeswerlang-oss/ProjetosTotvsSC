@@ -6808,7 +6808,7 @@ def _aud_ultimas(customer):
                     "disparado_por": c["disparado_por"], "leiaute": c["leiaute"],
                     "x3_ok": c.get("x3_ok"), "x6_ok": c.get("x6_ok"),
                     "x3_linhas": c.get("x3_linhas"), "x6_linhas": c.get("x6_linhas"),
-                    "erro_dic": c.get("erro_dic"),
+                    "erro_dic": c.get("erro_dic"), "origem": c.get("origem") or "rest",
                     "tabelas": tabs, "historico": hist}
     return out
 
@@ -6904,8 +6904,11 @@ def _aud_parse_x6(linhas):
     for r in _aud_linhas_cab(linhas):
         par = r.get("PARAM", "").upper()
         if par:
+            # Aspas viram espaço AQUI também: o SQL já troca, mas o CSV do console
+            # pode trazer o conteúdo original — e os dois caminhos têm de comparar igual.
             out.append({"param": par, "fil": r.get("FIL", ""), "tipo": r.get("TIPO", ""),
-                        "conteudo": r.get("CONTEUDO", ""), "descricao": r.get("DESCR", "")})
+                        "conteudo": (r.get("CONTEUDO", "") or "").replace('"', " "),
+                        "descricao": r.get("DESCR", "")})
     return out
 
 
@@ -6959,6 +6962,84 @@ def _aud_dic_compara(customer, ct, cp):
                         "linhas": [{"fil": f, "teste": t.get(f), "producao": p.get(f)} for f in fils]})
         res["x6"] = {"total": len(pars), "divergentes": div}
     return res
+
+
+def _aud_gravar(customer, amb, escopo, *, environment, sufixo, banco, sx2, cont, x3, x6,
+                erros_dic, duracao_ms, origem, substitui=None):
+    """Grava UMA coleta (SX2 + volume + dicionário) — a mesma gravação para a
+    REST e para o upload do console. `substitui` = coleta de upload que esta
+    completa (o resultado do Script 2 chega depois do Script 1)."""
+    lei = _aud_leiaute(customer, amb)
+    alvo = {e["tabela"]: e["alvo"] for e in escopo}
+    total = sum(f["qtd"] for fs in cont.values() for f in fs)
+    fora = 0
+    for a, fs in cont.items():
+        base = next((e["tabela"] for e in escopo if a in _aud_variantes(e["tabela"])), a)
+        if alvo.get(base):
+            fora += _aud_fora(alvo[base], fs, lei)
+
+    # Coleta e itens na MESMA transação: coleta sem itens apareceria na tela
+    # como "base vazia", que é o pior erro possível aqui.
+    con = db()
+    con.autocommit = False
+    try:
+        with con, con.cursor() as cur:
+            cur.execute("""insert into cockpit.audtab_coletas
+                           (customer, ambiente, environment, sufixo, banco, leiaute, duracao_ms,
+                            tabelas_lidas, total_registros, fora_padrao, disparado_por,
+                            x3_ok, x6_ok, x3_linhas, x6_linhas, erro_dic, origem)
+                         values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
+                      (customer, amb, environment, sufixo,
+                       banco, lei["fonte"], duracao_ms, len(sx2), total,
+                       fora, current_user(), x3 is not None, x6 is not None,
+                       len(x3) if x3 is not None else None, len(x6) if x6 is not None else None,
+                       "; ".join(erros_dic)[:800] or None, origem))
+            cid = cur.fetchone()[0]
+            linhas = []
+            for a, v in sx2.items():
+                fs = cont.get(a) or []
+                if not fs:
+                    linhas.append((cid, customer, amb, a, v["nome"], v["arquivo"], v["sx2"],
+                                   v["existe"], v["tem_filial"], None, 0))
+                for f in fs:
+                    linhas.append((cid, customer, amb, a, v["nome"], v["arquivo"], v["sx2"],
+                                   v["existe"], v["tem_filial"], f["filial"], f["qtd"]))
+            psycopg2.extras.execute_values(
+                cur, """insert into cockpit.audtab_itens
+                          (coleta_id, customer, ambiente, tabela, nome, arquivo, sx2, existe,
+                           tem_filial, filial, qtde) values %s""", linhas)
+            if x3:
+                psycopg2.extras.execute_values(
+                    cur, """insert into cockpit.audtab_sx3
+                              (coleta_id, tabela, campo, tipo, tamanho, decimal, titulo, contexto)
+                            values %s""",
+                    [(cid, r["tabela"], r["campo"], r["tipo"], r["tamanho"], r["decimal"],
+                      r["titulo"], r["contexto"]) for r in x3], page_size=1000)
+            if x6:
+                psycopg2.extras.execute_values(
+                    cur, """insert into cockpit.audtab_sx6
+                              (coleta_id, param, fil, tipo, conteudo, descricao) values %s""",
+                    [(cid, r["param"], r["fil"], r["tipo"], r["conteudo"], r["descricao"])
+                     for r in x6], page_size=1000)
+            if substitui:
+                cur.execute("delete from cockpit.audtab_coletas where id=%s", (substitui,))
+            # Dicionário pesa (o SX6 inteiro por coleta): só as últimas
+            # AUD_DIC_MANTER de cada base guardam. SX2/volume ficam sempre.
+            cur.execute("""with velhas as (
+                             select id from cockpit.audtab_coletas
+                              where customer=%s and ambiente=%s
+                              order by lido_em desc offset %s)
+                           delete from cockpit.audtab_sx3 where coleta_id in (select id from velhas)""",
+                        (customer, amb, AUD_DIC_MANTER))
+            cur.execute("""with velhas as (
+                             select id from cockpit.audtab_coletas
+                              where customer=%s and ambiente=%s
+                              order by lido_em desc offset %s)
+                           delete from cockpit.audtab_sx6 where coleta_id in (select id from velhas)""",
+                        (customer, amb, AUD_DIC_MANTER))
+    finally:
+        con.close()
+    return cid
 
 
 @app.get("/api/auditoria/<customer>")
@@ -7073,77 +7154,226 @@ def api_auditoria_coletar(customer):
         else:
             x6 = val
 
-    lei = _aud_leiaute(customer, amb)
-    alvo = {e["tabela"]: e["alvo"] for e in escopo}
+    _aud_gravar(customer, amb, escopo, environment=d1.get("environment") or cfg.get("environment"),
+                sufixo=sufixo, banco=banco, sx2=sx2, cont=cont, x3=x3, x6=x6, erros_dic=erros_dic,
+                duracao_ms=int((time.time() - ini) * 1000), origem="rest")
     total = sum(f["qtd"] for fs in cont.values() for f in fs)
-    fora = 0
-    for a, fs in cont.items():
-        base = next((e["tabela"] for e in escopo if a in _aud_variantes(e["tabela"])), a)
-        if alvo.get(base):
-            fora += _aud_fora(alvo[base], fs, lei)
-
-    # Coleta e itens na MESMA transação: coleta sem itens apareceria na tela
-    # como "base vazia", que é o pior erro possível aqui.
-    con = db()
-    con.autocommit = False
-    try:
-        with con, con.cursor() as cur:
-            cur.execute("""insert into cockpit.audtab_coletas
-                           (customer, ambiente, environment, sufixo, banco, leiaute, duracao_ms,
-                            tabelas_lidas, total_registros, fora_padrao, disparado_por,
-                            x3_ok, x6_ok, x3_linhas, x6_linhas, erro_dic)
-                         values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
-                      (customer, amb, d1.get("environment") or cfg.get("environment"), sufixo,
-                       banco, lei["fonte"], int((time.time() - ini) * 1000), len(sx2), total,
-                       fora, current_user(), x3 is not None, x6 is not None,
-                       len(x3) if x3 is not None else None, len(x6) if x6 is not None else None,
-                       "; ".join(erros_dic)[:800] or None))
-            cid = cur.fetchone()[0]
-            linhas = []
-            for a, v in sx2.items():
-                fs = cont.get(a) or []
-                if not fs:
-                    linhas.append((cid, customer, amb, a, v["nome"], v["arquivo"], v["sx2"],
-                                   v["existe"], v["tem_filial"], None, 0))
-                for f in fs:
-                    linhas.append((cid, customer, amb, a, v["nome"], v["arquivo"], v["sx2"],
-                                   v["existe"], v["tem_filial"], f["filial"], f["qtd"]))
-            psycopg2.extras.execute_values(
-                cur, """insert into cockpit.audtab_itens
-                          (coleta_id, customer, ambiente, tabela, nome, arquivo, sx2, existe,
-                           tem_filial, filial, qtde) values %s""", linhas)
-            if x3:
-                psycopg2.extras.execute_values(
-                    cur, """insert into cockpit.audtab_sx3
-                              (coleta_id, tabela, campo, tipo, tamanho, decimal, titulo, contexto)
-                            values %s""",
-                    [(cid, r["tabela"], r["campo"], r["tipo"], r["tamanho"], r["decimal"],
-                      r["titulo"], r["contexto"]) for r in x3], page_size=1000)
-            if x6:
-                psycopg2.extras.execute_values(
-                    cur, """insert into cockpit.audtab_sx6
-                              (coleta_id, param, fil, tipo, conteudo, descricao) values %s""",
-                    [(cid, r["param"], r["fil"], r["tipo"], r["conteudo"], r["descricao"])
-                     for r in x6], page_size=1000)
-            # Dicionário pesa (o SX6 inteiro por coleta): só as últimas
-            # AUD_DIC_MANTER de cada base guardam. SX2/volume ficam sempre.
-            cur.execute("""with velhas as (
-                             select id from cockpit.audtab_coletas
-                              where customer=%s and ambiente=%s
-                              order by lido_em desc offset %s)
-                           delete from cockpit.audtab_sx3 where coleta_id in (select id from velhas)""",
-                        (customer, amb, AUD_DIC_MANTER))
-            cur.execute("""with velhas as (
-                             select id from cockpit.audtab_coletas
-                              where customer=%s and ambiente=%s
-                              order by lido_em desc offset %s)
-                           delete from cockpit.audtab_sx6 where coleta_id in (select id from velhas)""",
-                        (customer, amb, AUD_DIC_MANTER))
-    finally:
-        con.close()
     _log_coleta(customer, amb, "auditoria", ini, True, linhas=len(sx2), itens=total,
                 disparado_por=current_user())
     return api_auditoria(customer)
+
+
+
+# ── Sem REST: scripts para o console TCloud + upload do resultado ───────────
+# Base sem TSCMONITREST publicado (caso da base de Testes da Cresol) faz a MESMA
+# coleta à mão: os scripts abaixo são os MESMOS SELECTs que a REST executaria,
+# e o upload passa pela MESMA gravação (_aud_gravar). O painel não sabe — nem
+# precisa saber — por qual caminho a coleta chegou; só mostra "upload" no selo.
+#
+# São dois passos, como na aba Empresas (P0 → P1), e pelo mesmo motivo: a
+# contagem só pode citar tabela e coluna que EXISTEM (ORA-00942/00904 derrubam
+# a consulta inteira), e quem diz o que existe é o resultado do Script 1.
+#   Passo 1 → Scripts 1 (SX2), 3 (SX3) e 4 (SX6): independentes, rodam juntos.
+#   Passo 2 → Script 2 (contagem), gerado a partir do Script 1 já subido.
+AUD_UPLOAD_JANELA_DIAS = 7   # o Script 2 completa a coleta de upload desta janela
+
+AUD_TIPOS_CSV = {            # cabeçalho normalizado (_norm_col) → tipo do arquivo
+    "sx2": {"CHAVE", "MODOEMP", "MODOUN", "MODO"},
+    "contagem": {"TABELA", "FILIAL", "QTD"},
+    "sx3": {"ARQ", "CAMPO", "TAM"},
+    "sx6": {"PARAM", "FIL", "CONTEUDO"},
+}
+
+
+def _aud_csv_upload(texto):
+    """CSV vindo do console/SQL Developer/planilha: o separador varia (';' ou
+    ','), o cabeçalho pode vir entre aspas e com o nome da coluna original.
+    Devolve linhas com o cabeçalho já normalizado e o tipo reconhecido."""
+    texto = (texto or "").lstrip("﻿")
+    try:
+        dial = csv.Sniffer().sniff(texto[:4096], delimiters=",;\t|")
+    except csv.Error:
+        dial = csv.excel
+    linhas = [list(r) for r in csv.reader(io.StringIO(texto), dial)]
+    if not linhas:
+        return None, []
+    cab = [_norm_col(c) for c in linhas[0]]
+    tipo = next((t for t, cols in AUD_TIPOS_CSV.items() if cols <= set(cab)), None)
+    return tipo, [cab] + linhas[1:]
+
+
+def _aud_ultima_coleta(customer, amb, origem=None, dias=None):
+    sql = "select * from cockpit.audtab_coletas where customer=%s and ambiente=%s"
+    par = [customer, amb]
+    if origem:
+        sql += " and coalesce(origem,'rest')=%s"
+        par.append(origem)
+    if dias:
+        sql += " and lido_em > now() - (%s || ' days')::interval"
+        par.append(str(dias))
+    return q(sql + " order by lido_em desc limit 1", tuple(par), one=True)
+
+
+def _aud_estado_coleta(c):
+    """Reconstrói sx2/cont/x3/x6 de uma coleta gravada — o upload do Script 2
+    sobrepõe só a parte que chegou e regrava o resto como estava."""
+    sx2, cont = {}, {}
+    for it in q("""select tabela, nome, arquivo, sx2, existe, tem_filial, filial, qtde
+                     from cockpit.audtab_itens where coleta_id=%s""", (c["id"],)):
+        sx2.setdefault(it["tabela"], {"nome": it["nome"], "arquivo": it["arquivo"], "sx2": it["sx2"],
+                                      "existe": it["existe"], "tem_filial": it["tem_filial"]})
+        if it["filial"] is not None:
+            cont.setdefault(it["tabela"], []).append({"filial": it["filial"], "qtd": int(it["qtde"] or 0)})
+    x3 = x6 = None
+    if c.get("x3_ok"):
+        x3 = [dict(r) for r in q("""select tabela, campo, tipo, tamanho, decimal, titulo, contexto
+                                      from cockpit.audtab_sx3 where coleta_id=%s""", (c["id"],))]
+    if c.get("x6_ok"):
+        x6 = [dict(r) for r in q("""select param, fil, tipo, conteudo, descricao
+                                      from cockpit.audtab_sx6 where coleta_id=%s""", (c["id"],))]
+    return sx2, cont, x3, x6
+
+
+def _aud_banco_sufixo(customer, amb):
+    """Banco e sufixo: o cadastro do ⚙ Ambiente vale mais (mesmo sem REST, ele
+    guarda banco e sufixo); a query string só entra quando não há cadastro."""
+    cfg = _cfg_ambiente(customer, amb) or {}
+    banco = (cfg.get("banco") or request.args.get("banco") or "oracle").lower()
+    if banco not in ("oracle", "mssql"):
+        banco = "oracle"
+    suf = (cfg.get("sufixo") or request.args.get("sufixo") or "").strip()
+    sufixo = suf if re.match(r"^\d{3}$", suf) else _aud_sufixo(cfg)
+    return banco, sufixo, bool(cfg)
+
+
+@app.get("/api/auditoria/<customer>/scripts")
+def api_auditoria_scripts(customer):
+    """Os SELECTs da coleta, prontos para o console TCloud.
+
+        GET /api/auditoria/TFCTQI00/scripts?ambiente=teste[&banco=oracle&sufixo=010]
+    """
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "auditoria")):
+        return d
+    amb = _amb_path(request.args.get("ambiente") or "")
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    escopo = _aud_escopo(customer)
+    if not any(e["papel"] == "escopo" for e in escopo):
+        return _err(409, "Nenhuma tabela definida na aba Estrutura para este cliente.")
+    banco, sufixo, cadastrado = _aud_banco_sufixo(customer, amb)
+    aliases = _aud_aliases(escopo)
+    rot = {"producao": "Producao", "teste": "Teste"}[amb]
+    # Cabeçalho ASCII: o console e o SQL Developer do cliente nem sempre estão
+    # em UTF-8, e o comentário é o que diz de qual base o resultado saiu.
+    cab = lambda n, txt: (f"-- Auditoria de Tabelas - Script {n} - {txt} - {customer} - "
+                          f"base {rot} - SX2{sufixo} - {banco}. Exportar o resultado em CSV.\n")
+    ult = _aud_ultima_coleta(customer, amb)
+    contagem, base = None, None
+    if ult:
+        sx2, _c, _x3, _x6 = _aud_estado_coleta(ult)
+        lidas = [(a, v["arquivo"], v["tem_filial"]) for a, v in sorted(sx2.items())
+                 if v["existe"] and AUD_RE_ARQ.match(v["arquivo"] or "")]
+        if lidas:
+            contagem = cab(2, "contagem por filial") + _aud_sql_contagem(lidas)
+            base = {"lido_em": ult["lido_em"], "origem": ult.get("origem") or "rest",
+                    "tabelas": len(lidas)}
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "banco": banco,
+                  "sufixo": sufixo, "ambiente_cadastrado": cadastrado, "contagem_base": base,
+                  "scripts": [
+                      {"id": "sx2", "n": 1, "rotulo": "Script 1 · SX2 + existência das tabelas",
+                       "sql": cab(1, "SX2 + existencia") + _aud_sql_sx2(aliases, sufixo, banco)},
+                      {"id": "contagem", "n": 2, "rotulo": "Script 2 · contagem por filial",
+                       "sql": contagem,
+                       "pendente": None if contagem else
+                       "Suba primeiro o resultado do Script 1: a contagem só pode citar as tabelas que existem."},
+                      {"id": "sx3", "n": 3, "rotulo": "Script 3 · SX3 das tabelas auditadas",
+                       "sql": cab(3, "SX3") + _aud_sql_x3(aliases, sufixo, banco)},
+                      {"id": "sx6", "n": 4, "rotulo": "Script 4 · SX6 inteiro",
+                       "sql": cab(4, "SX6") + _aud_sql_x6(sufixo, banco)},
+                  ]})
+
+
+@app.post("/api/auditoria/<customer>/upload")
+def api_auditoria_upload(customer):
+    """Recebe os CSVs dos scripts (um ou vários de uma vez) e grava a coleta.
+
+        POST /api/auditoria/TFCTQI00/upload?ambiente=teste
+        {"arquivos": [{"nome": "sx2.csv", "texto": "CHAVE;NOME;..."}, ...]}
+
+    Com o Script 1 (SX2) no pacote nasce uma coleta nova. Sem ele, o pacote
+    completa a última coleta de UPLOAD desta base (até 7 dias) — é o caminho
+    do Script 2, que só existe depois do 1.
+    """
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "auditoria")):
+        return d
+    amb = _amb_path(request.args.get("ambiente") or "")
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    escopo = _aud_escopo(customer)
+    if not any(e["papel"] == "escopo" for e in escopo):
+        return _err(409, "Nenhuma tabela definida na aba Estrutura para este cliente.")
+    corpo = request.get_json(silent=True) or {}
+    arquivos = corpo.get("arquivos") or []
+    if not arquivos:
+        return _err(400, "Nenhum arquivo recebido.")
+
+    lidos, ignorados = {}, []
+    for a in arquivos:
+        tipo, linhas = _aud_csv_upload(a.get("texto") or "")
+        if not tipo:
+            ignorados.append(a.get("nome") or "?")
+            continue
+        if tipo in lidos:
+            return _err(400, f"Dois arquivos do mesmo script ({tipo.upper()}): "
+                             f"{lidos[tipo][0]} e {a.get('nome')}. Suba um de cada.")
+        lidos[tipo] = (a.get("nome") or tipo, linhas)
+    if not lidos:
+        return _err(400, "Não reconheci nenhum arquivo. O cabeçalho precisa ser o dos scripts "
+                         "da aba (ex.: CHAVE;NOME;ARQ;MODOEMP;MODOUN;MODO;EXISTE;TEMFIL). "
+                         f"Recebidos: {', '.join(ignorados)}.")
+
+    sx2 = _aud_parse_sx2(lidos["sx2"][1]) if "sx2" in lidos else None
+    cont = _aud_parse_contagem(lidos["contagem"][1]) if "contagem" in lidos else None
+    x3 = _aud_parse_x3(lidos["sx3"][1]) if "sx3" in lidos else None
+    x6 = _aud_parse_x6(lidos["sx6"][1]) if "sx6" in lidos else None
+    if sx2 is not None and not sx2:
+        return _err(400, f"{lidos['sx2'][0]}: nenhuma tabela reconhecida no resultado do Script 1.")
+
+    banco, sufixo, _cad = _aud_banco_sufixo(customer, amb)
+    substitui = None
+    if sx2 is None:
+        ant = _aud_ultima_coleta(customer, amb, origem="upload", dias=AUD_UPLOAD_JANELA_DIAS)
+        if not ant:
+            return _err(409, "Suba primeiro o resultado do Script 1 (SX2) desta base: "
+                             "o Script 2 e o dicionário completam essa coleta.")
+        sx2, cont_ant, x3_ant, x6_ant = _aud_estado_coleta(ant)
+        cont = cont if cont is not None else cont_ant
+        x3 = x3 if x3 is not None else x3_ant
+        x6 = x6 if x6 is not None else x6_ant
+        substitui = ant["id"]
+        banco, sufixo = ant.get("banco") or banco, ant.get("sufixo") or sufixo
+    cont = cont or {}
+    # Contagem de tabela que o Script 1 não listou é de outro script/base: fora.
+    estranhas = sorted(set(cont) - set(sx2))
+    for t in estranhas:
+        cont.pop(t)
+
+    ini = time.time()
+    _aud_gravar(customer, amb, escopo, environment="upload", sufixo=sufixo, banco=banco,
+                sx2=sx2, cont=cont, x3=x3, x6=x6, erros_dic=[], duracao_ms=0,
+                origem="upload", substitui=substitui)
+    _log_coleta(customer, amb, "auditoria", ini, True, linhas=len(sx2),
+                itens=sum(f["qtd"] for fs in cont.values() for f in fs),
+                disparado_por=current_user())
+    j = json.loads(api_auditoria(customer).get_data(as_text=True))
+    j["upload"] = {"arquivos": {t: v[0] for t, v in lidos.items()}, "ignorados": ignorados,
+                   "estranhas": estranhas, "completou": bool(substitui),
+                   "falta_contagem": not cont}
+    return _json(j)
 
 
 # ============================================================================

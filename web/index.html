@@ -454,6 +454,10 @@
         <div data-rail="aud" class="rail-grupo hidden">
           <button id="aud-rail-teste"    class="rail-btn rail-btn-cta">⚡ Coletar Teste<span class="rail-sub">SX2 · volume · SX3 · SX6</span></button>
           <button id="aud-rail-producao" class="rail-btn">⚡ Coletar Produção<span class="rail-sub">SX2 · volume · SX3 · SX6</span></button>
+          <button id="aud-scripts"       class="rail-btn rail-sep">🗄 Scripts SQL<span class="rail-sub">base sem REST · console TCloud</span></button>
+          <label id="aud-upload-wrap"    class="rail-btn">⬆ Subir resultado<span class="rail-sub">.csv dos scripts</span>
+            <input id="aud-file" type="file" accept=".csv,.txt,text/csv" multiple class="hidden">
+          </label>
           <button id="aud-amb-teste"     class="rail-btn rail-sep">⚙ Ambiente Teste</button>
           <button id="aud-amb-producao"  class="rail-btn">⚙ Ambiente Produção</button>
           <button id="aud-recarregar"    class="rail-btn rail-sep">↻ Recarregar<span class="rail-sub">última coleta salva</span></button>
@@ -792,6 +796,7 @@
             <span id="aud-cliente-nome" class="font-medium"></span>
             <button id="aud-coletar-teste" class="px-3 py-1.5 rounded-md bg-amber-100 text-amber-900 font-semibold hover:bg-amber-200">⚡ Coletar Teste</button>
             <button id="aud-coletar-producao" class="px-3 py-1.5 rounded-md bg-emerald-100 text-emerald-800 font-semibold hover:bg-emerald-200">⚡ Coletar Produção</button>
+            <button id="aud-scripts-topo" class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50" title="Para base sem REST: rode no console TCloud e suba o CSV">🗄 Scripts SQL · ⬆ Subir</button>
             <span class="text-xs text-slate-400">O alvo vem da aba Estrutura.</span>
           </div>
           <div id="aud-conteudo"></div>
@@ -9583,8 +9588,8 @@ function renderAuditoria() {
     const c = d.coletas[amb], A = AMB[amb];
     if (!c) return `<div><span class="px-2 py-0.5 rounded-full text-xs ${A.cls}">${A.label}</span> <span class="text-xs text-slate-400">sem coleta${d.ambientes[amb] ? '' : ' · REST não cadastrada em ⚙ Ambiente'}</span></div>`;
     return `<div><span class="px-2 py-0.5 rounded-full text-xs ${A.cls}">${A.label}</span>
-      <span class="text-xs text-slate-500">${escapeHtml(c.environment || '')} · SX2${escapeHtml(c.sufixo || '')} ·
-      ${new Date(c.lido_em).toLocaleString('pt-BR')} · leiaute: ${escapeHtml(c.leiaute || '')}</span></div>`;
+      <span class="text-xs text-slate-500">${c.origem === 'upload' ? '' : escapeHtml(c.environment || '') + ' · '}SX2${escapeHtml(c.sufixo || '')} ·
+      ${new Date(c.lido_em).toLocaleString('pt-BR')} · ${c.origem === 'upload' ? '<b>upload do console</b>' : 'REST'} · leiaute: ${escapeHtml(c.leiaute || '')}</span></div>`;
   };
 
   const grupos = [...new Set(L.map(x => x.e.grupo))];
@@ -9719,7 +9724,7 @@ function audDicMotivo(d, chave) {
   const falta = [['Teste', t], ['Produção', p]].filter(([, c]) => !c[chave + '_ok']);
   if (falta.length) return `A última coleta de ${falta.map(f => f[0]).join(' e ')} não leu o ${chave === 'x3' ? 'SX3' : 'SX6'}`
     + (falta.map(f => f[1].erro_dic).filter(Boolean).length ? ` (${falta.map(f => f[1].erro_dic).filter(Boolean).join(' · ')})` : '')
-    + '. Colete de novo.';
+    + (falta.some(f => f[1].origem === 'upload') ? `. Suba o resultado do Script ${chave === 'x3' ? 3 : 4} pela opção ⬆ Subir resultado.` : '. Colete de novo.');
   return null;
 }
 
@@ -9841,6 +9846,104 @@ $('#aud-rail-producao').addEventListener('click', () => coletaAuditoria('produca
 $('#aud-amb-teste').addEventListener('click', () => abreAmbienteAuditoria('teste'));
 $('#aud-amb-producao').addEventListener('click', () => abreAmbienteAuditoria('producao'));
 $('#aud-recarregar').addEventListener('click', carregaAuditoria);
+
+// ── Base sem REST: scripts para o console TCloud + upload do CSV ───────────
+//  Os scripts são os MESMOS SELECTs da coleta pela REST, e o upload passa pela
+//  mesma gravação. Dois passos: 1, 3 e 4 rodam juntos; o 2 (contagem) só existe
+//  depois que o resultado do 1 subir — ele só pode citar tabela que existe.
+async function abreScriptsAuditoria(ambIni) {
+  const cli = aud.customer;
+  if (!cli) { alert('Abra um projeto antes.'); return; }
+  let amb = ambIni || (aud.dados?.ambientes?.teste ? 'producao' : 'teste');
+  let banco = '', sufixo = '';
+  const m = modal('Scripts SQL · coleta pelo console TCloud', '<div id="aud-scr">Montando os scripts…</div>', 'Subir resultado');
+  m.el.firstElementChild.classList.replace('max-w-lg', 'max-w-3xl');
+  const pinta = async () => {
+    const box = m.el.querySelector('#aud-scr');
+    let j;
+    try {
+      const qs = new URLSearchParams({ ambiente: amb });
+      if (banco) qs.set('banco', banco);
+      if (sufixo) qs.set('sufixo', sufixo);
+      j = await api(`/api/auditoria/${encodeURIComponent(cli)}/scripts?${qs}`);
+    } catch (e) { box.innerHTML = `<p class="text-rose-700">${escapeHtml(e.message)}</p>`; return; }
+    box.innerHTML = `
+      <div class="flex items-center gap-2 flex-wrap">
+        ${['teste', 'producao'].map(a => `<label class="flex items-center gap-1.5 px-3 py-1.5 rounded-md border ${a === amb ? 'border-totvs-blue bg-totvs-blue/5' : 'border-slate-300'} cursor-pointer">
+          <input type="radio" name="aud-scr-amb" value="${a}" ${a === amb ? 'checked' : ''} class="accent-totvs-blue">${AMB[a].label}</label>`).join('')}
+        <label class="text-xs text-slate-500">Banco
+          <select id="aud-scr-banco" class="ml-1 px-2 py-1 border border-slate-300 rounded-md" ${j.ambiente_cadastrado ? 'disabled' : ''}>
+            <option value="oracle" ${j.banco === 'oracle' ? 'selected' : ''}>Oracle</option>
+            <option value="mssql" ${j.banco === 'mssql' ? 'selected' : ''}>SQL Server</option></select></label>
+        <label class="text-xs text-slate-500">Sufixo
+          <input id="aud-scr-suf" value="${escapeHtml(j.sufixo)}" maxlength="3" class="ml-1 w-16 px-2 py-1 border border-slate-300 rounded-md font-mono" ${j.ambiente_cadastrado ? 'disabled' : ''}></label>
+        <span class="text-xs text-slate-400">${j.ambiente_cadastrado ? 'banco e sufixo vêm do ⚙ Ambiente' : 'sem ⚙ Ambiente cadastrado — confira banco e sufixo'}</span>
+      </div>
+      <ol class="text-xs text-slate-600 list-decimal pl-5 space-y-1">
+        <li><b>Passo 1:</b> rode os Scripts <b>1, 3 e 4</b> no console TCloud da ${escapeHtml(AMB[amb].label)}, exporte cada resultado em <b>CSV com cabeçalho</b> e suba os três juntos.</li>
+        <li><b>Passo 2:</b> reabra esta tela — o <b>Script 2</b> (contagem por filial) é montado com as tabelas que o Script 1 achou. Rode, exporte e suba.</li>
+        <li>Cada arquivo é reconhecido pelo cabeçalho; não precisa renomear. Só leitura, sem <span class="font-mono">;</span> no fim.</li>
+      </ol>
+      ${j.scripts.map(sc => `<details class="border border-slate-200 rounded" ${sc.id === 'contagem' && sc.sql ? 'open' : ''}>
+        <summary class="px-3 py-2 cursor-pointer text-xs font-semibold flex items-center gap-2">${escapeHtml(sc.rotulo)}
+          ${sc.sql ? '' : '<span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-normal">aguardando o Script 1</span>'}
+          ${sc.id === 'contagem' && j.contagem_base ? `<span class="font-normal text-slate-400">${j.contagem_base.tabelas} tabela(s) da coleta de ${new Date(j.contagem_base.lido_em).toLocaleString('pt-BR')}</span>` : ''}</summary>
+        ${sc.sql ? `<textarea data-aud-sql="${sc.id}" readonly rows="7" class="w-full font-mono text-xs p-2 border-t border-slate-200">${escapeHtml(sc.sql)}</textarea>
+          <div class="px-3 pb-2 flex gap-2"><button data-aud-copia="${sc.id}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50">Copiar</button>
+          <button data-aud-baixa="${sc.id}" data-n="${sc.n}" class="px-2 py-1 text-xs rounded border border-slate-300 hover:bg-slate-50">Baixar .sql</button></div>`
+          : `<p class="px-3 pb-2 text-xs text-slate-500">${escapeHtml(sc.pendente || '')}</p>`}
+      </details>`).join('')}`;
+    box.querySelectorAll('input[name="aud-scr-amb"]').forEach(r => r.addEventListener('change', ev => { amb = ev.target.value; banco = sufixo = ''; pinta(); }));
+    box.querySelector('#aud-scr-banco').addEventListener('change', ev => { banco = ev.target.value; pinta(); });
+    box.querySelector('#aud-scr-suf').addEventListener('change', ev => { sufixo = ev.target.value.trim(); pinta(); });
+    box.querySelectorAll('[data-aud-copia]').forEach(b => b.addEventListener('click', async () => {
+      const t = box.querySelector(`[data-aud-sql="${b.dataset.audCopia}"]`).value;
+      try { await navigator.clipboard.writeText(t); m.erro('Copiado.'); } catch { m.erro('O navegador bloqueou a cópia — selecione e copie à mão.'); }
+    }));
+    box.querySelectorAll('[data-aud-baixa]').forEach(b => b.addEventListener('click', () => {
+      const t = box.querySelector(`[data-aud-sql="${b.dataset.audBaixa}"]`).value;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([t], { type: 'text/plain' }));
+      a.download = `auditoria-${cli}-${amb}-script${b.dataset.n}-${b.dataset.audBaixa}.sql`;
+      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }));
+  };
+  m.aoConfirmar(() => { m.fecha(); escolheArquivosAuditoria(amb); });
+  pinta();
+}
+
+function escolheArquivosAuditoria(amb) {
+  aud.ambUpload = amb || null;
+  $('#aud-file').click();
+}
+
+async function enviaArquivosAuditoria(ev) {
+  const files = [...(ev.target.files || [])];
+  ev.target.value = '';
+  if (!files.length) return;
+  const cli = aud.customer;
+  if (!cli) { alert('Abra um projeto antes.'); return; }
+  const arquivos = await Promise.all(files.map(async f => ({ nome: f.name, texto: await f.text() })));
+  const nomes = files.map(f => f.name).join(', ');
+  confirmaAmbiente(nomes, aud.ambUpload || 'teste', async (amb, m) => {
+    m.ocupado(true, 'Enviando…');
+    try {
+      const j = await api(`/api/auditoria/${encodeURIComponent(cli)}/upload?ambiente=${amb}`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ arquivos }) });
+      m.fecha();
+      aud.dados = j; aud.erroColeta = null; renderAuditoria();
+      const u = j.upload || {};
+      const rec = Object.entries(u.arquivos || {}).map(([t, n]) => `${t.toUpperCase()} ← ${n}`).join('\n');
+      alert(`${AMB[amb].label}: ${u.completou ? 'coleta completada' : 'coleta nova gravada'}.\n\n${rec}`
+        + (u.ignorados?.length ? `\n\nNão reconhecidos (cabeçalho fora do padrão): ${u.ignorados.join(', ')}` : '')
+        + (u.falta_contagem ? '\n\nFalta o Script 2 (contagem por filial): reabra 🗄 Scripts SQL — ele já está montado com as tabelas que existem.' : ''));
+    } catch (e) { m.ocupado(false, 'Importar'); m.erro(e.message); }
+  });
+}
+
+$('#aud-scripts').addEventListener('click', () => abreScriptsAuditoria());
+$('#aud-scripts-topo').addEventListener('click', () => abreScriptsAuditoria());
+$('#aud-file').addEventListener('change', enviaArquivosAuditoria);
 
 $('#btn-acessos').addEventListener('click', abreAcessos);
 

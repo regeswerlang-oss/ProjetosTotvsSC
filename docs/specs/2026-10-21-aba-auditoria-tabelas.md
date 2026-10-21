@@ -163,6 +163,45 @@ conteúdo/filial diferente, conteúdo com vírgula, aspas e ponto, SX6 truncado 
 derrubar a coleta, retenção em 3 coletas; oito SELECTs pela trava do SqlSeguro)
 e no `auditoria-front.js` (blocos, recolhido, filtros e busca).
 
+## Base sem REST: scripts para o console TCloud + upload (21/10/2026, terceira entrega)
+
+A base de Testes da Cresol não tem o TSCMONITREST publicado. A mesma coleta
+passa a poder ser feita à mão — **🗄 Scripts SQL** e **⬆ Subir resultado** no
+rail e no topo da aba.
+
+- **Os scripts são os MESMOS SELECTs da REST** (`_aud_sql_sx2`, `_aud_sql_contagem`,
+  `_aud_sql_x3`, `_aud_sql_x6`), com um cabeçalho de comentário em ASCII dizendo
+  cliente, base, sufixo e banco. Sem `;` no fim.
+- **Dois passos, como P0 → P1 da aba Empresas**, e pelo mesmo motivo: a contagem
+  só pode citar tabela e coluna que existem (ORA-00942/00904 derrubam a consulta).
+  - Passo 1: Scripts **1 (SX2 + existência), 3 (SX3) e 4 (SX6)** — independentes.
+  - Passo 2: **Script 2 (contagem por filial)**, montado a partir da última
+    coleta daquela base (REST ou upload). Sem coleta, o modal diz que está
+    aguardando o Script 1.
+- **Banco e sufixo**: os do ⚙ Ambiente quando ele existe (mesmo sem REST, o
+  cadastro guarda os dois); sem cadastro, o modal deixa escolher.
+- **Upload** (`POST /api/auditoria/<customer>/upload?ambiente=`): um ou vários
+  CSVs de uma vez, em JSON `{arquivos:[{nome, texto}]}`. Cada arquivo é
+  reconhecido **pelo cabeçalho** (`AUD_TIPOS_CSV`), não pelo nome; separador
+  `;` ou `,`, cabeçalho com aspas e BOM aceitos (export do console/SQL Developer).
+  - Com o Script 1 no pacote → **coleta nova** (`origem = 'upload'`).
+  - Sem ele → **completa a última coleta de upload** daquela base (janela de 7
+    dias), regravando o que já tinha e sobrepondo o que chegou. Gravação é a
+    mesma `_aud_gravar` da REST; a coleta antiga sai na mesma transação.
+  - Script 2 sem Script 1 antes → 409 com o caminho. Contagem de tabela que o
+    Script 1 não listou é descartada e listada na resposta.
+- **Selo da base** mostra "upload do console" no lugar do environment da REST.
+- Conteúdo do SX6 tem aspas trocadas por espaço também no parser: o SQL já
+  troca, mas o CSV do console pode trazer o original, e os dois caminhos
+  precisam comparar igual.
+
+Testado no `auditoria-e2e.py`: base de Testes sem ambiente cadastrado, scripts
+(ASCII, sem `;`, pela trava do SqlSeguro), upload do passo 1 com CSV em vírgula
++ aspas + BOM e um arquivo desconhecido (ignorado), Script 2 montado só com o
+que existe, upload do passo 2 completando a coleta sem duplicar, **mesmo
+`fora_padrao` (62) da coleta pela REST**, e o 409 do Script 2 sem o 1.
+`auditoria-front.js`: modal de scripts e upload de dois arquivos.
+
 **Não testado:** Oracle e SQL Server reais (o SQL passou pela trava do
 SqlSeguro e pelo stub, não por um banco) e a base da Cresol, que ainda não tem
 o TSCMONITREST publicado nem o ⚙ Ambiente cadastrado.

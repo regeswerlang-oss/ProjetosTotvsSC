@@ -250,6 +250,72 @@ r = cli.post(f"/api/auditoria/{C}/coletar?ambiente=producao")
 confere(r.status_code == 404 and "Ambiente" in r.get_json()["error"], "sem ambiente")
 
 open("/home/claude/w/aud.json", "w").write(json.dumps(j, default=str, ensure_ascii=False))
+
+# ── Base SEM REST: scripts para o console + upload do CSV ──────────────────
+# A base de Testes da Cresol não tem TSCMONITREST. O fluxo manual tem de chegar
+# no MESMO resultado da coleta pela REST.
+cur.execute("delete from cockpit.protheus_ambientes where ambiente='teste'")
+r = cli.get(f"/api/auditoria/{C}/scripts?ambiente=teste&banco=oracle&sufixo=010")
+confere(r.status_code == 200, f"scripts sem ambiente {r.status_code}")
+sc = {x["id"]: x for x in r.get_json()["scripts"]}
+confere(all(sc[k]["sql"] for k in ("sx2", "sx3", "sx6")), "scripts 1, 3 e 4 prontos")
+# a última coleta de Teste (REST) existe, então o 2 já sai montado dela
+confere(sc["contagem"]["sql"] and "FROM F22010" in sc["contagem"]["sql"], "script 2 a partir da última coleta")
+for k, v in sc.items():
+    if v["sql"]:
+        corpo_sql = "\n".join(l for l in v["sql"].splitlines() if not l.startswith("--"))
+        confere(sql_seguro(corpo_sql) is None and not v["sql"].rstrip().endswith(";"), f"script {k} seguro e sem ';'")
+        confere(all(ord(ch) < 128 for ch in v["sql"]), f"script {k} em ASCII")
+
+# Simula o console: CSV com VÍRGULA, cabeçalho entre aspas e BOM — o que o
+# SQL Developer e o export do TCloud costumam gerar.
+def csv_virgula(cab, linhas):
+    q_ = lambda v: '"' + str(v).replace('"', '""') + '"'
+    return "\ufeff" + ",".join(q_(c) for c in cab) + "\n" + "\n".join(",".join(q_(v) for v in l) for l in linhas)
+
+b = BASES["teste"]
+sx2_csv = csv_virgula(["CHAVE", "NOME", "ARQ", "MODOEMP", "MODOUN", "MODO", "EXISTE", "TEMFIL"],
+                      [[a, "Tabela " + a, a + "010", m[0], m[1], m[2], int(a in b["fisicas"]), int(a in b["fisicas"])]
+                       for a, m in b["sx2"].items()])
+x3_csv = csv_virgula(["ARQ", "CAMPO", "TIPO", "TAM", "DECIMAIS", "TITULO", "CONTEXTO"],
+                     [[t, c, tp, tm, dc, "Titulo " + c, "R"] for t, c, tp, tm, dc in X3["teste"]])
+x6_csv = csv_virgula(["PARAM", "FIL", "TIPO", "CONTEUDO", "DESCR"],
+                     [[p_, f, t, c, "Desc " + p_] for p_, f, t, c in X6["teste"]])
+r = cli.post(f"/api/auditoria/{C}/upload?ambiente=teste",
+             json={"arquivos": [{"nome": "s1.csv", "texto": sx2_csv}, {"nome": "s3.csv", "texto": x3_csv},
+                                {"nome": "s4.csv", "texto": x6_csv}, {"nome": "lixo.csv", "texto": "A,B\n1,2"}]})
+confere(r.status_code == 200, f"upload passo 1 {r.status_code} {r.get_data(as_text=True)[:200]}")
+ju = r.get_json()
+confere(ju["upload"]["falta_contagem"] and not ju["upload"]["completou"], "passo 1 avisa que falta o Script 2")
+confere(ju["upload"]["ignorados"] == ["lixo.csv"], "arquivo sem cabeçalho conhecido é ignorado")
+ct = ju["coletas"]["teste"]
+confere(ct["origem"] == "upload" and ct["x3_ok"] and ct["x6_ok"], "coleta de upload com dicionário")
+confere(ct["tabelas"]["F22"]["sx2"] == "ECC" and ct["tabelas"]["F22"]["filiais"] == [], "SX2 sem contagem ainda")
+x6u = {x["param"]: x["situacao"] for x in ju["dicionario"]["x6"]["divergentes"]}
+confere(x6u.get("MV_CFGTRIB") == "conteudo" and "MV_LISTA" not in x6u, f"SX6 por upload (vírgula/aspas) {x6u}")
+
+# passo 2: o script 2 agora sai da coleta de upload
+sc2 = {x["id"]: x for x in cli.get(f"/api/auditoria/{C}/scripts?ambiente=teste").get_json()["scripts"]}
+confere("FROM F0V010" in sc2["contagem"]["sql"] and "FROM SB1010" not in sc2["contagem"]["sql"],
+        "script 2 só com tabela que existe")
+cont_csv = "TABELA;FILIAL;QTD\n" + "\n".join(f"{a};{f};{n}" for a, fs in b["dados"].items() for f, n in fs) + "\nZZZ;01;5"
+r = cli.post(f"/api/auditoria/{C}/upload?ambiente=teste", json={"arquivos": [{"nome": "s2.csv", "texto": cont_csv}]})
+confere(r.status_code == 200, f"upload passo 2 {r.status_code} {r.get_data(as_text=True)[:200]}")
+ju2 = r.get_json()
+confere(ju2["upload"]["completou"] and ju2["upload"]["estranhas"] == ["ZZZ"], "passo 2 completa e descarta tabela estranha")
+ct2 = ju2["coletas"]["teste"]
+confere(ct2["tabelas"]["F22"]["filiais"] == [{"filial": "01", "qtd": 40}], "contagem chegou")
+confere(ct2["x3_ok"] and ct2["x6_ok"], "passo 2 preserva o dicionário do passo 1")
+cur.execute("select fora_padrao from cockpit.audtab_coletas where id=%s", (ct2["id"],))
+confere(int(cur.fetchone()[0]) == 62, "upload chega no MESMO fora_padrao da REST (62)")
+cur.execute("select count(*) from cockpit.audtab_coletas where customer=%s and ambiente='teste' and origem='upload'", (C,))
+confere(cur.fetchone()[0] == 1, "passo 2 substitui a coleta do passo 1 (não duplica)")
+
+# passo 2 sem passo 1 → recusa
+cur.execute("delete from cockpit.audtab_coletas where ambiente='producao'")
+r = cli.post(f"/api/auditoria/{C}/upload?ambiente=producao", json={"arquivos": [{"nome": "s2.csv", "texto": cont_csv}]})
+confere(r.status_code == 409 and "Script 1" in r.get_json()["error"], "Script 2 sem Script 1 é recusado")
+print("FALHAS (com upload):", falhas or "nenhuma")
 print("SQL passo 1 (teste):\n", VISTOS[0][1][:400], "...\n")
 print("SQL passo 2 (teste):\n", VISTOS[1][1][:400], "...\n")
 print("coletas:", res)

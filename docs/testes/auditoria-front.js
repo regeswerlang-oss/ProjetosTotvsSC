@@ -31,6 +31,18 @@ const VAZIO = Object.assign({}, PAYLOAD, { coletas: { teste: null, producao: nul
   await pg.route('**/api/me', r => r.fulfill({ json: { ok: true, email: 'reges.werlang@totvs.com.br', nome: 'Reges', perfil: 'admin', is_admin: true, interno: true } }));
   await pg.route('**/api/projetos*', r => r.fulfill({ json: { ok: true, total: 0, projetos: [] } }));
   await pg.route('**/api/auditoria/TFCTQI00', r => r.fulfill({ json: leitura }));
+  const uploads = [];
+  await pg.route('**/api/auditoria/TFCTQI00/scripts*', r => r.fulfill({ json: { ok: true, banco: 'oracle', sufixo: '010',
+    ambiente_cadastrado: false, contagem_base: null, scripts: [
+      { id: 'sx2', n: 1, rotulo: 'Script 1 · SX2', sql: '-- c\nSELECT 1 FROM SX2010' },
+      { id: 'contagem', n: 2, rotulo: 'Script 2 · contagem', sql: null, pendente: 'Suba primeiro o resultado do Script 1' },
+      { id: 'sx3', n: 3, rotulo: 'Script 3 · SX3', sql: 'SELECT 1 FROM SX3010' },
+      { id: 'sx6', n: 4, rotulo: 'Script 4 · SX6', sql: 'SELECT 1 FROM SX6010' }] } }));
+  await pg.route('**/api/auditoria/TFCTQI00/upload*', r => {
+    uploads.push({ url: r.request().url(), body: JSON.parse(r.request().postData()) });
+    r.fulfill({ json: Object.assign({}, PAYLOAD, { upload: { arquivos: { sx2: 's1.csv', sx6: 's4.csv' }, ignorados: [],
+      estranhas: [], completou: false, falta_contagem: true } }) });
+  });
   await pg.route('**/api/auditoria/TFCTQI00/coletar*', async r => {
     await new Promise(res => setTimeout(res, 250));
     leitura = PAYLOAD;
@@ -107,6 +119,28 @@ const VAZIO = Object.assign({}, PAYLOAD, { coletas: { teste: null, producao: nul
   const x3f = await pg.$$eval('[data-aud-x3]', ns => ns.map(n => n.dataset.audX3));
   t('busca no SX3', x3f.length === 1 && x3f[0] === 'F27.F27_DESC', x3f.join(','));
   await pg.screenshot({ path: (process.env.SHOT || '/home/claude/w/auditoria.png').replace('.png', '-dic.png'), fullPage: true });
+
+  // Base sem REST: modal de scripts e upload de vários CSVs de uma vez.
+  await pg.click('#aud-scripts-topo');
+  await pg.waitForSelector('[data-aud-sql="sx2"]', { timeout: 3000 }).catch(() => {});
+  const modalTxt = await txt('#aud-scr');
+  t('modal de scripts com passo 1 e 2', modalTxt.includes('Passo 1') && modalTxt.includes('aguardando o Script 1'));
+  t('scripts 1, 3 e 4 com SQL', (await pg.$$('[data-aud-sql]')).length === 3);
+  t('pediu os scripts da base certa', pedidos.some(p => p.startsWith('GET /api/auditoria/TFCTQI00/scripts?ambiente=')), pedidos.join(' | '));
+  await pg.evaluate(() => document.querySelector('.fixed.inset-0 [data-fechar]').click());
+  const dialogos = [];
+  pg.removeAllListeners('dialog');
+  pg.on('dialog', d => { dialogos.push(d.message()); d.accept(); });
+  await pg.setInputFiles('#aud-file', [
+    { name: 's1.csv', mimeType: 'text/csv', buffer: Buffer.from('CHAVE;NOME;ARQ;MODOEMP;MODOUN;MODO;EXISTE;TEMFIL\nF22;x;F22010;E;C;C;1;1') },
+    { name: 's4.csv', mimeType: 'text/csv', buffer: Buffer.from('PARAM;FIL;TIPO;CONTEUDO;DESCR\nMV_X;;C;1;d') }]);
+  await pg.waitForTimeout(200);
+  await pg.click('.fixed.inset-0 input[value="teste"]');
+  await pg.click('.fixed.inset-0 [data-ok]');
+  await pg.waitForTimeout(500);
+  const up = uploads[0];
+  t('upload manda os dois arquivos para a base escolhida', up && up.url.includes('ambiente=teste') && up.body.arquivos.length === 2, up && up.url);
+  t('aviso de que falta o Script 2', dialogos.some(m => m.includes('Falta o Script 2')), dialogos.join(' | '));
 
   await pg.setViewportSize({ width: 390, height: 900 });
   await pg.waitForTimeout(150);
