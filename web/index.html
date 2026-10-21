@@ -449,6 +449,16 @@
           <button id="cmp-rodar" class="rail-btn rail-btn-cta">🔄 Rodar comparação<span class="rail-sub">lê o dicionário na hora</span></button>
         </div>
 
+        <!-- Auditoria de Tabelas: aba INTERNA. Cada base é coletada pela sua REST;
+             o botão diz QUAL base, porque ler a errada é o erro caro aqui. -->
+        <div data-rail="aud" class="rail-grupo hidden">
+          <button id="aud-rail-teste"    class="rail-btn rail-btn-cta">⚡ Coletar Teste<span class="rail-sub">SX2 + volume por filial</span></button>
+          <button id="aud-rail-producao" class="rail-btn">⚡ Coletar Produção<span class="rail-sub">SX2 + volume por filial</span></button>
+          <button id="aud-amb-teste"     class="rail-btn rail-sep">⚙ Ambiente Teste</button>
+          <button id="aud-amb-producao"  class="rail-btn">⚙ Ambiente Produção</button>
+          <button id="aud-recarregar"    class="rail-btn rail-sep">↻ Recarregar<span class="rail-sub">última coleta salva</span></button>
+        </div>
+
         <!-- Integrações: aba INTERNA (ABAS cliente=False), como Estrutura e Compara.
              Coletar é a única ação que toca a base do cliente. -->
         <div data-rail="int" class="rail-grupo hidden">
@@ -508,6 +518,7 @@
             <button data-tab="empresas"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Empresas</button>
             <button data-tab="estrutura" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Estrutura</button>
             <button data-tab="compara"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Compara</button>
+            <button data-tab="auditoria" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Auditoria</button>
             <button data-tab="integracoes" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Integrações</button>
             <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
             <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
@@ -770,6 +781,20 @@
             <span id="cmp-selo" class="text-xs text-slate-500"></span>
           </div>
           <div id="cmp-conteudo"></div>
+        </div>
+
+        <!-- Aba Auditoria de Tabelas — alvo (Estrutura) × SX2 de Teste × SX2 de
+             Produção, com volume por conteúdo do campo filial. Abrir lê a última
+             coleta de cada base no Supabase; a base só é lida no ⚡ Coletar. -->
+        <div id="tab-auditoria" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="aud-cliente-nome" class="font-medium"></span>
+            <button id="aud-coletar-teste" class="px-3 py-1.5 rounded-md bg-amber-100 text-amber-900 font-semibold hover:bg-amber-200">⚡ Coletar Teste</button>
+            <button id="aud-coletar-producao" class="px-3 py-1.5 rounded-md bg-emerald-100 text-emerald-800 font-semibold hover:bg-emerald-200">⚡ Coletar Produção</button>
+            <span class="text-xs text-slate-400">O alvo vem da aba Estrutura.</span>
+          </div>
+          <div id="aud-conteudo"></div>
         </div>
 
         <!-- Aba Integrações — filas Quírons (RJP/RU7), Ahgora (RUM) e eSocial SST
@@ -2214,7 +2239,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'integracoes', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2236,7 +2261,7 @@ const AMB = {
 // lá quem decide é o setSub() — que roda depois deste mapa e sobrepõe.
 const RAIL_ABA = { crono: 'arvore', modulos: 'arvore', etapas: 'arvore',
                    cobertura: 'cob', empresas: 'emp', estrutura: 'est',
-                   compara: 'cmp', integracoes: 'int', prototipo: 'pro', transicao: 'tr' };
+                   compara: 'cmp', auditoria: 'aud', integracoes: 'int', prototipo: 'pro', transicao: 'tr' };
 
 function railGrupo(chave) {
   $$('#tab-acoes [data-rail]').forEach(g =>
@@ -2275,6 +2300,7 @@ function setTab(nome) {
   if (nome === 'empresas') initEmpresas(emp.ambiente);
   if (nome === 'estrutura') initEstrutura();
   if (nome === 'compara') initCompara();
+  if (nome === 'auditoria') initAuditoria();
   if (nome === 'integracoes') initIntegracoes();
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
@@ -9367,6 +9393,323 @@ $('#cmp-ambiente').addEventListener('change', () => {
 });
 // Atalho da Estrutura: leva para a aba já rodando — é de lá que a dúvida nasce.
 $('#est-comparar').addEventListener('click', () => { setTab('compara'); rodaCompara(); });
+
+// ============================================================================
+//  ABA AUDITORIA DE TABELAS — compartilhamento (SX2) e volume, Teste × Produção
+// ----------------------------------------------------------------------------
+//  Três colunas que não se misturam: o ALVO (aba Estrutura), o que a SX2 da
+//  base de Testes tem e o que a de Produção tem — mais o volume por conteúdo
+//  do campo filial em cada uma. As bases são coletadas separadamente (cada uma
+//  tem a sua REST) e a última coleta de cada fica guardada; por isso a aba
+//  abre lendo o Supabase e só toca a base no "⚡ Coletar".
+//
+//  Modo SEMPRE na ordem da SX2: Empresa · Unidade · Filial (X2_MODOEMP,
+//  X2_MODOUN, X2_MODO) — a mesma da Estrutura e da Empresas.
+// ============================================================================
+const aud = { customer: null, dados: null, carregando: false, coletando: {},
+              f: { grupo: '', st: '', sp: '', txt: '' }, abertos: new Set() };
+
+function initAuditoria() {
+  const cli = state.selected?.cli;
+  $('#aud-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (aud.customer !== cli) { aud.customer = cli; aud.dados = null; aud.abertos = new Set(); carregaAuditoria(); }
+  else renderAuditoria();
+}
+
+async function carregaAuditoria() {
+  const cli = aud.customer;
+  if (!cli) { renderAuditoria(); return; }
+  aud.carregando = true; renderAuditoria();
+  try { aud.dados = await api(`/api/auditoria/${encodeURIComponent(cli)}`); }
+  catch (e) { aud.dados = { erro: e.message }; }
+  finally { aud.carregando = false; renderAuditoria(); }
+}
+
+async function coletaAuditoria(amb) {
+  const cli = aud.customer;
+  if (!cli) { alert('Abra um projeto antes de coletar.'); return; }
+  const lab = (AMB[amb] || AMB.producao).label;
+  if (!confirm(`Coletar a SX2 e o volume por filial na ${lab}?\n\nSão duas consultas de leitura pela REST cadastrada em ⚙ Ambiente.`)) return;
+  aud.coletando[amb] = true; renderAuditoria();
+  try { aud.dados = await api(`/api/auditoria/${encodeURIComponent(cli)}/coletar?ambiente=${amb}`, { method: 'POST' }); aud.erroColeta = null; }
+  catch (e) { aud.erroColeta = `${lab}: ${e.message}`; }
+  finally { aud.coletando[amb] = false; renderAuditoria(); }
+}
+
+async function abreAmbienteAuditoria(amb) {
+  await abreModalAmbiente(amb);
+  const obs = new MutationObserver(() => {
+    if (!document.querySelector('#am-url')) { obs.disconnect(); carregaAuditoria(); }
+  });
+  obs.observe(document.body, { childList: true });
+}
+
+const audSp = m => (m ? String(m).split('').join(' ') : '');
+const audN = n => Number(n || 0).toLocaleString('pt-BR');
+const audOk = m => typeof m === 'string' && /^[EC]{3}$/.test(m);
+
+/** Tamanho esperado do campo filial para o modo (mesma regra do servidor). */
+function audEsperado(modo, lei) {
+  if (!audOk(modo) || !lei) return null;
+  if (modo[2] === 'E') return lei.fil ? lei.emp + lei.un + lei.fil : null;
+  if (modo[1] === 'E' && lei.un) return lei.emp + lei.un;
+  if (modo[0] === 'E' && lei.emp) return lei.emp;
+  return 0;
+}
+function audFora(modo, filiais, lei) {
+  if (!filiais || !filiais.length || !audOk(modo)) return null;
+  const esp = audEsperado(modo, lei);
+  return filiais.reduce((a, f) => {
+    if (f.filial === '*') return a;
+    const n = (f.filial || '').length;
+    const ok = esp === null ? n > lei.emp + lei.un : n === esp;
+    return a + (ok ? 0 : f.qtd);
+  }, 0);
+}
+
+/** A tabela daquela base: tenta o alias e a grafia com zero (FOV → F0V). */
+function audLeitura(col, alias) {
+  if (!col) return { col: null };
+  const vs = [alias];
+  if (/^FO[A-Z0-9]$/.test(alias)) vs.push('F0' + alias[2]);
+  for (const v of vs) if (col.tabelas[v]) return { col, alias: v, t: col.tabelas[v] };
+  return { col, alias: null, t: null };
+}
+
+function audSituacao(e, lt) {
+  if (!lt.col) return ['na', 'Sem coleta'];
+  if (!lt.t) return [e.papel === 'escopo' ? 'bad' : 'na', 'Fora da SX2'];
+  if (e.papel === 'estrutural') return ['info', 'Estrutural'];
+  if (!audOk(e.alvo)) return ['info', e.papel === 'referencia' ? 'Referência' : 'Sem alvo'];
+  return lt.t.sx2 === e.alvo ? ['ok', 'No alvo'] : ['warn', 'A alterar'];
+}
+
+const AUD_PILL = { ok: 'bg-emerald-100 text-emerald-800', warn: 'bg-amber-100 text-amber-900',
+                   bad: 'bg-rose-100 text-rose-800', info: 'bg-sky-100 text-sky-800', na: 'bg-slate-100 text-slate-500' };
+const audPill = ([c, t]) => `<span class="px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${AUD_PILL[c]}">${escapeHtml(t)}</span>`;
+
+function audLinhas(d) {
+  return d.escopo.map(e => {
+    const lt = audLeitura(d.coletas.teste, e.tabela), lp = audLeitura(d.coletas.producao, e.tabela);
+    const tot = l => l.t ? l.t.filiais.reduce((a, f) => a + f.qtd, 0) : null;
+    return { e, lt, lp, sT: audSituacao(e, lt), sP: audSituacao(e, lp), totT: tot(lt), totP: tot(lp),
+             foraT: lt.t && e.alvo ? audFora(e.alvo, lt.t.filiais, d.leiaute.teste) : null,
+             foraP: lp.t && e.alvo ? audFora(e.alvo, lp.t.filiais, d.leiaute.producao) : null,
+             prop: d.propostas[e.tabela] || [] };
+  });
+}
+
+function audAlertas(d, L) {
+  const al = [];
+  const base = { teste: 'Teste', producao: 'Produção' };
+  ['teste', 'producao'].forEach(amb => {
+    const col = d.coletas[amb];
+    if (!col) { al.push(['info', `${base[amb]}: ainda sem coleta. Use ⚡ Coletar ${base[amb]} (a REST precisa estar cadastrada em ⚙ Ambiente).`]); return; }
+    const sx = k => { const l = audLeitura(col, k); return l.t ? l.t.sx2 : null; };
+    const fora = L.filter(x => (amb === 'teste' ? x.sT : x.sP)[1] === 'Fora da SX2' && x.e.papel === 'escopo').map(x => x.e.tabela);
+    if (fora.length) al.push(['bad', `${base[amb]}: ${fora.length} tabela(s) do alvo não encontradas na SX2${col.sufixo}: ${fora.join(', ')}. Confirme o alias.`]);
+    const zero = L.filter(x => { const l = amb === 'teste' ? x.lt : x.lp; return l.alias && l.alias !== x.e.tabela; });
+    zero.forEach(x => al.push(['info', `${base[amb]}: ${x.e.tabela} está na SX2 como ${(amb === 'teste' ? x.lt : x.lp).alias} (com zero).`]));
+    const conv = L.filter(x => (amb === 'teste' ? x.foraT : x.foraP) > 0).map(x => `${x.e.tabela} (${audN(amb === 'teste' ? x.foraT : x.foraP)})`);
+    if (conv.length) al.push(['warn', `${base[amb]}: _FILIAL a converter para o modo alvo: ${conv.join(', ')}.`]);
+    AUD_PERFIL_CAD.forEach(([p, c]) => {
+      const a = sx(p), b = sx(c);
+      if (audOk(a) && audOk(b) && audMaisExclusivo(a, b))
+        al.push(['bad', `${base[amb]}: ${p} (${audSp(a)}) está mais exclusiva que ${c} (${audSp(b)}). O cadastro de ${c} pode não gravar até a ${p} ir para o alvo.`]);
+    });
+    [[AUD_PERFIS_F, 'perfis', 'O F20 tem de estar no mesmo nível de todos os filhos.'],
+     [AUD_CIN_F, 'regras de cálculo', 'A fórmula CIN é única para todas as regras.']].forEach(([ks, nome, porque]) => {
+      const v = ks.map(k => [k, sx(k)]).filter(([, m]) => audOk(m));
+      if (new Set(v.map(([, m]) => m)).size > 1)
+        al.push(['bad', `${base[amb]}: ${nome} em níveis diferentes (${v.map(([k, m]) => `${k} ${audSp(m)}`).join(', ')}). ${porque}`]);
+    });
+  });
+  if (d.coletas.teste && d.coletas.producao) {
+    const est = L.filter(x => x.e.papel === 'estrutural' && x.lt.t && x.lp.t && x.lt.t.sx2 !== x.lp.t.sx2);
+    est.forEach(x => al.push(['bad', `${x.e.tabela} é estrutural (FISA170) e está ${audSp(x.lt.t.sx2)} em Teste e ${audSp(x.lp.t.sx2)} em Produção.`]));
+  }
+  const semAlvo = L.filter(x => x.e.papel === 'escopo' && !audOk(x.e.alvo)).map(x => x.e.tabela);
+  if (semAlvo.length) al.push(['warn', `Sem compartilhamento definido na Estrutura: ${semAlvo.join(', ')}.`]);
+  const disc = L.filter(x => x.prop.length).map(x => x.e.tabela);
+  if (disc.length) al.push(['info', `Em discussão na Estrutura (proposta aberta): ${disc.join(', ')}.`]);
+  return al;
+}
+const AUD_PERFIL_CAD = [['F22', 'SA1'], ['F22', 'SA2'], ['F24', 'SB1']];
+const AUD_PERFIS_F = ['F20', 'F21', 'F22', 'F23', 'F24', 'F25', 'F26', 'CIO', 'CKC', 'CK4', 'CI6'];
+const AUD_CIN_F = ['F27', 'F28', 'F2B', 'CIN', 'CJ2'];
+/** a é MAIS exclusiva que b: >= em exclusividade em todos os níveis e > em algum. */
+function audMaisExclusivo(a, b) {
+  let maior = false;
+  for (let i = 0; i < 3; i++) {
+    if (a[i] === 'C' && b[i] === 'E') return false;
+    if (a[i] === 'E' && b[i] === 'C') maior = true;
+  }
+  return maior;
+}
+
+function renderAuditoria() {
+  const box = $('#aud-conteudo');
+  ['teste', 'producao'].forEach(a => { const b = $(`#aud-coletar-${a}`); if (b) b.disabled = !!aud.coletando[a]; });
+  if (!aud.customer) { box.innerHTML = blocoVazioCad('Abra um projeto para auditar as tabelas.'); return; }
+  if (aud.carregando) { box.innerHTML = blocoVazioCad('Carregando a última coleta de cada base…'); return; }
+  const d = aud.dados;
+  if (!d) { box.innerHTML = blocoVazioCad('Nada carregado ainda.'); return; }
+  if (d.erro) { box.innerHTML = blocoErro('Não foi possível abrir a auditoria', { message: d.erro }, carregaAuditoria); return; }
+
+  const coletando = Object.entries(aud.coletando).filter(([, v]) => v).map(([k]) => (AMB[k] || AMB.producao).label);
+  const L = audLinhas(d);
+  const escopo = L.filter(x => x.e.papel === 'escopo');
+  const alvoN = escopo.filter(x => audOk(x.e.alvo)).length;
+  const noAlvo = s => escopo.filter(x => (s === 'T' ? x.sT : x.sP)[1] === 'No alvo').length;
+  const soma = (k) => L.reduce((a, x) => a + (x[k] || 0), 0);
+  const tem = { T: !!d.coletas.teste, P: !!d.coletas.producao };
+  const selo = (amb) => {
+    const c = d.coletas[amb], A = AMB[amb];
+    if (!c) return `<div><span class="px-2 py-0.5 rounded-full text-xs ${A.cls}">${A.label}</span> <span class="text-xs text-slate-400">sem coleta${d.ambientes[amb] ? '' : ' · REST não cadastrada em ⚙ Ambiente'}</span></div>`;
+    return `<div><span class="px-2 py-0.5 rounded-full text-xs ${A.cls}">${A.label}</span>
+      <span class="text-xs text-slate-500">${escapeHtml(c.environment || '')} · SX2${escapeHtml(c.sufixo || '')} ·
+      ${new Date(c.lido_em).toLocaleString('pt-BR')} · leiaute: ${escapeHtml(c.leiaute || '')}</span></div>`;
+  };
+
+  const grupos = [...new Set(L.map(x => x.e.grupo))];
+  const f = aud.f;
+  const visivel = x => (!f.grupo || x.e.grupo === f.grupo) && (!f.st || x.sT[1] === f.st) && (!f.sp || x.sP[1] === f.sp)
+    && (!f.txt || `${x.e.tabela} ${x.e.descricao || ''} ${x.lt.t?.nome || ''} ${x.lp.t?.nome || ''}`.toUpperCase().includes(f.txt.toUpperCase()));
+  const opt = (v, l, sel) => `<option value="${escapeHtml(v)}" ${v === sel ? 'selected' : ''}>${escapeHtml(l)}</option>`;
+  const sits = ['No alvo', 'A alterar', 'Fora da SX2', 'Sem alvo', 'Referência', 'Estrutural', 'Sem coleta'];
+
+  let corpo = '', ult = null;
+  L.filter(visivel).forEach(x => {
+    if (x.e.grupo !== ult) { ult = x.e.grupo; corpo += `<tr class="bg-slate-50"><td colspan="10" class="px-3 py-1.5 text-xs font-semibold text-totvs-petroleo">${escapeHtml(ult)}</td></tr>`; }
+    const md = l => l.t ? `<span class="font-mono font-semibold tracking-widest">${audSp(l.t.sx2)}</span>` : '<span class="text-slate-300">—</span>';
+    const alvo = x.e.papel === 'estrutural' ? audPill(['bad', 'Não alterar'])
+      : audOk(x.e.alvo) ? `<span class="font-mono font-semibold tracking-widest text-totvs-petroleo">${audSp(x.e.alvo)}</span>`
+      : (x.e.papel === 'escopo' ? audPill(['warn', 'Definir']) : '<span class="text-slate-300">—</span>');
+    const prop = x.prop.length ? ` <span title="${escapeHtml(x.prop.map(p => `Proposta ${audSp(p.compart)}: ${p.motivo}`).join('\n'))}" class="cursor-help">💬</span>` : '';
+    const nome = x.e.descricao || x.lt.t?.nome || x.lp.t?.nome || '';
+    const fora = v => v === null ? '<span class="text-slate-300">—</span>' : v ? `<b class="text-rose-700">${audN(v)}</b>` : '0';
+    corpo += `<tr data-aud-linha="${x.e.tabela}" class="border-t border-slate-100 hover:bg-slate-50/60 cursor-pointer">
+      <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(x.e.tabela)}${prop}</td>
+      <td class="px-3 py-1.5 text-slate-600" title="${escapeHtml(x.e.observacao || '')}">${escapeHtml(nome)}</td>
+      <td class="px-3 py-1.5">${alvo}</td>
+      <td class="px-3 py-1.5">${md(x.lt)}</td><td class="px-3 py-1.5">${audPill(x.sT)}</td>
+      <td class="px-3 py-1.5">${md(x.lp)}</td><td class="px-3 py-1.5">${audPill(x.sP)}</td>
+      <td class="px-3 py-1.5 text-right tabular-nums">${x.totT === null ? '—' : audN(x.totT)}</td>
+      <td class="px-3 py-1.5 text-right tabular-nums">${x.totP === null ? '—' : audN(x.totP)}</td>
+      <td class="px-3 py-1.5 text-right tabular-nums whitespace-nowrap">${fora(x.foraT)} / ${fora(x.foraP)}</td></tr>`;
+    if (aud.abertos.has(x.e.tabela)) corpo += `<tr class="bg-slate-50/70"><td colspan="10" class="px-4 py-3 text-xs">${audDetalhe(x, d)}</td></tr>`;
+  });
+
+  box.innerHTML = `
+    <div class="mb-3 flex flex-col gap-1">${selo('teste')}${selo('producao')}</div>
+    ${coletando.length ? `<div class="mb-3 px-4 py-2 rounded-lg bg-sky-50 border border-sky-200 text-sm text-sky-900">Coletando na ${escapeHtml(coletando.join(' e '))}… são duas consultas de leitura.</div>` : ''}
+    ${aud.erroColeta ? `<div class="mb-3 px-4 py-2 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-800">Coleta falhou · ${escapeHtml(aud.erroColeta)}</div>` : ''}
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
+      ${kpi('Tabelas com alvo', `${alvoN} / ${escopo.length}`, 'bg-totvs-blue text-totvs-petroleo')}
+      ${kpi('No alvo · Teste', tem.T ? `${noAlvo('T')} / ${alvoN}` : '—', 'bg-amber-100 text-amber-900')}
+      ${kpi('No alvo · Produção', tem.P ? `${noAlvo('P')} / ${alvoN}` : '—', 'bg-emerald-100 text-emerald-800')}
+      ${kpi('Registros · Teste', tem.T ? audN(soma('totT')) : '—', 'bg-slate-100 text-slate-700')}
+      ${kpi('Registros · Produção', tem.P ? audN(soma('totP')) : '—', 'bg-slate-100 text-slate-700')}
+      ${kpi('_FILIAL a converter T / P', `${tem.T ? audN(soma('foraT')) : '—'} / ${tem.P ? audN(soma('foraP')) : '—'}`, (soma('foraT') + soma('foraP')) ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800')}
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 mb-4 p-4">
+      <p class="font-totvs text-totvs-petroleo mb-2">Pontos de atenção</p>
+      <ul class="space-y-1 text-sm">${audAlertas(d, L).map(([c, t]) => `<li>${audPill([c, { bad: 'Crítico', warn: 'Atenção', info: 'Info', ok: 'OK' }[c]])} ${escapeHtml(t)}</li>`).join('') || '<li class="text-slate-400">Nada a apontar.</li>'}</ul>
+    </div>
+    <div class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+      <select id="aud-f-grupo" class="px-2 py-1 border border-slate-300 rounded-md bg-white">${opt('', 'Todos os grupos', f.grupo)}${grupos.map(g => opt(g, g, f.grupo)).join('')}</select>
+      <select id="aud-f-st" class="px-2 py-1 border border-slate-300 rounded-md bg-white">${opt('', 'Teste: todas', f.st)}${sits.map(s => opt(s, 'Teste: ' + s, f.st)).join('')}</select>
+      <select id="aud-f-sp" class="px-2 py-1 border border-slate-300 rounded-md bg-white">${opt('', 'Produção: todas', f.sp)}${sits.map(s => opt(s, 'Produção: ' + s, f.sp)).join('')}</select>
+      <input id="aud-f-txt" value="${escapeHtml(f.txt)}" placeholder="filtrar tabela ou descrição" class="px-2 py-1 border border-slate-300 rounded-md w-56">
+      <span class="text-xs text-slate-400">Clique na linha para ver o volume por filial e por cooperativa. Modo: Empresa · Unidade · Filial.</span>
+    </div>
+    <div class="bg-white rounded-lg border border-slate-200 overflow-x-auto mb-6">
+      <table class="w-full text-sm">
+        <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>
+          <th class="px-3 py-2 text-left">Tabela</th><th class="px-3 py-2 text-left">Descrição</th><th class="px-3 py-2 text-left">Alvo</th>
+          <th class="px-3 py-2 text-left">Teste SX2</th><th class="px-3 py-2 text-left">Situação</th>
+          <th class="px-3 py-2 text-left">Produção SX2</th><th class="px-3 py-2 text-left">Situação</th>
+          <th class="px-3 py-2 text-right">Reg. Teste</th><th class="px-3 py-2 text-right">Reg. Prod.</th>
+          <th class="px-3 py-2 text-right" title="Registros com o campo filial fora do padrão do modo alvo — convertem junto com a SX2">_FILIAL a converter T / P</th>
+        </tr></thead>
+        <tbody>${corpo || `<tr><td colspan="10" class="px-3 py-6 text-center text-slate-400">Nada com este filtro.</td></tr>`}</tbody>
+      </table>
+    </div>
+    ${audBlocoCooperativas(d, L)}`;
+  ligaAuditoria();
+}
+
+/** Prefixo empresa+unidade do código: a "cooperativa" no conceito da Cresol. */
+function audCoop(fil, lei) {
+  if (fil === '*') return '(sem campo filial)';
+  if (!fil) return '(compartilhado)';
+  const n = (lei?.emp || 0) + (lei?.un || 0);
+  return n ? fil.slice(0, n) : fil;
+}
+
+function audDetalhe(x, d) {
+  const um = (amb, l) => {
+    const A = AMB[amb];
+    if (!l.col) return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-slate-400">sem coleta</span></div>`;
+    if (!l.t) return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-slate-400">tabela não está na SX2</span></div>`;
+    if (!l.t.existe) return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-rose-700">na SX2, mas a tabela física ${escapeHtml(l.t.arquivo)} não existe</span></div>`;
+    const lei = d.leiaute[amb], cp = {};
+    l.t.filiais.forEach(fl => { const c = audCoop(fl.filial, lei); cp[c] = (cp[c] || 0) + fl.qtd; });
+    const chip = (t, n, cls = 'bg-slate-100 text-slate-700') => `<span class="inline-block px-2 py-0.5 rounded-full ${cls} mr-1 mb-1 font-mono">${escapeHtml(t)}: ${audN(n)}</span>`;
+    return `<div><span class="px-2 py-0.5 rounded-full ${A.cls}">${A.label}</span> <span class="text-slate-500">${escapeHtml(l.t.arquivo)}${l.t.tem_filial ? '' : ' · sem campo filial'}</span>
+      <div class="mt-1"><b>Por cooperativa:</b> ${Object.keys(cp).sort().map(c => chip(c, cp[c], 'bg-sky-100 text-sky-800')).join('') || '<span class="text-slate-400">vazia</span>'}</div>
+      <div class="mt-1"><b>Por filial:</b> ${l.t.filiais.map(fl => chip(fl.filial || '(branco)', fl.qtd)).join('') || '<span class="text-slate-400">vazia</span>'}</div></div>`;
+  };
+  const prop = x.prop.map(p => `<div class="mt-1 text-amber-900">💬 Proposta ${escapeHtml(audSp(p.compart))} · ${escapeHtml(p.motivo)} <span class="text-slate-400">(${escapeHtml(p.autor || '')})</span></div>`).join('');
+  return `<div class="grid md:grid-cols-2 gap-4">${um('teste', x.lt)}${um('producao', x.lp)}</div>
+    ${x.e.observacao ? `<div class="mt-2 text-slate-500">${escapeHtml(x.e.observacao)}</div>` : ''}${prop}`;
+}
+
+function audBlocoCooperativas(d, L) {
+  const co = {};
+  [['teste', 'lt'], ['producao', 'lp']].forEach(([amb, k]) => L.forEach(x => {
+    if (x.e.papel !== 'escopo' || !x[k].t) return;
+    x[k].t.filiais.forEach(fl => {
+      const c = audCoop(fl.filial, d.leiaute[amb]);
+      const o = co[c] = co[c] || { teste: 0, producao: 0, tt: new Set(), tp: new Set() };
+      o[amb] += fl.qtd; (amb === 'teste' ? o.tt : o.tp).add(x.e.tabela);
+    });
+  }));
+  const ks = Object.keys(co).sort();
+  return `<div class="bg-white rounded-lg border border-slate-200 overflow-x-auto">
+    <p class="px-4 pt-3 font-totvs text-totvs-petroleo">Volume por cooperativa (empresa + unidade)</p>
+    <p class="px-4 text-xs text-slate-400">Soma das tabelas com alvo definido, pelos primeiros dígitos do campo filial. Leiaute: Teste ${escapeHtml(d.leiaute.teste.fonte)} · Produção ${escapeHtml(d.leiaute.producao.fonte)}.</p>
+    <table class="w-full text-sm mt-2"><thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>
+      <th class="px-3 py-2 text-left">Cooperativa</th><th class="px-3 py-2 text-right">Registros Teste</th><th class="px-3 py-2 text-right">Tabelas Teste</th>
+      <th class="px-3 py-2 text-right">Registros Prod.</th><th class="px-3 py-2 text-right">Tabelas Prod.</th></tr></thead>
+    <tbody>${ks.map(c => `<tr class="border-t border-slate-100"><td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(c)}</td>
+      <td class="px-3 py-1.5 text-right tabular-nums">${audN(co[c].teste)}</td><td class="px-3 py-1.5 text-right">${co[c].tt.size}</td>
+      <td class="px-3 py-1.5 text-right tabular-nums">${audN(co[c].producao)}</td><td class="px-3 py-1.5 text-right">${co[c].tp.size}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="px-3 py-6 text-center text-slate-400">Sem coleta.</td></tr>'}</tbody></table></div>`;
+}
+
+function ligaAuditoria() {
+  const re = () => renderAuditoria();
+  [['#aud-f-grupo', 'grupo'], ['#aud-f-st', 'st'], ['#aud-f-sp', 'sp']].forEach(([s, k]) =>
+    $(s).addEventListener('change', ev => { aud.f[k] = ev.target.value; re(); }));
+  const txt = $('#aud-f-txt');
+  txt.addEventListener('change', ev => { aud.f.txt = ev.target.value; re(); });
+  txt.addEventListener('keydown', ev => { if (ev.key === 'Enter') { aud.f.txt = ev.target.value; re(); } });
+  $$('#aud-conteudo [data-aud-linha]').forEach(tr => tr.addEventListener('click', () => {
+    const k = tr.dataset.audLinha;
+    aud.abertos.has(k) ? aud.abertos.delete(k) : aud.abertos.add(k);
+    re();
+  }));
+}
+
+$('#aud-coletar-teste').addEventListener('click', () => coletaAuditoria('teste'));
+$('#aud-coletar-producao').addEventListener('click', () => coletaAuditoria('producao'));
+$('#aud-rail-teste').addEventListener('click', () => coletaAuditoria('teste'));
+$('#aud-rail-producao').addEventListener('click', () => coletaAuditoria('producao'));
+$('#aud-amb-teste').addEventListener('click', () => abreAmbienteAuditoria('teste'));
+$('#aud-amb-producao').addEventListener('click', () => abreAmbienteAuditoria('producao'));
+$('#aud-recarregar').addEventListener('click', carregaAuditoria);
 
 $('#btn-acessos').addEventListener('click', abreAcessos);
 

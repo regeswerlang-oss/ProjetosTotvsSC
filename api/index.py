@@ -299,6 +299,7 @@ ABAS = [
     {"id": "empresas",  "label": "Empresas e Compartilhamento", "cliente": True},
     {"id": "estrutura", "label": "Estrutura de Empresas", "cliente": False},
     {"id": "compara",   "label": "Compara (dicionário)",  "cliente": False},
+    {"id": "auditoria", "label": "Auditoria de Tabelas",  "cliente": False},
     # Integrações (13/10/2026): filas Quírons/Ahgora/eSocial SST da base. Fica
     # interna por enquanto — o detalhe traz matrícula e nome de funcionário.
     {"id": "integracoes", "label": "Integrações",        "cliente": False},
@@ -6534,6 +6535,427 @@ def api_estrutura_comparar(customer):
         "sufixos_parciais": parciais,
         "x2": x2, "x3": x3, "x6": x6,
     })
+
+
+# ============================================================================
+#  ABA AUDITORIA DE TABELAS — compartilhamento (SX2) e volume, Teste × Produção
+# ============================================================================
+# Nasceu no ticket #00019592 da Cresol (Configurador de Tributos): a cliente
+# mandou um De/Para de compartilhamento e a pergunta passou a ser TRÊS, e não
+# uma — como está na base de Testes, como está na de Produção, e o quanto cada
+# base ainda falta para chegar no alvo combinado na aba Estrutura.
+#
+#   Estrutura  → o ALVO (cockpit.estrut_tabelas.compart), digitado pela consultoria
+#   Empresas   → mede UMA base por vez, pela SM0, com o foco na carga
+#   Compara    → empresas da MESMA base, ao vivo, sem guardar
+#   Auditoria  → as DUAS bases lado a lado, contra o alvo, com volume por filial
+#
+# GUARDA cada coleta (cockpit.audtab_*), ao contrário da Compara: as duas bases
+# são lidas em momentos diferentes (cada uma tem a sua REST), e a comparação só
+# existe se a primeira leitura ainda estiver lá quando a segunda chegar. Guardar
+# também é o que dá o acompanhamento — "quantos registros faltam converter" tem
+# de cair de uma coleta para a outra.
+#
+# Transporte: o MESMO /tscmonit/query (só leitura), DUAS chamadas por base:
+#   1) SX2 das tabelas do escopo + existência física + existência do campo filial
+#   2) contagem por conteúdo do campo filial, um bloco estático por tabela que
+#      existe — tabela ausente nem entra, então nunca derruba a consulta.
+
+AUD_RE_ALIAS = re.compile(r"^[A-Z0-9]{3}$")
+AUD_RE_ARQ = re.compile(r"^[A-Z0-9_]{3,30}$")
+
+# Famílias do Configurador de Tributos (FISA170) — só RÓTULO de agrupamento na
+# tela. Tabela fora daqui cai no módulo que a aba Estrutura deu a ela.
+AUD_FAMILIAS = [
+    ("Regras fiscais · Cadastros", "F29 F2A CIQ CIR CI2 CIS CIT CIU CIV CIX CIY CJ0 CJ1 CJ4 CJ5 CJ6 CJ7 F0R CKB CJN CL1"),
+    ("Regras fiscais · Perfis", "F20 F21 F22 F23 F24 F25 F26 CIO CKC CK4 CI6"),
+    ("Regras fiscais · Regras de cálculo", "F27 F28 F2B CIN CJ2 CK3 CK5 FK5"),
+    ("Regras fiscais · Ajuste de lançamento", "CJ8 CJ9 CJA"),
+    ("Regras fiscais · IPM", "CKD CKE CKF"),
+    ("Regras fiscais · Mensagens", "CK6 CK7 CK8 CK9"),
+    ("Regras fiscais · Apuração", "F2N F2G"),
+    ("Regras financeiras", "FKL FKV FOV F0V F7R FKS FOS F0S F7S FKN FKP FKO FKT FOT F0T FKU FOU F0U FKK FOO F0O"),
+    ("Regras de estoque/custos", "D4H"),
+]
+AUD_FAMILIA_DE = {t: g for g, ts in AUD_FAMILIAS for t in ts.split()}
+
+# Lidas SEMPRE, mesmo fora do escopo. Estruturais: a TDN (FISA170) proíbe mudar
+# o compartilhamento — a aba só vigia se Teste e Produção continuam iguais.
+# Referência: os cadastros que os perfis apontam (F22 → SA1/SA2, F24 → SB1).
+AUD_ESTRUTURAIS = ["F2D", "F2F", "F2H", "F2I", "F2J", "F2K", "F2L", "F2M", "CJ3"]
+AUD_REFERENCIA = ["SA1", "SA2", "SB1", "SB5", "SED", "SF4"]
+# Perfil × cadastro que ele referencia: perfil MAIS exclusivo que o cadastro faz
+# o cadastro não gravar (caso do fornecedor da Cresol em 08/10/2026).
+AUD_PERFIL_X_CADASTRO = [("F22", "SA1"), ("F22", "SA2"), ("F24", "SB1")]
+AUD_PERFIS = ["F20", "F21", "F22", "F23", "F24", "F25", "F26", "CIO", "CKC", "CK4", "CI6"]
+AUD_REGRAS_CIN = ["F27", "F28", "F2B", "CIN", "CJ2"]
+
+
+def _aud_variantes(alias):
+    """FOV/FOS/FOT/FOU/FOO do levantamento da Cresol podem ser F0V… (zero).
+    Lê as duas grafias; a tela mostra qual existe."""
+    if len(alias) == 3 and alias[0] == "F" and alias[1] == "O":
+        return [alias, "F0" + alias[2]]
+    return [alias]
+
+
+def _aud_escopo(customer):
+    rows = q("""select modulo, tabela, descricao, compart, observacao, id
+                  from cockpit.estrut_tabelas
+                 where customer=%s and ativo
+                 order by modulo, tabela""", (customer,))
+    escopo, vistos = [], set()
+    for r in rows:
+        t = (r["tabela"] or "").strip().upper()
+        if not AUD_RE_ALIAS.match(t) or t in vistos:
+            continue
+        vistos.add(t)
+        escopo.append({"tabela": t, "descricao": r["descricao"], "alvo": r["compart"],
+                       "modulo": r["modulo"], "observacao": r["observacao"],
+                       "tabela_id": str(r["id"]), "papel": "escopo",
+                       "grupo": AUD_FAMILIA_DE.get(t) or r["modulo"]})
+    # Uma faixa por família, na ordem do FISA170: ordenar só por módulo/tabela
+    # repetiria a faixa "Perfis" duas vezes na tela.
+    ordem = {g: i for i, (g, _ts) in enumerate(AUD_FAMILIAS)}
+    escopo.sort(key=lambda e: (ordem.get(e["grupo"], len(ordem)), e["grupo"] or "", e["tabela"]))
+    for lista, papel, grupo in ((AUD_ESTRUTURAIS, "estrutural", "Estruturais · não alterar (FISA170)"),
+                                (AUD_REFERENCIA, "referencia", "Cadastros de referência")):
+        for t in lista:
+            if t not in vistos:
+                vistos.add(t)
+                escopo.append({"tabela": t, "descricao": None, "alvo": None, "modulo": None,
+                               "observacao": None, "tabela_id": None, "papel": papel,
+                               "grupo": grupo})
+    return escopo
+
+
+def _aud_aliases(escopo):
+    out = []
+    for e in escopo:
+        for v in _aud_variantes(e["tabela"]):
+            if v not in out:
+                out.append(v)
+    return out
+
+
+def _aud_sufixo(cfg):
+    s = (cfg.get("sufixo") or "").strip()
+    if re.match(r"^\d{3}$", s):
+        return s
+    emp = re.sub(r"\D", "", cfg.get("empresa") or "01")[:2] or "01"
+    return emp.zfill(2) + "0"
+
+
+def _aud_sql_sx2(aliases, sufixo, banco):
+    """Passo 1. Uma linha por tabela do escopo que está na SX2, com a existência
+    física e a do campo filial resolvidas NO BANCO — o passo 2 só cita tabela e
+    coluna que existem, e por isso não derruba a consulta inteira (ORA-00904)."""
+    lista = ",".join(f"'{a}'" for a in aliases)
+    if banco == "mssql":
+        fil = ("CASE WHEN LEFT(X.X2_CHAVE,1) = 'S' THEN SUBSTRING(X.X2_CHAVE,2,2) "
+               "ELSE RTRIM(X.X2_CHAVE) END + '_FILIAL'")
+        return (f"SELECT RTRIM(X.X2_CHAVE) AS CHAVE, RTRIM(X.X2_NOME) AS NOME, "
+                f"RTRIM(X.X2_ARQUIVO) AS ARQ, X.X2_MODOEMP AS MODOEMP, X.X2_MODOUN AS MODOUN, "
+                f"X.X2_MODO AS MODO, "
+                f"(SELECT COUNT(*) FROM sys.tables T WHERE T.name = RTRIM(X.X2_ARQUIVO)) AS EXISTE, "
+                f"(SELECT COUNT(*) FROM sys.columns C WHERE C.object_id = OBJECT_ID(RTRIM(X.X2_ARQUIVO)) "
+                f"AND C.name = {fil}) AS TEMFIL "
+                f"FROM SX2{sufixo} X WHERE X.D_E_L_E_T_ = ' ' AND X.X2_CHAVE IN ({lista}) "
+                f"ORDER BY X.X2_CHAVE")
+    fil = ("CASE WHEN SUBSTR(X.X2_CHAVE,1,1) = 'S' THEN SUBSTR(X.X2_CHAVE,2,2) "
+           "ELSE RTRIM(X.X2_CHAVE) END || '_FILIAL'")
+    return (f"SELECT RTRIM(X.X2_CHAVE) AS CHAVE, RTRIM(X.X2_NOME) AS NOME, "
+            f"RTRIM(X.X2_ARQUIVO) AS ARQ, X.X2_MODOEMP AS MODOEMP, X.X2_MODOUN AS MODOUN, "
+            f"X.X2_MODO AS MODO, "
+            f"(SELECT COUNT(*) FROM ALL_TABLES T WHERE T.TABLE_NAME = RTRIM(X.X2_ARQUIVO) "
+            f"AND T.OWNER = SYS_CONTEXT('USERENV','CURRENT_SCHEMA')) AS EXISTE, "
+            f"(SELECT COUNT(*) FROM ALL_TAB_COLUMNS C WHERE C.TABLE_NAME = RTRIM(X.X2_ARQUIVO) "
+            f"AND C.OWNER = SYS_CONTEXT('USERENV','CURRENT_SCHEMA') "
+            f"AND C.COLUMN_NAME = {fil}) AS TEMFIL "
+            f"FROM SX2{sufixo} X WHERE X.D_E_L_E_T_ = ' ' AND X.X2_CHAVE IN ({lista}) "
+            f"ORDER BY X.X2_CHAVE")
+
+
+def _aud_campo_filial(alias):
+    return (alias[1:3] if alias.startswith("S") else alias) + "_FILIAL"
+
+
+def _aud_sql_contagem(tabelas):
+    """Passo 2. `tabelas` = [(alias, arquivo, tem_filial)] só das que EXISTEM.
+    Sem campo filial a tabela ainda é contada, com a filial '*'."""
+    blocos = []
+    for alias, arq, temfil in tabelas:
+        if temfil:
+            cf = _aud_campo_filial(alias)
+            blocos.append(f"SELECT '{alias}' AS TABELA, {cf} AS FILIAL, COUNT(*) AS QTD "
+                          f"FROM {arq} WHERE D_E_L_E_T_ = ' ' GROUP BY {cf}")
+        else:
+            blocos.append(f"SELECT '{alias}' AS TABELA, '*' AS FILIAL, COUNT(*) AS QTD "
+                          f"FROM {arq} WHERE D_E_L_E_T_ = ' ' HAVING COUNT(*) > 0")
+    return "\nUNION ALL\n".join(blocos)
+
+
+def _aud_int(v):
+    try:
+        return int(float(str(v).strip() or 0))
+    except ValueError:
+        return 0
+
+
+def _aud_parse_sx2(linhas):
+    """CSV do passo 1 → {alias: {...}}. A 1ª linha é o cabeçalho."""
+    if not linhas:
+        return {}
+    cab = [c.strip().upper() for c in linhas[0]]
+    idx = {c: i for i, c in enumerate(cab)}
+    cel = lambda ln, c: _cmp_cel(ln, idx[c]) if c in idx else ""
+    out = {}
+    for ln in linhas[1:]:
+        a = cel(ln, "CHAVE").upper()
+        if not AUD_RE_ALIAS.match(a):
+            continue
+        modo = (cel(ln, "MODOEMP") or "?")[:1] + (cel(ln, "MODOUN") or "?")[:1] + (cel(ln, "MODO") or "?")[:1]
+        out[a] = {"nome": cel(ln, "NOME"), "arquivo": cel(ln, "ARQ").upper(),
+                  "sx2": modo.upper(), "existe": _aud_int(cel(ln, "EXISTE")) > 0,
+                  "tem_filial": _aud_int(cel(ln, "TEMFIL")) > 0}
+    return out
+
+
+def _aud_parse_contagem(linhas):
+    out = {}
+    if not linhas:
+        return out
+    cab = [c.strip().upper() for c in linhas[0]]
+    idx = {c: i for i, c in enumerate(cab)}
+    for ln in linhas[1:]:
+        a = _cmp_cel(ln, idx.get("TABELA", 0)).upper()
+        if not AUD_RE_ALIAS.match(a):
+            continue
+        fil = _cmp_cel(ln, idx.get("FILIAL", 1))
+        out.setdefault(a, []).append({"filial": fil, "qtd": _aud_int(_cmp_cel(ln, idx.get("QTD", 2)))})
+    return out
+
+
+def _aud_leiaute(customer, amb):
+    """Tamanho de empresa e unidade no código da filial. A SM0 lida pela aba
+    Empresas vale mais que a definição: é o que a base TEM. Sem nenhuma das
+    duas, o padrão é o da Cresol (EEUU, cooperativa 0126) — e a tela diz isso."""
+    r = q("""select leiaute from cockpit.monitemp_sm0
+              where customer=%s and ambiente=%s and coalesce(leiaute,'')<>'' limit 1""",
+          (customer, amb), one=True)
+    if r and r["leiaute"]:
+        ne, nu, nf = _niveis_leiaute(r["leiaute"], 0)
+        return {"emp": ne, "un": nu, "fil": nf, "fonte": f"SM0 ({r['leiaute']})"}
+    c = q("select * from cockpit.estrut_config where customer=%s", (customer,), one=True)
+    if c:
+        t = ESTRUT_LEIAUTES.get(c["leiaute"], ESTRUT_LEIAUTES["EEFF"])["tam"]
+        return {"emp": c.get("tam_empresa") or t[0], "un": c.get("tam_unidade") or t[1],
+                "fil": c.get("tam_filial") or t[2], "fonte": f"Estrutura ({c['leiaute']})"}
+    return {"emp": 2, "un": 2, "fil": 0, "fonte": "padrão EEUU (sem SM0 nem Estrutura)"}
+
+
+def _aud_esperado(modo, lei):
+    """Tamanho esperado do conteúdo do campo filial para um modo Emp·Un·Fil.
+    None = não dá para afirmar (filial exclusiva sem o tamanho da filial)."""
+    if not _estrut_compart_ok(modo):
+        return None
+    ne, nu, nf = lei["emp"], lei["un"], lei["fil"]
+    if modo[2] == "E":
+        return (ne + nu + nf) if nf else None
+    if modo[1] == "E" and nu:
+        return ne + nu
+    if modo[0] == "E" and ne:
+        return ne
+    return 0
+
+
+def _aud_fora(modo, filiais, lei):
+    """Registros cujo campo filial NÃO serve para o modo. É o volume a converter
+    junto com a SX2: mudar o X2_MODO sem converter deixa o registro invisível."""
+    if not filiais:
+        return 0
+    esp = _aud_esperado(modo, lei)
+    if esp is None:
+        minimo = lei["emp"] + lei["un"] + 1
+        return sum(f["qtd"] for f in filiais if f["filial"] != "*" and len(f["filial"]) < minimo)
+    return sum(f["qtd"] for f in filiais if f["filial"] != "*" and len(f["filial"]) != esp)
+
+
+def _aud_ultimas(customer):
+    """Última coleta de cada base + itens. Duas bases, duas leituras — nunca somar."""
+    out = {}
+    for amb in AMBIENTES:
+        c = q("""select * from cockpit.audtab_coletas where customer=%s and ambiente=%s
+                  order by lido_em desc limit 1""", (customer, amb), one=True)
+        if not c:
+            out[amb] = None
+            continue
+        itens = q("""select tabela, nome, arquivo, sx2, existe, tem_filial, filial, qtde
+                       from cockpit.audtab_itens where coleta_id=%s order by tabela, filial""",
+                  (c["id"],))
+        tabs = {}
+        for it in itens:
+            t = tabs.setdefault(it["tabela"], {"nome": it["nome"], "arquivo": it["arquivo"],
+                                               "sx2": it["sx2"], "existe": it["existe"],
+                                               "tem_filial": it["tem_filial"], "filiais": []})
+            if it["filial"] is not None:
+                t["filiais"].append({"filial": it["filial"], "qtd": int(it["qtde"] or 0)})
+        hist = q("""select lido_em, total_registros, fora_padrao, tabelas_lidas
+                      from cockpit.audtab_coletas where customer=%s and ambiente=%s
+                     order by lido_em desc limit 10""", (customer, amb))
+        out[amb] = {"id": c["id"], "lido_em": c["lido_em"], "environment": c["environment"],
+                    "sufixo": c["sufixo"], "banco": c["banco"], "duracao_ms": c["duracao_ms"],
+                    "disparado_por": c["disparado_por"], "leiaute": c["leiaute"],
+                    "tabelas": tabs, "historico": hist}
+    return out
+
+
+def _aud_propostas(customer):
+    rows = q("""select t.tabela, p.compart, p.motivo, p.autor
+                  from cockpit.estrut_propostas p
+                  join cockpit.estrut_tabelas t on t.id = p.tabela_id
+                 where t.customer=%s and p.status='aberta'""", (customer,))
+    out = {}
+    for r in rows:
+        out.setdefault(r["tabela"], []).append(
+            {"compart": r["compart"], "motivo": r["motivo"], "autor": r["autor"]})
+    return out
+
+
+@app.get("/api/auditoria/<customer>")
+def api_auditoria(customer):
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "auditoria")):
+        return d
+    escopo = _aud_escopo(customer)
+    amb_cfg = {a: bool(_cfg_ambiente(customer, a)) for a in AMBIENTES}
+    return _json({"ok": True, "customer": customer, "escopo": escopo,
+                  "coletas": _aud_ultimas(customer), "propostas": _aud_propostas(customer),
+                  "leiaute": {a: _aud_leiaute(customer, a) for a in AMBIENTES},
+                  "ambientes": amb_cfg})
+
+
+@app.post("/api/auditoria/<customer>/coletar")
+def api_auditoria_coletar(customer):
+    """Lê SX2 + volume por filial de UMA base e grava a coleta.
+
+        POST /api/auditoria/TFCTQI00/coletar?ambiente=teste
+    """
+    if (r := require_interno()):
+        return r
+    if (d := deny_aba(customer, "auditoria")):
+        return d
+    amb = _amb_path(request.args.get("ambiente") or "")
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer} — "
+                         "preencha a REST em ⚙ Ambiente antes de coletar.")
+    if not cfg.get("ativo"):
+        return _err(409, f"Ambiente {amb} está inativo.")
+    banco = (cfg.get("banco") or "oracle").lower()
+    if banco not in ("oracle", "mssql"):
+        return _err(409, f"A auditoria tem SQL de Oracle e SQL Server; este ambiente é {banco}.")
+    escopo = _aud_escopo(customer)
+    if not any(e["papel"] == "escopo" for e in escopo):
+        return _err(409, "Nenhuma tabela definida na aba Estrutura para este cliente. "
+                         "A auditoria mede contra o alvo de lá — defina antes de coletar.")
+    aliases = _aud_aliases(escopo)
+    sufixo = _aud_sufixo(cfg)
+
+    ini = time.time()
+    try:
+        heads, auth, tok, _tmo = _sessao_protheus(cfg, customer, amb)
+    except RuntimeError as e:
+        return _err(500, str(e))
+    if not tok:
+        return _err(409, "Sem token cadastrado para este ambiente — a REST da base "
+                         "recusa a chamada sem o X-TSC-Token.")
+    prazo = ini + min(int(cfg.get("timeout_s") or 45), TIMEOUT_TETO)
+    limite = int(cfg.get("limite_linhas") or 50000)
+
+    def roda(sql, rotulo):
+        resta = prazo - time.time()
+        if resta < 5:
+            raise RuntimeError(f"Tempo esgotado antes de ler {rotulo}. A função da Vercel "
+                               "morre em 60s — tente fora do horário de pico.")
+        r = requests.post(f"{cfg['url_rest']}/query",
+                          json={"token": tok, "tipo": "cadastros", "sql": sql, "limite": limite},
+                          headers=heads, auth=auth,
+                          params={"empresa": cfg.get("empresa") or "01",
+                                  "filial": cfg.get("filial") or "01"},
+                          timeout=max(5, int(resta)), verify=_verifica_tls(cfg))
+        dados = _json_da_resposta(r)
+        if r.status_code >= 400 or not dados.get("ok"):
+            raise RuntimeError(dados.get("erro")
+                               or f"HTTP {r.status_code} ao ler {rotulo}: {_trecho(r)}")
+        if dados.get("truncado"):
+            raise RuntimeError(f"{rotulo} bateu o limite de linhas — leitura truncada é "
+                               "leitura errada. Suba o limite no ⚙ Ambiente.")
+        return dados, _proto_linhas_csv(dados.get("csv") or "")
+
+    try:
+        d1, l1 = roda(_aud_sql_sx2(aliases, sufixo, banco), f"a SX2{sufixo}")
+        sx2 = _aud_parse_sx2(l1)
+        lidas = [(a, v["arquivo"], v["tem_filial"]) for a, v in sx2.items()
+                 if v["existe"] and AUD_RE_ARQ.match(v["arquivo"] or "")]
+        cont = {}
+        if lidas:
+            _d2, l2 = roda(_aud_sql_contagem(lidas), "a contagem por filial")
+            cont = _aud_parse_contagem(l2)
+    except requests.RequestException as e:
+        _log_coleta(customer, amb, "auditoria", ini, False, erro=type(e).__name__,
+                    disparado_por=current_user())
+        return _err(502, f"Falha ao chamar a base: {type(e).__name__}. "
+                         f"Timeout do ambiente = {cfg.get('timeout_s')}s.")
+    except RuntimeError as e:
+        _log_coleta(customer, amb, "auditoria", ini, False, erro=str(e)[:500],
+                    disparado_por=current_user())
+        return _err(502, str(e))
+
+    lei = _aud_leiaute(customer, amb)
+    alvo = {e["tabela"]: e["alvo"] for e in escopo}
+    total = sum(f["qtd"] for fs in cont.values() for f in fs)
+    fora = 0
+    for a, fs in cont.items():
+        base = next((e["tabela"] for e in escopo if a in _aud_variantes(e["tabela"])), a)
+        if alvo.get(base):
+            fora += _aud_fora(alvo[base], fs, lei)
+
+    # Coleta e itens na MESMA transação: coleta sem itens apareceria na tela
+    # como "base vazia", que é o pior erro possível aqui.
+    con = db()
+    con.autocommit = False
+    try:
+        with con, con.cursor() as cur:
+            cur.execute("""insert into cockpit.audtab_coletas
+                           (customer, ambiente, environment, sufixo, banco, leiaute, duracao_ms,
+                            tabelas_lidas, total_registros, fora_padrao, disparado_por)
+                         values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
+                      (customer, amb, d1.get("environment") or cfg.get("environment"), sufixo,
+                       banco, lei["fonte"], int((time.time() - ini) * 1000), len(sx2), total,
+                       fora, current_user()))
+            cid = cur.fetchone()[0]
+            linhas = []
+            for a, v in sx2.items():
+                fs = cont.get(a) or []
+                if not fs:
+                    linhas.append((cid, customer, amb, a, v["nome"], v["arquivo"], v["sx2"],
+                                   v["existe"], v["tem_filial"], None, 0))
+                for f in fs:
+                    linhas.append((cid, customer, amb, a, v["nome"], v["arquivo"], v["sx2"],
+                                   v["existe"], v["tem_filial"], f["filial"], f["qtd"]))
+            psycopg2.extras.execute_values(
+                cur, """insert into cockpit.audtab_itens
+                          (coleta_id, customer, ambiente, tabela, nome, arquivo, sx2, existe,
+                           tem_filial, filial, qtde) values %s""", linhas)
+    finally:
+        con.close()
+    _log_coleta(customer, amb, "auditoria", ini, True, linhas=len(sx2), itens=total,
+                disparado_por=current_user())
+    return api_auditoria(customer)
 
 
 # ============================================================================
