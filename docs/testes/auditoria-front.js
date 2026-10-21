@@ -87,6 +87,27 @@ const VAZIO = Object.assign({}, PAYLOAD, { coletas: { teste: null, producao: nul
   await pg.selectOption('#aud-f-st', '');
   await pg.screenshot({ path: process.env.SHOT || '/home/claude/w/auditoria.png', fullPage: true });
 
+  // Dicionário: SX3 aberto, SX6 recolhido até o clique.
+  const dic = await txt('#aud-conteudo');
+  t('SX3 com A2_NOME divergente', dic.includes('A2_NOME') && dic.includes('Tipo/tamanho diferente'));
+  t('SX3 campo só em Teste', dic.includes('F22_XCUSTOM'));
+  t('SX6 nasce recolhido', !(await pg.$('[data-aud-x6]')));
+  t('alerta resume o SX6', dic.includes('SX6: 3 parâmetro(s) divergem'));
+  await pg.click('[data-aud-caixa="x6"]');
+  await pg.waitForTimeout(120);
+  const x6 = await pg.$$eval('[data-aud-x6]', ns => [...new Set(ns.map(n => n.dataset.audX6))]);
+  t('SX6 abre com as 3 divergências', x6.length === 3 && x6.includes('MV_CFGTRIB'), x6.join(','));
+  await pg.selectOption('[data-aud-dic-sit="x6"]', 'conteudo');
+  await pg.waitForTimeout(120);
+  const x6f = await pg.$$eval('[data-aud-x6]', ns => [...new Set(ns.map(n => n.dataset.audX6))]);
+  t('filtro SX6 por conteúdo', x6f.length === 1 && x6f[0] === 'MV_CFGTRIB', x6f.join(','));
+  await pg.fill('[data-aud-dic-txt="x3"]', 'f27');
+  await pg.press('[data-aud-dic-txt="x3"]', 'Enter');
+  await pg.waitForTimeout(120);
+  const x3f = await pg.$$eval('[data-aud-x3]', ns => ns.map(n => n.dataset.audX3));
+  t('busca no SX3', x3f.length === 1 && x3f[0] === 'F27.F27_DESC', x3f.join(','));
+  await pg.screenshot({ path: (process.env.SHOT || '/home/claude/w/auditoria.png').replace('.png', '-dic.png'), fullPage: true });
+
   await pg.setViewportSize({ width: 390, height: 900 });
   await pg.waitForTimeout(150);
   const larg = await pg.evaluate(() => document.querySelector('#tab-auditoria').scrollWidth);

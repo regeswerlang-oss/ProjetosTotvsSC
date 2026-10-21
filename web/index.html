@@ -452,8 +452,8 @@
         <!-- Auditoria de Tabelas: aba INTERNA. Cada base é coletada pela sua REST;
              o botão diz QUAL base, porque ler a errada é o erro caro aqui. -->
         <div data-rail="aud" class="rail-grupo hidden">
-          <button id="aud-rail-teste"    class="rail-btn rail-btn-cta">⚡ Coletar Teste<span class="rail-sub">SX2 + volume por filial</span></button>
-          <button id="aud-rail-producao" class="rail-btn">⚡ Coletar Produção<span class="rail-sub">SX2 + volume por filial</span></button>
+          <button id="aud-rail-teste"    class="rail-btn rail-btn-cta">⚡ Coletar Teste<span class="rail-sub">SX2 · volume · SX3 · SX6</span></button>
+          <button id="aud-rail-producao" class="rail-btn">⚡ Coletar Produção<span class="rail-sub">SX2 · volume · SX3 · SX6</span></button>
           <button id="aud-amb-teste"     class="rail-btn rail-sep">⚙ Ambiente Teste</button>
           <button id="aud-amb-producao"  class="rail-btn">⚙ Ambiente Produção</button>
           <button id="aud-recarregar"    class="rail-btn rail-sep">↻ Recarregar<span class="rail-sub">última coleta salva</span></button>
@@ -9407,7 +9407,9 @@ $('#est-comparar').addEventListener('click', () => { setTab('compara'); rodaComp
 //  X2_MODOUN, X2_MODO) — a mesma da Estrutura e da Empresas.
 // ============================================================================
 const aud = { customer: null, dados: null, carregando: false, coletando: {},
-              f: { grupo: '', st: '', sp: '', txt: '' }, abertos: new Set() };
+              f: { grupo: '', st: '', sp: '', txt: '' }, abertos: new Set(),
+              // Dicionário: SX3 abre, SX6 nasce recolhido (pode passar de mil linhas).
+              dic: new Set(['x3']), x3f: { sit: '', txt: '' }, x6f: { sit: '', txt: '' } };
 
 function initAuditoria() {
   const cli = state.selected?.cli;
@@ -9430,7 +9432,7 @@ async function coletaAuditoria(amb) {
   const cli = aud.customer;
   if (!cli) { alert('Abra um projeto antes de coletar.'); return; }
   const lab = (AMB[amb] || AMB.producao).label;
-  if (!confirm(`Coletar a SX2 e o volume por filial na ${lab}?\n\nSão duas consultas de leitura pela REST cadastrada em ⚙ Ambiente.`)) return;
+  if (!confirm(`Coletar a SX2 e o volume por filial na ${lab}?\n\nSão quatro consultas de leitura (SX2, volume, SX3 e SX6) pela REST cadastrada em ⚙ Ambiente.`)) return;
   aud.coletando[amb] = true; renderAuditoria();
   try { aud.dados = await api(`/api/auditoria/${encodeURIComponent(cli)}/coletar?ambiente=${amb}`, { method: 'POST' }); aud.erroColeta = null; }
   catch (e) { aud.erroColeta = `${lab}: ${e.message}`; }
@@ -9529,6 +9531,19 @@ function audAlertas(d, L) {
     const est = L.filter(x => x.e.papel === 'estrutural' && x.lt.t && x.lp.t && x.lt.t.sx2 !== x.lp.t.sx2);
     est.forEach(x => al.push(['bad', `${x.e.tabela} é estrutural (FISA170) e está ${audSp(x.lt.t.sx2)} em Teste e ${audSp(x.lp.t.sx2)} em Produção.`]));
   }
+  const dx3 = d.dicionario?.x3, dx6 = d.dicionario?.x6;
+  if (dx3) {
+    const fmt = dx3.divergentes.filter(r => r.situacao === 'formato').length;
+    if (fmt) al.push(['bad', `SX3: ${fmt} campo(s) com tipo ou tamanho diferente entre Teste e Produção — veja o bloco SX3 abaixo.`]);
+    const so = dx3.divergentes.length - fmt;
+    if (so) al.push(['warn', `SX3: ${so} campo(s) existem em uma base só.`]);
+  }
+  if (dx6) {
+    const c = dx6.divergentes.filter(r => r.situacao === 'conteudo').length;
+    if (dx6.divergentes.length) al.push([c ? 'bad' : 'warn', `SX6: ${dx6.divergentes.length} parâmetro(s) divergem entre as bases (${c} com conteúdo diferente).`]);
+  }
+  ['teste', 'producao'].forEach(amb => { const c = d.coletas[amb];
+    if (c && c.erro_dic) al.push(['warn', `${amb === 'teste' ? 'Teste' : 'Produção'}: dicionário incompleto na última coleta — ${c.erro_dic}`]); });
   const semAlvo = L.filter(x => x.e.papel === 'escopo' && !audOk(x.e.alvo)).map(x => x.e.tabela);
   if (semAlvo.length) al.push(['warn', `Sem compartilhamento definido na Estrutura: ${semAlvo.join(', ')}.`]);
   const disc = L.filter(x => x.prop.length).map(x => x.e.tabela);
@@ -9603,7 +9618,7 @@ function renderAuditoria() {
 
   box.innerHTML = `
     <div class="mb-3 flex flex-col gap-1">${selo('teste')}${selo('producao')}</div>
-    ${coletando.length ? `<div class="mb-3 px-4 py-2 rounded-lg bg-sky-50 border border-sky-200 text-sm text-sky-900">Coletando na ${escapeHtml(coletando.join(' e '))}… são duas consultas de leitura.</div>` : ''}
+    ${coletando.length ? `<div class="mb-3 px-4 py-2 rounded-lg bg-sky-50 border border-sky-200 text-sm text-sky-900">Coletando na ${escapeHtml(coletando.join(' e '))}… são quatro consultas de leitura (SX2, volume, SX3 e SX6).</div>` : ''}
     ${aud.erroColeta ? `<div class="mb-3 px-4 py-2 rounded-lg bg-rose-50 border border-rose-200 text-sm text-rose-800">Coleta falhou · ${escapeHtml(aud.erroColeta)}</div>` : ''}
     <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
       ${kpi('Tabelas com alvo', `${alvoN} / ${escopo.length}`, 'bg-totvs-blue text-totvs-petroleo')}
@@ -9636,6 +9651,8 @@ function renderAuditoria() {
         <tbody>${corpo || `<tr><td colspan="10" class="px-3 py-6 text-center text-slate-400">Nada com este filtro.</td></tr>`}</tbody>
       </table>
     </div>
+    ${audBlocoX3(d)}
+    ${audBlocoX6(d)}
     ${audBlocoCooperativas(d, L)}`;
   ligaAuditoria();
 }
@@ -9689,7 +9706,121 @@ function audBlocoCooperativas(d, L) {
       || '<tr><td colspan="5" class="px-3 py-6 text-center text-slate-400">Sem coleta.</td></tr>'}</tbody></table></div>`;
 }
 
+// ── Dicionário entre as bases: SX3 (campos das tabelas auditadas) e SX6 ──
+const AUD_X3_SIT = { so_teste: ['warn', 'Só em Teste'], so_producao: ['warn', 'Só em Produção'], formato: ['bad', 'Tipo/tamanho diferente'] };
+const AUD_X6_SIT = { so_teste: ['warn', 'Só em Teste'], so_producao: ['warn', 'Só em Produção'],
+                     filial: ['info', 'Filiais diferentes'], conteudo: ['bad', 'Conteúdo diferente'] };
+const AUD_DIC_MAX = 500;   // acima disso a tabela vira rolagem, não leitura — o filtro resolve
+
+/** Por que o bloco não tem comparação — dito na língua de quem vai agir. */
+function audDicMotivo(d, chave) {
+  const t = d.coletas.teste, p = d.coletas.producao;
+  if (!t || !p) return `Colete as duas bases para comparar o ${chave === 'x3' ? 'SX3' : 'SX6'}.`;
+  const falta = [['Teste', t], ['Produção', p]].filter(([, c]) => !c[chave + '_ok']);
+  if (falta.length) return `A última coleta de ${falta.map(f => f[0]).join(' e ')} não leu o ${chave === 'x3' ? 'SX3' : 'SX6'}`
+    + (falta.map(f => f[1].erro_dic).filter(Boolean).length ? ` (${falta.map(f => f[1].erro_dic).filter(Boolean).join(' · ')})` : '')
+    + '. Colete de novo.';
+  return null;
+}
+
+function audCaixa(id, titulo, sub, conta, corpo) {
+  const aberta = aud.dic.has(id);
+  return `<div class="bg-white rounded-lg border border-slate-200 mb-6">
+    <button type="button" data-aud-caixa="${id}" class="w-full px-4 py-3 flex items-center gap-2 text-left hover:bg-slate-50 ${aberta ? 'border-b border-slate-200' : ''}">
+      <span class="text-slate-400 w-3 text-center">${aberta ? '▾' : '▸'}</span>
+      <span class="font-totvs text-totvs-petroleo">${titulo}</span>
+      <span class="px-2 py-0.5 rounded-full text-xs bg-slate-100 text-slate-600 whitespace-nowrap">${conta}</span>
+      <span class="ml-2 text-xs text-slate-400 hidden lg:inline">${sub}</span>
+      <span class="ml-auto text-xs text-slate-400 whitespace-nowrap">${aberta ? 'recolher' : 'expandir'}</span>
+    </button>
+    ${aberta ? corpo() : ''}</div>`;
+}
+
+function audFiltroDic(id, f, sits) {
+  return `<div class="px-4 py-2 flex items-center gap-2 flex-wrap text-sm border-b border-slate-100">
+    <select data-aud-dic-sit="${id}" class="px-2 py-1 border border-slate-300 rounded-md bg-white">
+      <option value="">Todas as divergências</option>
+      ${Object.entries(sits).map(([k, [, l]]) => `<option value="${k}" ${f.sit === k ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+    </select>
+    <input data-aud-dic-txt="${id}" value="${escapeHtml(f.txt)}" placeholder="${id === 'x3' ? 'filtrar tabela ou campo' : 'filtrar parâmetro ou conteúdo'}"
+      class="px-2 py-1 border border-slate-300 rounded-md w-56"></div>`;
+}
+
+function audBlocoX3(d) {
+  const x = d.dicionario?.x3, motivo = audDicMotivo(d, 'x3');
+  const conta = x ? `${audN(x.divergentes.length)} divergente(s) de ${audN(x.total)} campos` : 'sem comparação';
+  return audCaixa('x3', 'SX3 · campos entre as bases',
+    'tabelas da auditoria · tipo, tamanho e decimais em Teste × Produção', conta, () => {
+      if (!x) return `<p class="px-4 py-6 text-sm text-slate-500">${escapeHtml(motivo || 'Sem dados.')}</p>`;
+      const f = aud.x3f, T = f.txt.toUpperCase();
+      const vis = x.divergentes.filter(r => (!f.sit || r.situacao === f.sit)
+        && (!T || `${r.tabela} ${r.campo} ${r.titulo || ''}`.toUpperCase().includes(T)));
+      const fmt = c => c ? `<span class="font-mono">${escapeHtml(c.tipo)} ${c.tamanho}${c.decimal ? ',' + c.decimal : ''}</span>` : '<span class="text-rose-500 font-semibold" title="campo não existe nesta base">—</span>';
+      const linhas = vis.slice(0, AUD_DIC_MAX).map(r => {
+        const dif = r.situacao === 'formato';
+        const cel = (a, b) => dif && a && b && (a.tipo !== b.tipo || a.tamanho !== b.tamanho || a.decimal !== b.decimal) ? 'text-rose-700 font-semibold' : '';
+        return `<tr class="border-t border-slate-100" data-aud-x3="${escapeHtml(r.tabela + '.' + r.campo)}">
+          <td class="px-3 py-1.5 font-mono font-semibold">${escapeHtml(r.tabela)}</td>
+          <td class="px-3 py-1.5 font-mono">${escapeHtml(r.campo)}</td>
+          <td class="px-3 py-1.5 text-slate-600">${escapeHtml(r.titulo || '')}</td>
+          <td class="px-3 py-1.5 ${cel(r.teste, r.producao)}">${fmt(r.teste)}</td>
+          <td class="px-3 py-1.5 ${cel(r.producao, r.teste)}">${fmt(r.producao)}</td>
+          <td class="px-3 py-1.5">${audPill(AUD_X3_SIT[r.situacao] || ['na', r.situacao])}</td></tr>`;
+      }).join('');
+      return audFiltroDic('x3', f, AUD_X3_SIT) + `<div class="overflow-x-auto"><table class="w-full text-sm">
+        <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>
+          <th class="px-3 py-2 text-left">Tabela</th><th class="px-3 py-2 text-left">Campo</th><th class="px-3 py-2 text-left">Título</th>
+          <th class="px-3 py-2 text-left">Teste</th><th class="px-3 py-2 text-left">Produção</th><th class="px-3 py-2 text-left">Situação</th></tr></thead>
+        <tbody>${linhas || `<tr><td colspan="6" class="px-3 py-6 text-center text-slate-400">${x.divergentes.length ? 'Nada com este filtro.' : 'Nenhum campo diverge entre as bases.'}</td></tr>`}</tbody></table></div>
+        ${vis.length > AUD_DIC_MAX ? `<p class="px-4 py-2 text-xs text-amber-800">Mostrando ${AUD_DIC_MAX} de ${audN(vis.length)}. Use o filtro.</p>` : ''}`;
+    });
+}
+
+function audBlocoX6(d) {
+  const x = d.dicionario?.x6, motivo = audDicMotivo(d, 'x6');
+  const conta = x ? `${audN(x.divergentes.length)} divergente(s) de ${audN(x.total)} parâmetros` : 'sem comparação';
+  return audCaixa('x6', 'SX6 · parâmetros entre as bases',
+    'SX6 inteiro · existência, filial (X6_FIL) e conteúdo em Teste × Produção', conta, () => {
+      if (!x) return `<p class="px-4 py-6 text-sm text-slate-500">${escapeHtml(motivo || 'Sem dados.')}</p>`;
+      const f = aud.x6f, T = f.txt.toUpperCase();
+      const vis = x.divergentes.filter(r => (!f.sit || r.situacao === f.sit)
+        && (!T || `${r.param} ${r.descricao || ''} ${r.linhas.map(l => (l.teste?.conteudo || '') + ' ' + (l.producao?.conteudo || '')).join(' ')}`.toUpperCase().includes(T)));
+      const cont = (c, outro) => c
+        ? `<span class="font-mono text-xs break-all ${outro && outro.conteudo.trim() !== c.conteudo.trim() ? 'text-rose-700 font-semibold' : ''}">${escapeHtml(c.conteudo || '(vazio)')}</span>`
+        : '<span class="text-rose-500 font-semibold" title="não existe nesta base">—</span>';
+      let n = 0;
+      const linhas = vis.slice(0, AUD_DIC_MAX).map(r => r.linhas.map((l, i) => {
+        n++;
+        return `<tr class="${i ? '' : 'border-t border-slate-200'}" data-aud-x6="${escapeHtml(r.param)}">
+          <td class="px-3 py-1.5 font-mono font-semibold align-top">${i ? '' : escapeHtml(r.param)}</td>
+          <td class="px-3 py-1.5 text-slate-600 align-top">${i ? '' : escapeHtml(r.descricao || '')}</td>
+          <td class="px-3 py-1.5 font-mono text-xs align-top">${escapeHtml(l.fil || 'todas')}</td>
+          <td class="px-3 py-1.5 align-top max-w-xs">${cont(l.teste, l.producao)}</td>
+          <td class="px-3 py-1.5 align-top max-w-xs">${cont(l.producao, l.teste)}</td>
+          <td class="px-3 py-1.5 align-top">${i ? '' : audPill(AUD_X6_SIT[r.situacao] || ['na', r.situacao])}</td></tr>`;
+      }).join('')).join('');
+      return audFiltroDic('x6', f, AUD_X6_SIT) + `<div class="overflow-x-auto"><table class="w-full text-sm">
+        <thead class="bg-slate-50 text-xs uppercase tracking-wide text-slate-500"><tr>
+          <th class="px-3 py-2 text-left">Parâmetro</th><th class="px-3 py-2 text-left">Descrição</th><th class="px-3 py-2 text-left" title="X6_FIL — em branco vale para todas as filiais">Filial</th>
+          <th class="px-3 py-2 text-left">Teste</th><th class="px-3 py-2 text-left">Produção</th><th class="px-3 py-2 text-left">Situação</th></tr></thead>
+        <tbody>${linhas || `<tr><td colspan="6" class="px-3 py-6 text-center text-slate-400">${x.divergentes.length ? 'Nada com este filtro.' : 'Nenhum parâmetro diverge entre as bases.'}</td></tr>`}</tbody></table></div>
+        ${vis.length > AUD_DIC_MAX ? `<p class="px-4 py-2 text-xs text-amber-800">Mostrando ${AUD_DIC_MAX} de ${audN(vis.length)} parâmetros. Use o filtro.</p>` : ''}
+        <p class="px-4 py-2 text-xs text-slate-400">Conteúdo comparado até ${200} caracteres, sem espaços nas pontas.</p>`;
+    });
+}
+
 function ligaAuditoria() {
+  $$('#aud-conteudo [data-aud-caixa]').forEach(b => b.addEventListener('click', () => {
+    const k = b.dataset.audCaixa; aud.dic.has(k) ? aud.dic.delete(k) : aud.dic.add(k); renderAuditoria();
+  }));
+  $$('#aud-conteudo [data-aud-dic-sit]').forEach(el => el.addEventListener('change', ev => {
+    aud[el.dataset.audDicSit + 'f'].sit = ev.target.value; renderAuditoria();
+  }));
+  $$('#aud-conteudo [data-aud-dic-txt]').forEach(el => {
+    const ap = ev => { aud[el.dataset.audDicTxt + 'f'].txt = ev.target.value; renderAuditoria(); };
+    el.addEventListener('change', ap);
+    el.addEventListener('keydown', ev => { if (ev.key === 'Enter') ap(ev); });
+  });
   const re = () => renderAuditoria();
   [['#aud-f-grupo', 'grupo'], ['#aud-f-st', 'st'], ['#aud-f-sp', 'sp']].forEach(([s, k]) =>
     $(s).addEventListener('change', ev => { aud.f[k] = ev.target.value; re(); }));

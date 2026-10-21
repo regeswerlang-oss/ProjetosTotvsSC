@@ -127,6 +127,42 @@ Log em `cockpit.protheus_coletas` com `tipo = 'auditoria'`.
   (tabela rola dentro da caixa) e zero erro de JS.
 - `teststub.mjs`, `integracoes-front.js` e `testestrutura.py` continuam passando.
 
+## Dicionário entre as bases: SX3 e SX6 (21/10/2026, segunda entrega)
+
+Pedido do Reges no mesmo dia: a comparação Teste × Produção passa a incluir o
+dicionário. SQL: `docs/sql/2026-10-21-auditoria-dicionario.sql`.
+
+- **SX3 — só as tabelas da auditoria** (escopo + estruturais + referência).
+  Campo que existe numa base só, ou com tipo/tamanho/decimal diferente. O SX3
+  inteiro passa de 90 mil linhas — não cabe nos 50s da função nem faz sentido
+  aqui: a pergunta é "estas tabelas estão iguais nas duas bases?".
+- **SX6 — inteiro**. Parâmetro não tem escopo: o que muda o cálculo fiscal pode
+  estar em qualquer `MV_`. Três sabores, como na Compara: **só numa base**,
+  **filiais diferentes** (o conjunto de `X6_FIL` muda — em branco vale para todas)
+  e **conteúdo diferente** (comparado sem espaços nas pontas, até 200 caracteres).
+- **Por que não é a aba Compara**: a Compara compara empresas da MESMA base e
+  agrega no banco. Entre bases não há banco em comum — cada uma tem sua REST —,
+  então a diferença é calculada aqui, no `GET`, e volta só o que diverge.
+- **Coleta**: são quatro consultas por base (SX2, volume, SX3, SX6). SX3 e SX6
+  **não são fatais**: estouro de limite, timeout ou recusa viram
+  `erro_dic` na coleta, a SX2/volume grava igual e a tela diz qual leitura faltou.
+  Comparação só com as duas bases tendo lido aquele dicionário.
+- **CSV com separador `;` fixo e sem aspas** (`_aud_csv`): o Sniffer do
+  `_proto_linhas_csv` adivinha o separador pelas primeiras linhas, e conteúdo de
+  parâmetro cheio de vírgula pode enganá-lo. A REST já troca `;` e quebra de
+  linha por espaço; aspas o SQL troca.
+- **Retenção**: o SX6 inteiro por coleta pesa. Só as **3 últimas coletas** de
+  cada base guardam SX3/SX6 (`AUD_DIC_MANTER`); SX2 e volume ficam sempre.
+- **Tela**: dois blocos recolhíveis abaixo da grade — SX3 aberto, SX6 recolhido
+  (pode passar de mil linhas; fechado nem gera DOM) —, cada um com filtro por
+  tipo de divergência e busca, limitados a 500 linhas visíveis. Os pontos de
+  atenção resumem os dois.
+
+Testado no `auditoria-e2e.py` (A2_NOME 40 × 60, campo só em uma base, MV com
+conteúdo/filial diferente, conteúdo com vírgula, aspas e ponto, SX6 truncado sem
+derrubar a coleta, retenção em 3 coletas; oito SELECTs pela trava do SqlSeguro)
+e no `auditoria-front.js` (blocos, recolhido, filtros e busca).
+
 **Não testado:** Oracle e SQL Server reais (o SQL passou pela trava do
 SqlSeguro e pelo stub, não por um banco) e a base da Cresol, que ainda não tem
 o TSCMONITREST publicado nem o ⚙ Ambiente cadastrado.

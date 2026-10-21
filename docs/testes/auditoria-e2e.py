@@ -69,6 +69,22 @@ BASES = {
                   "CIN": [("0126", 9)], "SA2": [("", 4100)], "F2D": [("", 15000)]},
     },
 }
+# Dicionário plantado: A2_NOME com tamanho diferente, F22_XCUSTOM só em Teste,
+# F27_DESC só em Produção; MV_ESTADO igual, MV_CFGTRIB com conteúdo diferente,
+# MV_SOTESTE só em Teste, MV_FILX com X6_FIL diferente, conteúdo com vírgula,
+# aspas e ponto: nada disso pode quebrar o CSV.
+X3 = {
+    "teste": [("SA2", "A2_NOME", "C", 40, 0), ("SA2", "A2_COD", "C", 6, 0), ("F22", "F22_CLIFOR", "C", 6, 0),
+              ("F22", "F22_XCUSTOM", "C", 10, 0), ("F27", "F27_VALOR", "N", 14, 2)],
+    "producao": [("SA2", "A2_NOME", "C", 60, 0), ("SA2", "A2_COD", "C", 6, 0), ("F22", "F22_CLIFOR", "C", 6, 0),
+                 ("F27", "F27_VALOR", "N", 14, 2), ("F27", "F27_DESC", "C", 30, 0)],
+}
+X6 = {
+    "teste": [("MV_ESTADO", "", "C", "SC"), ("MV_CFGTRIB", "", "L", ".T."), ("MV_SOTESTE", "", "C", "x"),
+              ("MV_FILX", "01260001", "C", "1"), ("MV_LISTA", "", "C", 'A,B "C". D')],
+    "producao": [("MV_ESTADO", "", "C", "SC"), ("MV_CFGTRIB", "", "L", ".F."),
+                 ("MV_FILX", "", "C", "1"), ("MV_LISTA", "", "C", 'A,B "C". D')],
+}
 VISTOS = []
 # Mesma lista do aProib do TSCMONITREST.tlpp (SqlSeguro), palavra inteira.
 PROIBIDAS = (r"\b(INSERT|UPDATE|DELETE|MERGE|DROP|CREATE|ALTER|TRUNCATE|GRANT|REVOKE|EXECUTE|EXEC|CALL|"
@@ -99,6 +115,18 @@ class Stub(http.server.BaseHTTPRequestHandler):
         if erro or corpo.get("token") != "tok-" + amb or self.headers.get("X-TSC-Token") != "tok-" + amb:
             return self._r(400, {"ok": False, "erro": erro or "token"})
         b = BASES[amb]
+        if "FROM SX3" in sql:
+            pedidas = set(re.findall(r"'([A-Z0-9]{3})'", sql.split("IN (")[1]))
+            linhas = ["ARQ;CAMPO;TIPO;TAM;DECIMAIS;TITULO;CONTEXTO"]
+            linhas += [f"{t};{c};{tp};{tm};{dc};Titulo {c};R" for t, c, tp, tm, dc in X3[amb] if t in pedidas]
+            return self._r(200, {"ok": True, "csv": "\n".join(linhas)})
+        if "FROM SX6" in sql:
+            if os.environ.get("AUD_X6_FALHA") == amb:
+                return self._r(200, {"ok": True, "truncado": True, "csv": "PARAM"})
+            linhas = ["PARAM;FIL;TIPO;CONTEUDO;DESCR"]
+            # a REST troca ';' e quebra de linha por espaço; aspas o SQL já tirou
+            linhas += [f"{p};{f};{t};{c.replace(chr(34), ' ')};Desc {p}" for p, f, t, c in X6[amb]]
+            return self._r(200, {"ok": True, "csv": "\n".join(linhas)})
         if "FROM SX2" in sql:
             pedidas = re.findall(r"'([A-Z0-9]{3})'", sql.split("IN (")[1])
             linhas = ["CHAVE;NOME;ARQ;MODOEMP;MODOUN;MODO;EXISTE;TEMFIL"]
@@ -132,8 +160,8 @@ con.autocommit = True
 cur = con.cursor()
 cur.execute(DDL)
 mig = open("docs/sql/2026-10-21-auditoria-tabelas.sql", encoding="utf-8").read()
-cur.execute(mig.replace("drop constraint if exists protheus_coletas_tipo_check;",
-                        "drop constraint if exists protheus_coletas_tipo_check;", 1))
+cur.execute(mig)
+cur.execute(open("docs/sql/2026-10-21-auditoria-dicionario.sql", encoding="utf-8").read())
 
 import index as app_mod  # noqa: E402
 
@@ -189,7 +217,32 @@ confere(res["teste"][0] == 62, f"fora_padrao teste {res['teste']}")
 confere(res["producao"][0] == 4, f"fora_padrao producao {res['producao']}")
 cur.execute("select tipo, ok from cockpit.protheus_coletas")
 confere(cur.fetchall() == [("auditoria", True), ("auditoria", True)], "log de coleta")
-confere(all(sql_seguro(s) is None for _, s in VISTOS) and len(VISTOS) == 4, "4 SQLs, todos seguros")
+confere(all(sql_seguro(s) is None for _, s in VISTOS) and len(VISTOS) == 8, f"8 SQLs, todos seguros ({len(VISTOS)})")
+
+# ── dicionário entre as bases ──────────────────────────────────────────────
+dic = j["dicionario"]
+x3 = {(r["tabela"], r["campo"]): r["situacao"] for r in dic["x3"]["divergentes"]}
+confere(x3 == {("SA2", "A2_NOME"): "formato", ("F22", "F22_XCUSTOM"): "so_teste",
+               ("F27", "F27_DESC"): "so_producao"}, f"SX3 divergências {x3}")
+x6 = {r["param"]: r["situacao"] for r in dic["x6"]["divergentes"]}
+confere(x6 == {"MV_CFGTRIB": "conteudo", "MV_SOTESTE": "so_teste", "MV_FILX": "filial"}, f"SX6 divergências {x6}")
+confere(dic["x6"]["total"] == 5, "SX6 total de parâmetros")
+
+# SX6 que estoura o limite NÃO derruba a coleta: grava SX2/volume e avisa.
+os.environ["AUD_X6_FALHA"] = "teste"
+r = cli.post(f"/api/auditoria/{C}/coletar?ambiente=teste")
+confere(r.status_code == 200, f"coleta com SX6 truncado {r.status_code}")
+jt = r.get_json()
+confere(jt["coletas"]["teste"]["x6_ok"] is False and "SX6" in (jt["coletas"]["teste"]["erro_dic"] or ""), "erro_dic do SX6")
+confere(jt["dicionario"]["x6"] is None and jt["dicionario"]["x3"] is not None, "SX6 sem comparação, SX3 segue")
+os.environ.pop("AUD_X6_FALHA")
+# retenção: depois de 5 coletas de Teste, só 3 guardam o dicionário
+for _ in range(3):
+    cli.post(f"/api/auditoria/{C}/coletar?ambiente=teste")
+cur.execute("""select count(distinct s.coleta_id) from cockpit.audtab_sx3 s
+                 join cockpit.audtab_coletas c on c.id = s.coleta_id where c.ambiente='teste'""")
+confere(cur.fetchone()[0] == 3, "retenção do dicionário em 3 coletas")
+j = cli.get(f"/api/auditoria/{C}").get_json()
 
 # base sem REST cadastrada → 404 legível, nada gravado
 cur.execute("delete from cockpit.protheus_ambientes where ambiente='producao'")

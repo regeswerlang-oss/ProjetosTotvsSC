@@ -6806,6 +6806,9 @@ def _aud_ultimas(customer):
         out[amb] = {"id": c["id"], "lido_em": c["lido_em"], "environment": c["environment"],
                     "sufixo": c["sufixo"], "banco": c["banco"], "duracao_ms": c["duracao_ms"],
                     "disparado_por": c["disparado_por"], "leiaute": c["leiaute"],
+                    "x3_ok": c.get("x3_ok"), "x6_ok": c.get("x6_ok"),
+                    "x3_linhas": c.get("x3_linhas"), "x6_linhas": c.get("x6_linhas"),
+                    "erro_dic": c.get("erro_dic"),
                     "tabelas": tabs, "historico": hist}
     return out
 
@@ -6822,6 +6825,142 @@ def _aud_propostas(customer):
     return out
 
 
+# ── Dicionário (SX3 · SX6) entre as duas bases ──────────────────────────────
+# Mesma pergunta da aba Compara, mas ENTRE BASES (Teste × Produção) e não entre
+# empresas da mesma base. Por isso a agregação não pode rodar no banco: cada
+# base é lida pela sua REST, e a diferença só existe aqui.
+#  - SX3: só as tabelas da auditoria (escopo + estruturais + referência). O SX3
+#    inteiro passa de 90 mil linhas e não cabe nos 50s da função.
+#  - SX6: inteiro. Parâmetro não tem "escopo" — o que muda o cálculo fiscal pode
+#    estar em qualquer MV_.
+# Falhar no SX3/SX6 NÃO derruba a coleta: SX2 e volume já valem sozinhos, e a
+# tela diz qual leitura do dicionário faltou.
+AUD_X6_CONT = 200          # caracteres do conteúdo guardados (X6_CONTEUD tem 250)
+AUD_DIC_MANTER = 3         # coletas por base que guardam o dicionário
+
+
+def _aud_sql_x3(aliases, sufixo, banco):
+    lista = ",".join(f"'{a}'" for a in aliases)
+    if banco == "mssql":
+        return (f"SELECT RTRIM(X3_ARQUIVO) AS ARQ, RTRIM(X3_CAMPO) AS CAMPO, RTRIM(X3_TIPO) AS TIPO, "
+                f"CAST(X3_TAMANHO AS VARCHAR(10)) AS TAM, CAST(X3_DECIMAL AS VARCHAR(10)) AS DECIMAIS, "
+                f"RTRIM(SUBSTRING(X3_TITULO, 1, 40)) AS TITULO, RTRIM(X3_CONTEXT) AS CONTEXTO "
+                f"FROM SX3{sufixo} WHERE D_E_L_E_T_ = ' ' AND X3_ARQUIVO IN ({lista}) "
+                f"ORDER BY X3_ARQUIVO, X3_CAMPO")
+    return (f"SELECT RTRIM(X3_ARQUIVO) AS ARQ, RTRIM(X3_CAMPO) AS CAMPO, RTRIM(X3_TIPO) AS TIPO, "
+            f"TO_CHAR(X3_TAMANHO) AS TAM, TO_CHAR(X3_DECIMAL) AS DECIMAIS, "
+            f"RTRIM(SUBSTR(X3_TITULO, 1, 40)) AS TITULO, RTRIM(X3_CONTEXT) AS CONTEXTO "
+            f"FROM SX3{sufixo} WHERE D_E_L_E_T_ = ' ' AND X3_ARQUIVO IN ({lista}) "
+            f"ORDER BY X3_ARQUIVO, X3_CAMPO")
+
+
+def _aud_sql_x6(sufixo, banco):
+    """O ';' e a quebra de linha a REST já troca por espaço; aspas viram espaço
+    aqui para o CSV não abrir campo citado no meio de um conteúdo."""
+    if banco == "mssql":
+        cont = (f"RTRIM(REPLACE(SUBSTRING(X6_CONTEUD, 1, {AUD_X6_CONT}), '\"', ' '))")
+        return (f"SELECT RTRIM(X6_VAR) AS PARAM, RTRIM(X6_FIL) AS FIL, RTRIM(X6_TIPO) AS TIPO, "
+                f"{cont} AS CONTEUDO, RTRIM(SUBSTRING(X6_DESCRIC, 1, 60)) AS DESCR "
+                f"FROM SX6{sufixo} WHERE D_E_L_E_T_ = ' ' ORDER BY X6_VAR, X6_FIL")
+    cont = f"RTRIM(REPLACE(SUBSTR(X6_CONTEUD, 1, {AUD_X6_CONT}), '\"', ' '))"
+    return (f"SELECT RTRIM(X6_VAR) AS PARAM, RTRIM(X6_FIL) AS FIL, RTRIM(X6_TIPO) AS TIPO, "
+            f"{cont} AS CONTEUDO, RTRIM(SUBSTR(X6_DESCRIC, 1, 60)) AS DESCR "
+            f"FROM SX6{sufixo} WHERE D_E_L_E_T_ = ' ' ORDER BY X6_VAR, X6_FIL")
+
+
+def _aud_csv(texto):
+    """CSV da REST: separador ';' FIXO e sem aspas. O Sniffer do _proto_linhas_csv
+    adivinha o separador pelas primeiras linhas — com conteúdo de parâmetro
+    cheio de vírgula ele pode adivinhar errado."""
+    return [list(r) for r in csv.reader(io.StringIO(texto or ""), delimiter=";",
+                                        quoting=csv.QUOTE_NONE)]
+
+
+def _aud_linhas_cab(linhas):
+    if not linhas:
+        return []
+    cab = [c.strip().upper() for c in linhas[0]]
+    out = []
+    for ln in linhas[1:]:
+        if not any((c or "").strip() for c in ln):
+            continue
+        out.append({c: _cmp_cel(ln, i) for i, c in enumerate(cab)})
+    return out
+
+
+def _aud_parse_x3(linhas):
+    out = []
+    for r in _aud_linhas_cab(linhas):
+        arq, campo = r.get("ARQ", "").upper(), r.get("CAMPO", "").upper()
+        if AUD_RE_ALIAS.match(arq) and campo:
+            out.append({"tabela": arq, "campo": campo, "tipo": r.get("TIPO", ""),
+                        "tamanho": _aud_int(r.get("TAM")), "decimal": _aud_int(r.get("DECIMAIS")),
+                        "titulo": r.get("TITULO", ""), "contexto": r.get("CONTEXTO", "")})
+    return out
+
+
+def _aud_parse_x6(linhas):
+    out = []
+    for r in _aud_linhas_cab(linhas):
+        par = r.get("PARAM", "").upper()
+        if par:
+            out.append({"param": par, "fil": r.get("FIL", ""), "tipo": r.get("TIPO", ""),
+                        "conteudo": r.get("CONTEUDO", ""), "descricao": r.get("DESCR", "")})
+    return out
+
+
+def _aud_dic_compara(customer, ct, cp):
+    """Diferenças de SX3 e SX6 entre a última coleta de Teste (ct) e a de
+    Produção (cp). Volta só o que diverge + os totais — o igual é ruído."""
+    res = {"x3": None, "x6": None}
+    if not ct or not cp:
+        return res
+    if ct.get("x3_ok") and cp.get("x3_ok"):
+        rows = q("""select coleta_id, tabela, campo, tipo, tamanho, decimal, titulo
+                      from cockpit.audtab_sx3 where coleta_id in (%s, %s)""", (ct["id"], cp["id"]))
+        campos = {}
+        for r in rows:
+            lado = "teste" if r["coleta_id"] == ct["id"] else "producao"
+            k = (r["tabela"], r["campo"])
+            campos.setdefault(k, {})[lado] = {"tipo": r["tipo"], "tamanho": int(r["tamanho"] or 0),
+                                             "decimal": int(r["decimal"] or 0), "titulo": r["titulo"]}
+        div, tabs = [], set()
+        for (tab, campo), lados in sorted(campos.items()):
+            t, p = lados.get("teste"), lados.get("producao")
+            if t and p and (t["tipo"], t["tamanho"], t["decimal"]) == (p["tipo"], p["tamanho"], p["decimal"]):
+                continue
+            tipo = "so_teste" if not p else "so_producao" if not t else "formato"
+            div.append({"tabela": tab, "campo": campo, "situacao": tipo, "teste": t, "producao": p,
+                        "titulo": (t or p)["titulo"]})
+            tabs.add(tab)
+        res["x3"] = {"total": len(campos), "divergentes": div, "tabelas": len(tabs)}
+    if ct.get("x6_ok") and cp.get("x6_ok"):
+        rows = q("""select coleta_id, param, fil, tipo, conteudo, descricao
+                      from cockpit.audtab_sx6 where coleta_id in (%s, %s)""", (ct["id"], cp["id"]))
+        pars = {}
+        for r in rows:
+            lado = "teste" if r["coleta_id"] == ct["id"] else "producao"
+            pr = pars.setdefault(r["param"], {"teste": {}, "producao": {}, "descricao": r["descricao"]})
+            pr[lado][r["fil"] or ""] = {"tipo": r["tipo"], "conteudo": r["conteudo"] or ""}
+        div = []
+        for par, pr in sorted(pars.items()):
+            t, p = pr["teste"], pr["producao"]
+            if not t or not p:
+                sit = "so_teste" if t else "so_producao"
+            elif set(t) != set(p):
+                sit = "filial"
+            elif any(t[f]["conteudo"].strip() != p[f]["conteudo"].strip() or t[f]["tipo"] != p[f]["tipo"]
+                     for f in t):
+                sit = "conteudo"
+            else:
+                continue
+            fils = sorted(set(t) | set(p))
+            div.append({"param": par, "situacao": sit, "descricao": pr["descricao"],
+                        "linhas": [{"fil": f, "teste": t.get(f), "producao": p.get(f)} for f in fils]})
+        res["x6"] = {"total": len(pars), "divergentes": div}
+    return res
+
+
 @app.get("/api/auditoria/<customer>")
 def api_auditoria(customer):
     if (r := require_auth()):
@@ -6830,8 +6969,10 @@ def api_auditoria(customer):
         return d
     escopo = _aud_escopo(customer)
     amb_cfg = {a: bool(_cfg_ambiente(customer, a)) for a in AMBIENTES}
+    coletas = _aud_ultimas(customer)
     return _json({"ok": True, "customer": customer, "escopo": escopo,
-                  "coletas": _aud_ultimas(customer), "propostas": _aud_propostas(customer),
+                  "coletas": coletas, "propostas": _aud_propostas(customer),
+                  "dicionario": _aud_dic_compara(customer, coletas["teste"], coletas["producao"]),
                   "leiaute": {a: _aud_leiaute(customer, a) for a in AMBIENTES},
                   "ambientes": amb_cfg})
 
@@ -6915,6 +7056,23 @@ def api_auditoria_coletar(customer):
                     disparado_por=current_user())
         return _err(502, str(e))
 
+    # SX3 e SX6: leituras extras, NÃO fatais. A falha vira aviso na coleta.
+    x3 = x6 = None
+    erros_dic = []
+    for rotulo, montar, parse in (
+            (f"o SX3{sufixo}", lambda: _aud_sql_x3(sorted(sx2) or aliases, sufixo, banco), _aud_parse_x3),
+            (f"o SX6{sufixo}", lambda: _aud_sql_x6(sufixo, banco), _aud_parse_x6)):
+        try:
+            dados, _l = roda(montar(), rotulo)
+            val = parse(_aud_csv(dados.get("csv") or ""))
+        except (requests.RequestException, RuntimeError) as e:
+            erros_dic.append(f"{rotulo}: {e if isinstance(e, RuntimeError) else type(e).__name__}")
+            continue
+        if parse is _aud_parse_x3:
+            x3 = val
+        else:
+            x6 = val
+
     lei = _aud_leiaute(customer, amb)
     alvo = {e["tabela"]: e["alvo"] for e in escopo}
     total = sum(f["qtd"] for fs in cont.values() for f in fs)
@@ -6932,11 +7090,14 @@ def api_auditoria_coletar(customer):
         with con, con.cursor() as cur:
             cur.execute("""insert into cockpit.audtab_coletas
                            (customer, ambiente, environment, sufixo, banco, leiaute, duracao_ms,
-                            tabelas_lidas, total_registros, fora_padrao, disparado_por)
-                         values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
+                            tabelas_lidas, total_registros, fora_padrao, disparado_por,
+                            x3_ok, x6_ok, x3_linhas, x6_linhas, erro_dic)
+                         values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
                       (customer, amb, d1.get("environment") or cfg.get("environment"), sufixo,
                        banco, lei["fonte"], int((time.time() - ini) * 1000), len(sx2), total,
-                       fora, current_user()))
+                       fora, current_user(), x3 is not None, x6 is not None,
+                       len(x3) if x3 is not None else None, len(x6) if x6 is not None else None,
+                       "; ".join(erros_dic)[:800] or None))
             cid = cur.fetchone()[0]
             linhas = []
             for a, v in sx2.items():
@@ -6951,6 +7112,33 @@ def api_auditoria_coletar(customer):
                 cur, """insert into cockpit.audtab_itens
                           (coleta_id, customer, ambiente, tabela, nome, arquivo, sx2, existe,
                            tem_filial, filial, qtde) values %s""", linhas)
+            if x3:
+                psycopg2.extras.execute_values(
+                    cur, """insert into cockpit.audtab_sx3
+                              (coleta_id, tabela, campo, tipo, tamanho, decimal, titulo, contexto)
+                            values %s""",
+                    [(cid, r["tabela"], r["campo"], r["tipo"], r["tamanho"], r["decimal"],
+                      r["titulo"], r["contexto"]) for r in x3], page_size=1000)
+            if x6:
+                psycopg2.extras.execute_values(
+                    cur, """insert into cockpit.audtab_sx6
+                              (coleta_id, param, fil, tipo, conteudo, descricao) values %s""",
+                    [(cid, r["param"], r["fil"], r["tipo"], r["conteudo"], r["descricao"])
+                     for r in x6], page_size=1000)
+            # Dicionário pesa (o SX6 inteiro por coleta): só as últimas
+            # AUD_DIC_MANTER de cada base guardam. SX2/volume ficam sempre.
+            cur.execute("""with velhas as (
+                             select id from cockpit.audtab_coletas
+                              where customer=%s and ambiente=%s
+                              order by lido_em desc offset %s)
+                           delete from cockpit.audtab_sx3 where coleta_id in (select id from velhas)""",
+                        (customer, amb, AUD_DIC_MANTER))
+            cur.execute("""with velhas as (
+                             select id from cockpit.audtab_coletas
+                              where customer=%s and ambiente=%s
+                              order by lido_em desc offset %s)
+                           delete from cockpit.audtab_sx6 where coleta_id in (select id from velhas)""",
+                        (customer, amb, AUD_DIC_MANTER))
     finally:
         con.close()
     _log_coleta(customer, amb, "auditoria", ini, True, linhas=len(sx2), itens=total,
