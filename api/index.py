@@ -2431,6 +2431,22 @@ def _chave_dim(d):
     return "|".join(_norm_dim(d.get(k)) for k in ("analise", "dim1", "dim2", "dim3", "dim4"))
 
 
+def _periodo_req():
+    """Filtro opcional de período das telas de movimentos: ?de=AAAA-MM-DD&ate=AAAA-MM-DD
+    (aceita também AAAAMMDD). Devolve o trecho SQL e os parâmetros sobre
+    data_medicao — vazio quando nenhum dos dois veio, para não mudar quem já chama."""
+    de = _data_iso(request.args.get("de"))
+    ate = _data_iso(request.args.get("ate"))
+    sql, par = "", []
+    if de:
+        sql += " and data_medicao >= %s"
+        par.append(de)
+    if ate:
+        sql += " and data_medicao <= %s"
+        par.append(ate)
+    return sql, tuple(par), de, ate
+
+
 @app.get("/api/monitmov/<customer>/evolucao")
 def api_monitmov_evolucao(customer):
     """Evolução dos MOVIMENTOS: uma linha por medição com movimentos, combinações
@@ -2449,18 +2465,20 @@ def api_monitmov_evolucao(customer):
     if (d := deny_aba(customer, "cadastros")):
         return d
     amb = _ambiente()
-    meds = q("""select id, data_medicao, semana, hora_medicao,
+    f_sql, f_par, f_de, f_ate = _periodo_req()
+    meds = q(f"""select id, data_medicao, semana, hora_medicao,
                        periodo_ini, periodo_fim, origem
                   from cockpit.monitmov_medicoes
-                 where customer=%s and ambiente=%s order by data_medicao, id""",
-             (customer, amb))
+                 where customer=%s and ambiente=%s{f_sql} order by data_medicao, id""",
+             (customer, amb) + f_par)
     cenarios = q("""select id, analise, dim1, dim2, dim3, dim4, descricao,
                            esperado, etapa, responsavel
                       from cockpit.monitmov_cenarios where customer=%s
                      order by analise, descricao""", (customer,))
     if not meds:
         return _json({"ok": True, "customer": customer, "ambiente": amb,
-                      "vazio": True, "medicoes": [], "cenarios": [], "serie": []})
+                      "vazio": True, "medicoes": [], "cenarios": [], "serie": [],
+                      "filtro_de": f_de, "filtro_ate": f_ate})
 
     dims = q(SQL_MOV_EVO_DIM, ([m["id"] for m in meds],))
     por_med = {}
@@ -2544,7 +2562,7 @@ def api_monitmov_evolucao(customer):
                   "medicoes": [str(m["data_medicao"]) for m in meds],
                   "serie": serie, "cenarios": linhas,
                   "analises": sorted(analises.values(), key=lambda a: a["analise"]),
-                  "fora_combinado": lista_fora})
+                  "fora_combinado": lista_fora, "filtro_de": f_de, "filtro_ate": f_ate})
 
 
 @app.get("/api/monitmov/<customer>")
@@ -2556,10 +2574,14 @@ def api_monitmov(customer):
     if (d := deny_aba(customer, "cadastros", "cobertura")):
         return d
     amb = _ambiente()
-    meds = q("""select id, data_medicao, semana, periodo_ini, periodo_fim, origem
+    # Período opcional: a "Situação atual" passa a ser a ÚLTIMA medição DENTRO
+    # do período, e a série/total de medições também respeitam o recorte.
+    f_sql, f_par, f_de, f_ate = _periodo_req()
+    f_sql_m = f_sql.replace("data_medicao", "m.data_medicao")
+    meds = q(f"""select id, data_medicao, semana, periodo_ini, periodo_fim, origem
                   from cockpit.monitmov_medicoes
-                 where customer=%s and ambiente=%s order by data_medicao""",
-             (customer, amb))
+                 where customer=%s and ambiente=%s{f_sql} order by data_medicao""",
+             (customer, amb) + f_par)
     cenarios = q("""select id, analise, dim1, dim2, dim3, dim4, descricao,
                            esperado, etapa, responsavel
                       from cockpit.monitmov_cenarios where customer=%s
@@ -2568,7 +2590,8 @@ def api_monitmov(customer):
         return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": True,
                       "itens": [], "modulos": [], "serie": [], "total_medicoes": 0,
                       "dimensoes": [], "analises": [], "cenarios": cenarios,
-                      "cobertura": [], "nao_previstos": [], "a_classificar": []})
+                      "cobertura": [], "nao_previstos": [], "a_classificar": [],
+                      "filtro_de": f_de, "filtro_ate": f_ate})
     ult = meds[-1]
     itens = q("""select tabela, descricao, modulo, filtro, quantidade, valor, periodo
                    from cockpit.monitmov_itens where medicao_id=%s
@@ -2578,13 +2601,13 @@ def api_monitmov(customer):
                           sum(quantidade) as registros
                      from cockpit.monitmov_itens where medicao_id=%s
                     group by 1 order by 4 desc, 1""", (ult["id"],))
-    serie = q("""select m.data_medicao, m.semana, sum(i.quantidade) as realizado,
+    serie = q(f"""select m.data_medicao, m.semana, sum(i.quantidade) as realizado,
                         count(*) filter (where i.quantidade > 0) as tabelas_com_carga
                    from cockpit.monitmov_medicoes m
                    join cockpit.monitmov_itens i on i.medicao_id = m.id
-                  where m.customer=%s and m.ambiente=%s
+                  where m.customer=%s and m.ambiente=%s{f_sql_m}
                   group by m.data_medicao, m.semana order by m.data_medicao""",
-              (customer, amb))
+              (customer, amb) + f_par)
     dimensoes = q("""select analise, descricao, dim1_nome, dim1, dim2_nome, dim2,
                             dim3_nome, dim3, dim4_nome, dim4, periodo, qtde, qtd_doc
                        from cockpit.monitmov_dimensoes where medicao_id=%s
@@ -2607,7 +2630,7 @@ def api_monitmov(customer):
                   "itens": itens, "modulos": modulos, "serie": serie,
                   "dimensoes": dimensoes, "analises": analises, "cenarios": cenarios,
                   "cobertura": cobertura, "nao_previstos": nao_previstos,
-                  "a_classificar": a_classificar})
+                  "a_classificar": a_classificar, "filtro_de": f_de, "filtro_ate": f_ate})
 
 
 def _gravar_movimentos(customer, amb, body, origem="upload"):
@@ -2678,6 +2701,41 @@ def _gravar_movimentos(customer, amb, body, origem="upload"):
                        modulo, filtro, quantidade, valor, periodo)
                     values %s""", resumo, page_size=100)
     return {"medicoes": n_med, "dimensoes": n_dim, "ultima_medicao": ultima}
+
+
+@app.delete("/api/monitmov/<customer>/medicao")
+def api_monitmov_medicao_remover(customer):
+    """Apaga uma medição de MOVIMENTOS inteira — a daquela data, naquele ambiente
+    (dimensões + resumo por análise + cabeçalho).
+
+    Mesma política do DELETE de cadastros: só admin, fora do 'ver como', sem
+    desfazer. Caso real (22/10/2026, Digitro): medições de teste que só
+    carregavam SD2/SE5 de outra janela poluíam a evolução dos contratos."""
+    if (r := require_admin()):
+        return r
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de apagar medições.")
+    if (d := deny_customer(customer)):
+        return d
+    amb = _ambiente()
+    data = _data_iso(request.args.get("data"))
+    if not data:
+        return _err(400, "Informe a data da medição (AAAA-MM-DD).")
+    ids = q("""select id from cockpit.monitmov_medicoes
+                where customer=%s and ambiente=%s and data_medicao=%s""",
+            (customer, amb, data))
+    if not ids:
+        return _err(404, f"Nenhuma medição de movimentos de {data} na base {amb} deste cliente.")
+    linhas = 0
+    for a in ids:
+        r0 = q("select count(*) n from cockpit.monitmov_dimensoes where medicao_id=%s",
+               (a["id"],), one=True)
+        linhas += int(r0["n"] if r0 else 0)
+        execute("delete from cockpit.monitmov_dimensoes where medicao_id=%s", (a["id"],))
+        execute("delete from cockpit.monitmov_itens where medicao_id=%s", (a["id"],))
+        execute("delete from cockpit.monitmov_medicoes where id=%s", (a["id"],))
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "data": data,
+                  "medicoes": len(ids), "linhas": linhas})
 
 
 @app.post("/api/monitmov/<customer>/upload")

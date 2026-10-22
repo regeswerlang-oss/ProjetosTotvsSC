@@ -721,6 +721,16 @@
               <button data-movvisao="evolucao" class="mov-visao-btn px-3 py-1.5">Evolução</button>
             </div>
             <button id="mov-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+            <!-- Período: recorta as medições pela DATA DA COLETA. Vale para as duas
+                 visões (Situação atual = última medição dentro do período). -->
+            <div id="mov-periodo" class="inline-flex items-center gap-1.5 text-xs text-slate-500"
+                 title="Filtra as medições pela data da coleta">
+              <span>Período</span>
+              <input id="mov-de"  type="date" class="px-2 py-1 rounded border border-slate-300 bg-white text-xs">
+              <span>a</span>
+              <input id="mov-ate" type="date" class="px-2 py-1 rounded border border-slate-300 bg-white text-xs">
+              <button id="mov-periodo-limpar" class="hidden px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-50">✕ limpar</button>
+            </div>
           </div>
           <div id="mov-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4 hidden"></div>
           <div id="mov-conteudo"></div>
@@ -3918,7 +3928,25 @@ function confirmaAmbiente(nomeArquivo, sugerido, aoConfirmar) {
 //  Spec: docs/specs/2026-08-25-movimentos-cobertura-cenarios.md
 // ============================================================================
 const mov = { customer: null, ambiente: 'producao', dados: null, verTudo: {},
-              visao: 'atual', evo: null, evoChave: null, verTudoFora: false };
+              visao: 'atual', evo: null, evoChave: null, verTudoFora: false,
+              de: '', ate: '' };
+
+// Filtro de período (data da coleta) — vai na query string dos dois GETs de
+// movimentos; o servidor recorta as medições, então KPIs, série, matriz e
+// "fora do combinado" respeitam o mesmo período sem lógica duplicada aqui.
+const movPeriodoQS = () =>
+  (mov.de ? `&de=${mov.de}` : '') + (mov.ate ? `&ate=${mov.ate}` : '');
+const movPeriodoRot = () => (mov.de || mov.ate)
+  ? ` no período ${mov.de ? fmtData(mov.de) : '…'} a ${mov.ate ? fmtData(mov.ate) : '…'}` : '';
+
+function aplicaPeriodoMov() {
+  const de = $('#mov-de').value || '', ate = $('#mov-ate').value || '';
+  if (de && ate && de > ate) { alert('A data inicial é maior que a final.'); return; }
+  mov.de = de; mov.ate = ate;
+  $('#mov-periodo-limpar').classList.toggle('hidden', !(de || ate));
+  mov.dados = null; mov.evo = null; mov.evoChave = null;
+  carregaMovimentos(mov.customer);
+}
 
 // Rótulo legível do E5_TIPODOC. Fica no front de propósito: a dimensão guarda
 // o CÓDIGO, senão trocar um texto aqui transformaria cenário coberto em
@@ -3960,6 +3988,11 @@ function initMovimentos(ambiente = 'producao') {
     (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
   seloAmbiente($('#mov-amb-selo'), ambiente);
   if (mov.customer === cli && mov.ambiente === ambiente) { aplicaVisaoMov(); return; }
+  if (mov.customer && mov.customer !== cli) {   // outro projeto: período não se herda
+    mov.de = mov.ate = '';
+    $('#mov-de').value = $('#mov-ate').value = '';
+    $('#mov-periodo-limpar').classList.add('hidden');
+  }
   mov.ambiente = ambiente;
   mov.dados = null; mov.evo = null; mov.evoChave = null;
   carregaMovimentos(cli);
@@ -3992,11 +4025,11 @@ async function carregaEvolucaoMov() {
   const box = $('#mov-conteudo'), cli = mov.customer;
   $('#mov-kpis').classList.add('hidden');
   if (!cli) { box.innerHTML = blocoVazioCad('Abra um projeto para ver a evolução dos movimentos.'); return; }
-  const chave = `${cli}|${mov.ambiente}`;
+  const chave = `${cli}|${mov.ambiente}|${mov.de}|${mov.ate}`;
   if (mov.evo && mov.evoChave === chave) { pintaEvolucaoMov(); return; }
   box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando evolução…</div>';
   try {
-    mov.evo = await api(`/api/monitmov/${encodeURIComponent(cli)}/evolucao?ambiente=${mov.ambiente}`);
+    mov.evo = await api(`/api/monitmov/${encodeURIComponent(cli)}/evolucao?ambiente=${mov.ambiente}${movPeriodoQS()}`);
     mov.evoChave = chave;
   } catch (e) {
     box.innerHTML = blocoErro('Não foi possível carregar a evolução', e, carregaEvolucaoMov);
@@ -4022,7 +4055,7 @@ function pintaEvolucaoMov() {
   const j = mov.evo, box = $('#mov-conteudo');
   if (!j) return;
   if (j.vazio || !(j.serie || []).length) {
-    box.innerHTML = blocoVazioCad(`Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`);
+    box.innerHTML = blocoVazioCad(`Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}${movPeriodoRot()}.`);
     return;
   }
   const serie = j.serie;
@@ -4052,6 +4085,9 @@ function pintaEvolucaoMov() {
         `de ${fmtData(String(serie[0].data_medicao))} a ${fmtData(String(u.data_medicao))}`,
         'bg-white border border-slate-200 text-totvs-petroleo');
 
+  // Mesma regra da lixeira de Cadastros: admin REAL e fora da área de clientes
+  // (num 'ver como' de cliente ela não pode aparecer — não há desfazer).
+  const admMov = !!euSou?.is_admin && acesso.modo !== 'cliente';
   const linhasSerie = serie.map((m, i) => {
     const ant = i > 0 ? serie[i - 1] : null;
     const pct = m.cenarios > 0 ? (100 * m.cobertos / m.cenarios) : 0;
@@ -4068,6 +4104,8 @@ function pintaEvolucaoMov() {
       <td class="py-2 pr-3 text-right tabular-nums text-xs">${ant ? deltaMov(m.movimentos, ant.movimentos) : '<span class="text-slate-400">—</span>'}</td>
       <td class="py-2 pr-3 text-right tabular-nums text-slate-500 text-xs">${fmtNum(m.combinacoes)}</td>
       <td class="py-2 text-right tabular-nums text-xs ${m.faltantes ? 'text-rose-600' : 'text-slate-400'}">${m.faltantes}</td>
+      ${admMov ? `<td class="py-2 pl-3 text-right"><button data-del-medmov="${String(m.data_medicao)}" data-interno
+                   title="Apagar esta medição" class="px-2 py-0.5 rounded border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs">🗑</button></td>` : ''}
     </tr>`;
   }).join('');
 
@@ -4222,6 +4260,7 @@ function pintaEvolucaoMov() {
               <th class="text-right py-2 pr-3 font-medium">Δ</th>
               <th class="text-right py-2 pr-3 font-medium">Combin.</th>
               <th class="text-right py-2 font-medium">Faltantes</th>
+              ${admMov ? '<th class="py-2"></th>' : ''}
             </tr>
           </thead>
           <tbody>${linhasSerie}</tbody>
@@ -4237,6 +4276,8 @@ function pintaEvolucaoMov() {
       ${matriz || '<p class="text-sm text-slate-400">Nenhum cenário combinado ainda.</p>'}
     </div>`;
 
+  $$('#mov-conteudo [data-del-medmov]').forEach(b =>
+    b.addEventListener('click', () => apagaMedicaoMov(b.dataset.delMedmov)));
   const btnFora = $('#mov-fora-tudo');
   if (btnFora) btnFora.addEventListener('click', () => {
     mov.verTudoFora = !mov.verTudoFora;
@@ -4252,7 +4293,7 @@ async function carregaMovimentos(customer) {
   box.innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando movimentos…</div>';
   let j;
   try {
-    j = await api(`/api/monitmov/${encodeURIComponent(customer)}?ambiente=${mov.ambiente}`);
+    j = await api(`/api/monitmov/${encodeURIComponent(customer)}?ambiente=${mov.ambiente}${movPeriodoQS()}`);
   } catch (e) {
     box.innerHTML = blocoErro('Não foi possível carregar os movimentos', e, () => carregaMovimentos(customer));
     return;
@@ -4263,7 +4304,7 @@ async function carregaMovimentos(customer) {
   if (mov.visao === 'evolucao') { carregaEvolucaoMov(); return; }
   if (j.vazio) {
     box.innerHTML = blocoVazioCad(
-      `Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}.`,
+      `Nenhuma medição de movimentos na ${AMB[mov.ambiente].label}${movPeriodoRot()}.`,
       `<p class="text-xs text-slate-400 mt-2">O caminho é: <b>🗄 Script SQL</b> gera a quebra por
         dimensão, você roda no banco, exporta em CSV e sobe em <b>⬆ Importar movimentos</b>.
         Depois <b>🎯 Cenários</b> registra o que era esperado — aí a tela passa a mostrar
@@ -4445,6 +4486,31 @@ function desenhaMovimentos(j) {
 }
 
 $('#mov-reload').addEventListener('click', () => { mov.customer = null; initMovimentos(mov.ambiente); });
+$('#mov-de').addEventListener('change', aplicaPeriodoMov);
+$('#mov-ate').addEventListener('change', aplicaPeriodoMov);
+$('#mov-periodo-limpar').addEventListener('click', () => {
+  $('#mov-de').value = $('#mov-ate').value = '';
+  aplicaPeriodoMov();
+});
+
+async function apagaMedicaoMov(data) {
+  const m = (mov.evo?.serie || []).find(x => String(x.data_medicao) === data);
+  const rot = `${fmtData(data)} · ${AMB[mov.ambiente].label}`;
+  if (!confirm(`Apagar a medição de MOVIMENTOS de ${rot}?\n\n`
+             + (m ? `${fmtNum(m.movimentos)} movimento(s), ${fmtNum(m.combinacoes)} combinação(ões), `
+                  + `cobertura ${m.cobertos}/${m.cenarios}.` : '')
+             + '\n\nNão há desfazer — a medição some do histórico para todos.')) return;
+  try {
+    const j = await api(`/api/monitmov/${encodeURIComponent(mov.customer)}/medicao`
+                        + `?ambiente=${mov.ambiente}&data=${encodeURIComponent(data)}`,
+                        { method: 'DELETE' });
+    mov.dados = null; mov.evo = null; mov.evoChave = null;
+    carregaMovimentos(mov.customer);
+    alert(`Medição de ${rot} apagada (${j.linhas} combinação(ões)).`);
+  } catch (e) {
+    alert('Não foi possível apagar: ' + e.message);
+  }
+}
 
 $('#mov-sql').addEventListener('click', () => abreModalSQL('movimentos'));
 
