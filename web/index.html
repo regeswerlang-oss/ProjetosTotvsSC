@@ -8030,8 +8030,8 @@ function renderModulosAcessos() {
 function pintaAcessos() {
   const d = acs.dados;
   const perfil = perfilAcessos();
-  // 'consumo' não é liberável para o cliente (margem/valoração). A lista de
-  // abas muda com o perfil para não oferecer o que o backend vai recusar.
+  // 23/10/2026: todas as abas são liberáveis, inclusive para o perfil
+  // cliente. As que eram internas vêm com `sensivel` e ganham ⚠ no rótulo.
   const abasVis = d.abas.filter(a => perfil !== 'cliente' || a.cliente);
   const busca = semAcento(acs.busca);
   const clis = d.clientes.filter(c =>
@@ -8120,14 +8120,19 @@ function pintaAcessos() {
           </div>
         </div>
         <div>
-          <label class="block text-xs text-slate-500 mb-1">Abas liberadas <span class="text-slate-400">(valem para cada par usuário × cliente acima)</span></label>
+          <div class="flex items-center justify-between mb-1">
+            <label class="block text-xs text-slate-500">Abas liberadas <span class="text-slate-400">(valem para cada par usuário × cliente acima)</span></label>
+            <span class="text-xs whitespace-nowrap"><button type="button" data-abas-todas="1" class="text-totvs-blue hover:underline">marcar todas</button>
+              · <button type="button" data-abas-todas="0" class="text-totvs-blue hover:underline">limpar</button></span>
+          </div>
           <div class="border border-slate-200 rounded-md p-1 grid grid-cols-2">
             ${abasVis.map(a => `
-              <label class="cx-linha">
+              <label class="cx-linha" ${a.sensivel ? 'title="Aba interna liberável: confira antes de dar a um usuário do cliente (margem, dados de funcionário ou configuração)."' : ''}>
                 <input type="checkbox" data-aba="${a.id}" ${acs.abas.has(a.id) ? 'checked' : ''} class="rounded">
-                <span>${escapeHtml(a.label)}</span>
+                <span>${escapeHtml(a.label)}${a.sensivel ? ' <span class="text-amber-600">⚠</span>' : ''}</span>
               </label>`).join('')}
           </div>
+          ${abasVis.some(a => a.sensivel) ? '<p class="text-[11px] text-amber-700 mt-1">⚠ aba interna: Consumo mostra margem/valoração, Integrações mostra matrícula e nome de funcionário, Estrutura/Compara/Auditoria são de configuração.</p>' : ''}
           <p class="text-[11px] text-slate-400 mt-1">Sem nenhuma marcada, o usuário do cliente fica liberado no cliente e sem aba — de propósito, não por engano.</p>
         </div>
         <div class="border-t border-slate-100 pt-2">
@@ -8181,6 +8186,13 @@ function pintaAcessos() {
   renderModulosAcessos();
   acs.el.querySelectorAll('[data-aba]').forEach(c => c.addEventListener('change', () => {
     c.checked ? acs.abas.add(c.dataset.aba) : acs.abas.delete(c.dataset.aba);
+  }));
+  acs.el.querySelectorAll('[data-abas-todas]').forEach(b => b.addEventListener('click', () => {
+    const todas = b.dataset.abasTodas === '1';
+    acs.el.querySelectorAll('[data-aba]').forEach(c => {
+      c.checked = todas;
+      todas ? acs.abas.add(c.dataset.aba) : acs.abas.delete(c.dataset.aba);
+    });
   }));
   acs.el.querySelectorAll('[data-edita]').forEach(b => b.addEventListener('click', () => {
     const [email, cust] = b.dataset.edita.split('|');

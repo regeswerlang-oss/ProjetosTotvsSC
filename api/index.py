@@ -291,22 +291,26 @@ ABAS = [
     {"id": "crono",     "label": "Cronograma",           "cliente": True},
     {"id": "modulos",   "label": "Por Módulo",           "cliente": True},
     {"id": "etapas",    "label": "Por Etapa",            "cliente": True},
-    {"id": "consumo",   "label": "Consumo",              "cliente": False},
+    {"id": "consumo",   "label": "Consumo",              "cliente": True, "sensivel": True},
     {"id": "gaps",      "label": "GAPs",                 "cliente": True},
     {"id": "tarefas",   "label": "Tarefas",              "cliente": True},
     {"id": "cadastros", "label": "Cadastros e Movimentos", "cliente": True},
     {"id": "cobertura", "label": "Cobertura",            "cliente": True},
     {"id": "empresas",  "label": "Empresas e Compartilhamento", "cliente": True},
-    {"id": "estrutura", "label": "Estrutura de Empresas", "cliente": False},
-    {"id": "compara",   "label": "Compara (dicionário)",  "cliente": False},
-    {"id": "auditoria", "label": "Auditoria de Tabelas",  "cliente": False},
+    {"id": "estrutura", "label": "Estrutura de Empresas", "cliente": True, "sensivel": True},
+    {"id": "compara",   "label": "Compara (dicionário)",  "cliente": True, "sensivel": True},
+    {"id": "auditoria", "label": "Auditoria de Tabelas",  "cliente": True, "sensivel": True},
     # Integrações (13/10/2026): filas Quírons/Ahgora/eSocial SST da base. Fica
     # interna por enquanto — o detalhe traz matrícula e nome de funcionário.
-    {"id": "integracoes", "label": "Integrações",        "cliente": False},
+    {"id": "integracoes", "label": "Integrações",        "cliente": True, "sensivel": True},
     {"id": "prototipo", "label": "Protótipo",            "cliente": True},
     {"id": "transicao", "label": "Transição",            "cliente": True},
 ]
 ABAS_IDS = [a["id"] for a in ABAS]
+# 23/10/2026: TODAS as abas passaram a ser liberáveis para o perfil cliente
+# (pedido do Reges). As que eram internas ficam marcadas "sensivel" — a tela de
+# Acessos mostra ⚠ nelas: Consumo traz margem/valoração; Integrações, matrícula
+# e nome de funcionário; Estrutura/Compara/Auditoria são de configuração.
 ABAS_CLIENTE_OK = {a["id"] for a in ABAS if a["cliente"]}
 # O que a área de clientes libera quando a liberação existe mas ninguém marcou
 # aba nenhuma (coluna abas NULL). Protótipo de 03/09/2026: só Cadastros e
