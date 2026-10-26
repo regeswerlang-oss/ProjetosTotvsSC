@@ -3675,7 +3675,70 @@ def api_gmail_cred_set():
                  gmail_email=excluded.gmail_email, senha_cif=excluded.senha_cif,
                  validado_em=now(), updated_at=now()""",
             (current_user(), gmail, _fernet().encrypt(senha.encode()).decode()))
+    _espelha_edge(current_user(), gmail, senha)
     return _json({"ok": True, "gmail_email": gmail})
+
+
+# ── Ponte p/ a edge gmail-digitro (leitura da label Digitro) — 26/10/2026 ───
+# A edge (Supabase) não enxerga o SESSION_SECRET (Sensitive na Vercel). Então,
+# só para as contas de cockpit.gmail_digitro_contas, a MESMA senha de app salva
+# em Minha conta é espelhada em gmail_credenciais.senha_cif_edge, cifrada com
+# sha256(totvs.app_secrets.gmail_edge_key). Um trigger no banco zera o espelho
+# se outro app trocar a senha; /api/cron/gmail-edge-sync refaz (pg_cron).
+def _fernet_edge():
+    from cryptography.fernet import Fernet
+    row = q("select value from totvs.app_secrets where name='gmail_edge_key'", one=True)
+    if not row or not (row.get("value") or "").strip():
+        return None
+    return Fernet(base64.urlsafe_b64encode(hashlib.sha256(row["value"].strip().encode()).digest()))
+
+
+def _digitro_autorizado(gmail):
+    return bool(q("select 1 from cockpit.gmail_digitro_contas where email=%s and ativo",
+                  ((gmail or "").strip().lower(),), one=True))
+
+
+def _espelha_edge(usuario, gmail, senha):
+    """Best effort: nunca derruba o salvar de Minha conta."""
+    try:
+        if not _digitro_autorizado(gmail):
+            return False
+        f = _fernet_edge()
+        if not f:
+            return False
+        execute("update cockpit.gmail_credenciais set senha_cif_edge=%s where usuario=%s",
+                (f.encrypt(senha.encode()).decode(), usuario))
+        return True
+    except Exception as e:
+        print(f"[gmail-edge] espelho não gravado: {type(e).__name__}")
+        return False
+
+
+@app.route("/api/cron/gmail-edge-sync", methods=["GET", "POST"])
+def api_cron_gmail_edge_sync():
+    """Backfill/refresh do espelho da edge gmail-digitro. Exige o Bearer CRON_SECRET.
+    Só contas da allowlist; idempotente; nunca devolve senha."""
+    if not _cron_autorizado():
+        return _err(401, "CRON_SECRET inválido ou ausente.")
+    f = _fernet_edge()
+    if not f:
+        return _err(500, "gmail_edge_key ausente em totvs.app_secrets.")
+    rows = q("""select gc.usuario, gc.gmail_email, gc.senha_cif
+                  from cockpit.gmail_credenciais gc
+                  join cockpit.gmail_digitro_contas dc
+                    on dc.email = lower(gc.gmail_email) and dc.ativo
+                 where gc.senha_cif_edge is null""")
+    feitas, falhas = [], []
+    for r in rows:
+        try:
+            senha = _fernet().decrypt(r["senha_cif"].encode()).decode()
+            execute("""update cockpit.gmail_credenciais set senha_cif_edge=%s
+                        where usuario=%s and senha_cif=%s""",
+                    (f.encrypt(senha.encode()).decode(), r["usuario"], r["senha_cif"]))
+            feitas.append(r["gmail_email"])
+        except Exception as e:
+            falhas.append({"gmail_email": r["gmail_email"], "erro": type(e).__name__})
+    return _json({"ok": True, "espelhadas": feitas, "falhas": falhas})
 
 
 @app.delete("/api/gmail/cred")
