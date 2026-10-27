@@ -63,6 +63,24 @@
 
   #frame-transicao { width: 100%; border: 0; display: block; min-height: 70vh; }
 
+  /* Aba Plano de Trabalho */
+  .pl-sub { padding: 0.375rem 0.75rem; font-size: 0.8125rem; color: #545454;
+            border-bottom: 2px solid transparent; margin-bottom: -1px; }
+  .pl-sub:hover { color: var(--totvs-petroleo); }
+  .pl-sub.is-active { border-bottom-color: var(--totvs-blue); color: var(--totvs-petroleo); font-weight: 700; }
+  .pl-selo { display: inline-block; padding: 0 6px; border-radius: 999px; font-size: 10.5px;
+             line-height: 17px; white-space: nowrap; vertical-align: middle; }
+  .pl-lado { display: inline-block; padding: 0 5px; border-radius: 4px; font-size: 10px;
+             line-height: 16px; font-weight: 600; vertical-align: middle; }
+  .pl-tab th { text-align: left; font-size: 11px; font-weight: 500; color: #64748b;
+               padding: 6px 8px; border-bottom: 1px solid #e2e8f0; background: #f8fafc; }
+  .pl-tab td { padding: 6px 8px; border-bottom: 1px solid #f1f5f9; vertical-align: top; }
+  .pl-tab tr.pl-etapa td { background: #f1f5f9; font-size: 11px; font-weight: 700; color: #334155;
+                           text-transform: uppercase; letter-spacing: .04em; padding: 4px 8px; }
+  .pl-atrasado { box-shadow: inset 3px 0 0 #f43f5e; }
+  .pl-st { max-width: 11rem; }
+  .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
   /* Sub-abas de Cadastros (Cadastros/Movimentos × Produção/Teste) */
   .sub-tab { padding: 0.375rem 0.75rem; font-size: 0.8125rem; text-align: left;
              line-height: 1.15; color: #545454; border-bottom: 2px solid transparent;
@@ -492,6 +510,17 @@
           <button id="pro-importar" class="pro-cp hidden rail-btn rail-btn-cta">⬆ Importar roteiro</button>
         </div>
 
+        <!-- Plano de Trabalho: só quem edita tudo (CP TOTVS e CP do cliente) vê.
+             NÃO é data-interno: o CP do cliente também importa e cria. -->
+        <div data-rail="pl" class="rail-grupo hidden">
+          <label id="pl-upload-wrap" data-pl-tudo class="hidden rail-btn rail-btn-cta">
+            ⬆ Importar planilha<span class="rail-sub">.xlsx do CP</span>
+            <input id="pl-file" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" class="hidden">
+          </label>
+          <button id="pl-nova-ativ" data-pl-tudo class="hidden rail-btn">＋ Atividade</button>
+          <button id="pl-novo-cad"  data-pl-tudo class="hidden rail-btn">＋ Cadastro</button>
+        </div>
+
         <div data-rail="tr" class="rail-grupo hidden">
           <label id="tr-upload-wrap" data-interno class="hidden rail-btn rail-btn-cta">
             ⬆ Publicar painel<span class="rail-sub">.html</span>
@@ -511,6 +540,7 @@
           <div class="flex gap-0.5 -mb-px whitespace-nowrap">
             <button data-tab="resumo"   class="tab-btn px-3 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Resumo</button>
             <button data-tab="crono"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
+            <button data-tab="plano"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Plano de Trabalho</button>
             <button data-tab="modulos"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
             <button data-tab="etapas"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
             <button data-tab="consumo"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
@@ -548,6 +578,46 @@
         <div id="tab-crono" class="p-5 hidden">
           <div id="d-crono-loading" class="text-slate-400 text-sm py-4">Carregando cronograma…</div>
           <div id="d-crono"></div>
+        </div>
+
+        <!-- Aba Plano de Trabalho — substitui a planilha de atividades do CP.
+             Grade (edição) · Painel (CP TOTVS) · Pendências (CP do cliente). -->
+        <div id="tab-plano" class="p-5 hidden">
+          <div class="flex items-end gap-1 border-b border-slate-200 mb-3 flex-wrap">
+            <button data-plsub="grade" class="pl-sub">Grade</button>
+            <button data-plsub="painel" class="pl-sub">Painel</button>
+            <button data-plsub="pendencias" class="pl-sub">Pendências</button>
+            <span class="ml-auto text-xs text-slate-500 pb-1.5">Cliente <b id="pl-cliente-nome" class="text-slate-700"></b></span>
+          </div>
+          <div id="pl-marcos" class="flex flex-wrap gap-2 mb-3"></div>
+          <div id="pl-filtros" class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <input id="pl-busca" type="search" placeholder="Buscar atividade, cadastro, MIT, observação…"
+                   class="flex-1 min-w-[220px] px-3 py-1.5 border border-slate-300 rounded-md bg-white">
+            <select id="pl-f-modulo" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"></select>
+            <select id="pl-f-etapa" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"></select>
+            <select id="pl-f-status" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white">
+              <option value="">Todo status</option>
+              <option value="_aberto">Em aberto</option>
+              <option value="_atrasado">Atrasados</option>
+              <option value="_revisar">⚠ A revisar</option>
+              <optgroup label="Atividade">
+                <option value="agendado">Agendado</option><option value="em_andamento">Em andamento</option>
+                <option value="finalizado">Finalizado</option><option value="finalizado_restricoes">Finalizado c/ restrições</option>
+                <option value="cancelado">Cancelado</option></optgroup>
+              <optgroup label="Cadastro">
+                <option value="nao_iniciado">Não iniciado</option><option value="em_cadastro">Em cadastro</option>
+                <option value="entregue">Entregue</option><option value="validado">Validado</option>
+                <option value="nao_aplicavel">N/A</option></optgroup>
+            </select>
+            <select id="pl-f-lado" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"></select>
+            <select id="pl-f-resp" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"></select>
+            <select id="pl-f-tipo" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white">
+              <option value="">Atividades e cadastros</option>
+              <option value="atividade">Só atividades</option><option value="cadastro">Só cadastros</option>
+            </select>
+            <button id="pl-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="pl-conteudo"></div>
         </div>
 
         <!-- Aba Por Módulo (novo) -->
@@ -2285,7 +2355,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'radar', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2307,7 +2377,8 @@ const AMB = {
 // lá quem decide é o setSub() — que roda depois deste mapa e sobrepõe.
 const RAIL_ABA = { crono: 'arvore', modulos: 'arvore', etapas: 'arvore',
                    cobertura: 'cob', empresas: 'emp', estrutura: 'est',
-                   compara: 'cmp', auditoria: 'aud', integracoes: 'int', prototipo: 'pro', transicao: 'tr' };
+                   compara: 'cmp', auditoria: 'aud', integracoes: 'int', prototipo: 'pro', transicao: 'tr',
+                   plano: 'pl' };
 
 function railGrupo(chave) {
   $$('#tab-acoes [data-rail]').forEach(g =>
@@ -2341,6 +2412,7 @@ function setTab(nome) {
   if (nome === 'consumo') renderConsumo();
   if (nome === 'gaps') initGaps();
   if (nome === 'tarefas') initTarefas();
+  if (nome === 'plano') initPlano();
   if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
   if (nome === 'cobertura') initCobertura();
   if (nome === 'empresas') initEmpresas(emp.ambiente);
@@ -2856,6 +2928,869 @@ $('#tab-gaps').addEventListener('click', e => {
 //   3. o filtro de tags é OU por padrão, com botão para E. Numa tela de garimpo
 //      o normal é juntar assuntos ("INTEGRACAO ou PRIORIDADE"); cruzar é a
 //      exceção. Na GAPs continua sendo só E.
+// ============================================================================
+//  PLANO DE TRABALHO (aba "plano") — substitui a planilha de atividades do CP
+//  Spec: docs/specs/2026-10-27-aba-plano-trabalho.md
+//  Três subabas: Grade (edição) · Painel (CP TOTVS) · Pendências (CP do cliente).
+//  Quem barra é o backend (plano_permissao); aqui só se esconde o que não pode.
+// ============================================================================
+const pl = {
+  chave: null,            // customer|projeto carregado
+  d: null,                // payload de /api/plano
+  sub: null,              // grade | painel | pendencias
+  abertos: new Set(),     // módulos abertos na Grade (sobrevivem ao recarregar)
+  f: { busca: '', modulo: '', etapa: '', status: '', lado: '', resp: '', tipo: '' },
+};
+
+const PL_STATUS = {
+  agendado:              { rot: 'Agendado',               cls: 'bg-slate-100 text-slate-700 border-slate-200',  cor: '#64748b' },
+  em_andamento:          { rot: 'Em andamento',           cls: 'bg-sky-50 text-sky-800 border-sky-200',         cor: '#0284c7' },
+  finalizado:            { rot: 'Finalizado',             cls: 'bg-emerald-50 text-emerald-800 border-emerald-200', cor: '#059669' },
+  finalizado_restricoes: { rot: 'Finalizado c/ restrições', cls: 'bg-amber-50 text-amber-900 border-amber-200', cor: '#d97706' },
+  cancelado:             { rot: 'Cancelado',              cls: 'bg-slate-50 text-slate-400 border-slate-200 line-through', cor: '#94a3b8' },
+  nao_iniciado:          { rot: 'Não iniciado',           cls: 'bg-slate-100 text-slate-700 border-slate-200',  cor: '#64748b' },
+  em_cadastro:           { rot: 'Em cadastro',            cls: 'bg-sky-50 text-sky-800 border-sky-200',         cor: '#0284c7' },
+  entregue:              { rot: 'Entregue',               cls: 'bg-cyan-50 text-cyan-800 border-cyan-200',      cor: '#0891b2' },
+  validado:              { rot: 'Validado',               cls: 'bg-emerald-50 text-emerald-800 border-emerald-200', cor: '#059669' },
+  nao_aplicavel:         { rot: 'N/A',                    cls: 'bg-slate-50 text-slate-400 border-slate-200',  cor: '#94a3b8' },
+};
+const PL_FEITO = new Set(['finalizado', 'finalizado_restricoes', 'cancelado',
+                          'entregue', 'validado', 'nao_aplicavel']);
+const PL_CONCLUIDO = new Set(['finalizado', 'finalizado_restricoes', 'validado', 'entregue']);
+const PL_ETAPAS = ['Parametrização', 'Treinamento', 'Refinamento', 'Protótipo Integrado',
+                   'Entrada em Produção'];
+const PL_MARCOS = {
+  base_liberada: 'Base liberada', treinamentos: 'Treinamentos',
+  prototipo: 'Protótipo', go_live: 'Go-live',
+};
+
+const plHoje = () => pl.d?.hoje || new Date().toISOString().slice(0, 10);
+const plDias = (iso) => Math.round((new Date(iso + 'T12:00:00') - new Date(plHoje() + 'T12:00:00')) / 864e5);
+const plAddDias = (iso, n) => {
+  const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const plDescr = (i) => i.tipo === 'atividade' ? i.atividade
+  : [i.rotina, i.entidade].filter(Boolean).join(' — ');
+/** Nome pelo LOGIN quando existe: a planilha escreve "Maurício" numa aba e
+ *  "Maurício Vitto" na outra — sem isso a carga mostrava duas pessoas. */
+function plQuem(i, campo = 'responsavel') {
+  const em = (i[campo + '_email'] || '').toLowerCase();
+  const c = em && (pl.d?.candidatos || []).find(x => x.email === em);
+  return (c && c.nome) || i[campo + '_nome'] || '';
+}
+const plNomeCliente = () =>
+  ((state.selected?.projeto?.nome_cliente_projeto || '').trim().split(/\s+/)[0] || 'Cliente');
+
+function plChip(st) {
+  const s = PL_STATUS[st] || { rot: st, cls: 'bg-slate-100 text-slate-700 border-slate-200' };
+  return `<span class="inline-block px-2 py-0.5 rounded-full border text-[11px] whitespace-nowrap ${s.cls}">${escapeHtml(s.rot)}</span>`;
+}
+
+function plSelos(i) {
+  const s = [];
+  if (i.atrasado) s.push('<span class="pl-selo bg-rose-100 text-rose-700" title="Prazo vencido e não concluído">atrasado</span>');
+  if (i.inconsistencia) s.push(`<span class="pl-selo bg-amber-100 text-amber-900" title="${escapeAttr(i.inconsistencia)}">⚠ revisar</span>`);
+  if (i.qtd_reagendamentos > 0) s.push(`<span class="pl-selo bg-violet-100 text-violet-800" title="Reagendado ${i.qtd_reagendamentos}×">↻ ${i.qtd_reagendamentos}</span>`);
+  if (i.status === 'finalizado_restricoes' && i.motivo_restricao)
+    s.push(`<span class="pl-selo bg-amber-50 text-amber-800" title="${escapeAttr(i.motivo_restricao)}">restrição</span>`);
+  return s.join(' ');
+}
+
+function plPeriodo(i) {
+  if (!i.data_de && !i.data_ate) return '—';
+  if (i.data_de === i.data_ate || !i.data_ate) return fmtData(i.data_de);
+  if (!i.data_de) return 'até ' + fmtData(i.data_ate);
+  return `${fmtData(i.data_de).slice(0, 5)} → ${fmtData(i.data_ate)}`;
+}
+
+function plResp(i) {
+  const lado = i.responsavel_lado === 'cliente'
+    ? `<span class="pl-lado bg-totvs-purple/15 text-totvs-purple" title="Responsabilidade do cliente">${escapeHtml(plNomeCliente())}</span>`
+    : i.responsavel_lado === 'totvs' ? '<span class="pl-lado bg-totvs-blue/20 text-totvs-petroleo">TOTVS</span>' : '';
+  const nome = i.responsavel_nome || '';
+  const semLogin = nome && !i.responsavel_email
+    ? ' <span class="text-amber-600" title="Nome sem login no Cockpit — escolha o login no detalhe">•</span>' : '';
+  return `${lado} <span class="text-slate-700">${escapeHtml(nome) || '<span class="text-slate-300">—</span>'}</span>${semLogin}`;
+}
+
+function plStatusCtl(i) {
+  if (!i.editavel) return plChip(i.status);
+  const ops = (pl.d.status[i.tipo] || []).map(s =>
+    `<option value="${s}" ${s === i.status ? 'selected' : ''}>${escapeHtml(PL_STATUS[s]?.rot || s)}</option>`).join('');
+  return `<select data-pl-status="${i.id}" class="pl-st text-xs border rounded px-1.5 py-1 ${PL_STATUS[i.status]?.cls || ''}">${ops}</select>`;
+}
+
+// ── carga ────────────────────────────────────────────────────────────────────
+async function initPlano(forcar = false) {
+  const cli = state.selected?.cli, proj = state.selected?.cod;
+  $('#pl-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  const chave = `${cli}|${proj}`;
+  if (!forcar && pl.chave === chave && pl.d) { plRender(); return; }
+  if (!cli || !proj) { $('#pl-conteudo').innerHTML = blocoVazioCad('Abra um projeto para ver o plano.'); return; }
+  if (pl.chave !== chave) { pl.abertos.clear(); pl.sub = null; }
+  pl.chave = chave;
+  $('#pl-conteudo').innerHTML = '<div class="text-slate-400 text-sm py-6 text-center">Carregando plano…</div>';
+  try {
+    pl.d = await api(`/api/plano/${encodeURIComponent(cli)}/${encodeURIComponent(proj)}`);
+  } catch (e) {
+    pl.chave = null; pl.d = null;
+    $('#pl-conteudo').innerHTML = blocoErro('Não foi possível carregar o plano', e, () => initPlano(true));
+    return;
+  }
+  // CP do cliente e consultor abrem nas pendências; o CP TOTVS na grade.
+  if (!pl.sub) pl.sub = (pl.d.papel === 'cp_cliente' || pl.d.permissao === 'proprio'
+                         || acesso.modo === 'cliente') ? 'pendencias' : 'grade';
+  plPreencheFiltros();
+  plRender();
+}
+
+function plPreencheFiltros() {
+  const it = pl.d.itens;
+  const opts = (arr, todos) => `<option value="">${todos}</option>` +
+    arr.map(v => `<option value="${escapeAttr(v)}">${escapeHtml(v)}</option>`).join('');
+  const mods = [...new Set(it.map(i => i.modulo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const etapas = [...new Set(it.map(i => i.etapa).filter(Boolean))]
+    .sort((a, b) => plOrdemEtapa(a) - plOrdemEtapa(b));
+  const resps = [...new Set(it.flatMap(i => [plQuem(i), plQuem(i, 'consultor')]).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  $('#pl-f-modulo').innerHTML = opts(mods, 'Todos os módulos');
+  $('#pl-f-etapa').innerHTML = opts(etapas, 'Todas as etapas');
+  $('#pl-f-resp').innerHTML = opts(resps, 'Todo responsável');
+  $('#pl-f-lado').innerHTML = `<option value="">TOTVS e ${escapeHtml(plNomeCliente())}</option>
+    <option value="totvs">Só TOTVS</option><option value="cliente">Só ${escapeHtml(plNomeCliente())}</option>`;
+  for (const [k, id] of [['modulo', 'pl-f-modulo'], ['etapa', 'pl-f-etapa'], ['resp', 'pl-f-resp'], ['lado', 'pl-f-lado']]) {
+    if (![...$('#' + id).options].some(o => o.value === pl.f[k])) pl.f[k] = '';
+    $('#' + id).value = pl.f[k];
+  }
+}
+
+function plOrdemEtapa(e) {
+  const i = PL_ETAPAS.findIndex(x => semAcentoPl(x) === semAcentoPl(e));
+  return i < 0 ? 99 : i;
+}
+const semAcentoPl = (s) => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+function plFiltra(itens) {
+  const f = pl.f, q = semAcentoPl(f.busca);
+  return itens.filter(i => {
+    if (f.modulo && i.modulo !== f.modulo) return false;
+    if (f.etapa && i.etapa !== f.etapa) return false;
+    if (f.tipo && i.tipo !== f.tipo) return false;
+    if (f.lado && i.responsavel_lado !== f.lado) return false;
+    if (f.resp && plQuem(i) !== f.resp && plQuem(i, 'consultor') !== f.resp) return false;
+    if (f.status === '_atrasado' && !i.atrasado) return false;
+    if (f.status === '_aberto' && PL_FEITO.has(i.status)) return false;
+    if (f.status === '_revisar' && !i.inconsistencia) return false;
+    if (f.status && !f.status.startsWith('_') && i.status !== f.status) return false;
+    if (q) {
+      const blob = semAcentoPl([plDescr(i), i.modulo, i.etapa, i.produto, i.responsavel_nome,
+                                i.consultor_nome, i.observacoes].join(' '));
+      if (!blob.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+// ── render geral ─────────────────────────────────────────────────────────────
+function plRender() {
+  if (!pl.d) return;
+  const d = pl.d;
+  $$('.pl-sub').forEach(b => b.classList.toggle('is-active', b.dataset.plsub === pl.sub));
+  const rotPend = d.permissao === 'proprio' ? 'Minhas pendências'
+    : (d.papel === 'cp_cliente' || acesso.modo === 'cliente') ? 'Minhas pendências'
+    : `Pendências ${plNomeCliente()}`;
+  $('[data-plsub="pendencias"]').firstChild.textContent = rotPend;
+  $('#pl-filtros').classList.toggle('hidden', pl.sub !== 'grade');
+  // rail: importar/criar só para quem edita tudo
+  $$('#tab-acoes [data-pl-tudo]').forEach(b => b.classList.toggle('hidden', d.permissao !== 'tudo'));
+  plRenderMarcos();
+  if (!d.itens.length) {
+    $('#pl-conteudo').innerHTML = blocoVazioCad(
+      'Este projeto ainda não tem plano de trabalho.',
+      d.permissao === 'tudo'
+        ? `<p class="text-sm text-slate-500 mt-2">Use <b>⬆ Importar planilha</b> no menu ao lado para trazer a planilha do CP (.xlsx),
+           ou crie as atividades com <b>＋ Atividade</b>.</p>`
+        : '<p class="text-sm text-slate-400 mt-2">O CP do projeto ainda não montou o plano.</p>');
+    return;
+  }
+  if (pl.sub === 'painel') plRenderPainel();
+  else if (pl.sub === 'pendencias') plRenderPendencias();
+  else plRenderGrade();
+}
+
+function plRenderMarcos() {
+  const m = pl.d.marcos || {};
+  const pode = pl.d.permissao === 'tudo';
+  const chips = Object.entries(PL_MARCOS).filter(([k]) => m[k]).map(([k, rot]) => {
+    const dias = plDias(m[k]);
+    const quando = dias === 0 ? 'hoje' : dias > 0 ? `em ${dias} dia${dias > 1 ? 's' : ''}` : `há ${-dias} dia${dias < -1 ? 's' : ''}`;
+    const cor = k === 'go_live' ? 'border-totvs-purple/40 bg-totvs-purple/5' : 'border-slate-200 bg-white';
+    return `<div class="px-3 py-1.5 rounded-md border ${cor}" data-marco="${k}">
+      <p class="text-[10px] uppercase tracking-wide text-slate-500">${rot}</p>
+      <p class="text-sm"><b class="font-totvs">${fmtData(m[k])}</b> <span class="text-xs text-slate-500">${quando}</span></p></div>`;
+  }).join('');
+  $('#pl-marcos').innerHTML = (chips || '<span class="text-xs text-slate-400">Nenhum marco definido.</span>') +
+    (pode ? '<button id="pl-marcos-edit" class="text-xs text-totvs-blue hover:underline self-center">✎ marcos</button>' : '');
+  $('#pl-marcos-edit')?.addEventListener('click', plEditaMarcos);
+}
+
+// ── GRADE ────────────────────────────────────────────────────────────────────
+function plRenderGrade() {
+  const itens = plFiltra(pl.d.itens);
+  const porMod = new Map();
+  for (const i of itens) {
+    if (!porMod.has(i.modulo)) porMod.set(i.modulo, []);
+    porMod.get(i.modulo).push(i);
+  }
+  const filtrando = Object.values(pl.f).some(Boolean);
+  if (!porMod.size) {
+    $('#pl-conteudo').innerHTML = blocoVazioCad('Nada encontrado com estes filtros.');
+    return;
+  }
+  const mods = [...porMod.keys()].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  $('#pl-conteudo').innerHTML = `
+    <p class="text-xs text-slate-500 mb-2">${itens.length} de ${pl.d.itens.length} itens
+      ${filtrando ? '· <button id="pl-limpa" class="text-totvs-blue hover:underline">limpar filtros</button>' : ''}
+      · <button data-pl-tudo-abre="1" class="text-totvs-blue hover:underline">abrir todos</button>
+      · <button data-pl-tudo-abre="0" class="text-totvs-blue hover:underline">recolher</button></p>` +
+    mods.map(m => {
+      const lst = porMod.get(m);
+      const ativ = lst.filter(i => i.tipo === 'atividade'), cad = lst.filter(i => i.tipo === 'cadastro');
+      const fin = ativ.filter(i => PL_CONCLUIDO.has(i.status)).length;
+      const cadOk = cad.filter(i => PL_CONCLUIDO.has(i.status) || i.status === 'nao_aplicavel').length;
+      const atr = lst.filter(i => i.atrasado).length;
+      const rev = lst.filter(i => i.inconsistencia).length;
+      const horas = ativ.reduce((s, i) => s + Number(i.horas || 0), 0);
+      const aberto = filtrando || pl.abertos.has(m);
+      return `<details class="pl-mod bg-white border border-slate-200 rounded-lg mb-2" data-mod="${escapeAttr(m)}" ${aberto ? 'open' : ''}>
+        <summary class="px-4 py-2.5 flex items-center gap-3 flex-wrap">
+          <span class="chev text-slate-400 text-xs">▶</span>
+          <span class="font-totvs text-totvs-petroleo">${escapeHtml(m)}</span>
+          ${ativ.length ? `<span class="text-xs text-slate-500">${fin}/${ativ.length} atividades finalizadas · ${fmtH(horas)} h</span>` : ''}
+          ${cad.length ? `<span class="text-xs text-slate-500">${cadOk}/${cad.length} cadastros</span>` : ''}
+          ${atr ? `<span class="pl-selo bg-rose-100 text-rose-700">${atr} atrasado${atr > 1 ? 's' : ''}</span>` : ''}
+          ${rev ? `<span class="pl-selo bg-amber-100 text-amber-900">${rev} a revisar</span>` : ''}
+          <span class="ml-auto w-28 bar-track"><span class="bar-fill fill-exec block" style="width:${ativ.length ? Math.round(fin / ativ.length * 100) : 0}%"></span></span>
+        </summary>
+        <div class="pl-mod-corpo border-t border-slate-100">${aberto ? plCorpoModulo(lst) : ''}</div>
+      </details>`;
+    }).join('');
+  // corpo só existe quando aberto — 186 linhas abertas de uma vez travam a aba
+  $$('#pl-conteudo details.pl-mod').forEach(dt => dt.addEventListener('toggle', () => {
+    const m = dt.dataset.mod;
+    if (dt.open) {
+      pl.abertos.add(m);
+      const c = dt.querySelector('.pl-mod-corpo');
+      if (!c.innerHTML) { c.innerHTML = plCorpoModulo(plFiltra(pl.d.itens).filter(i => i.modulo === m)); plLigaLinhas(c); }
+    } else pl.abertos.delete(m);
+  }));
+  $('#pl-limpa')?.addEventListener('click', () => {
+    pl.f = { busca: '', modulo: '', etapa: '', status: '', lado: '', resp: '', tipo: '' };
+    $('#pl-busca').value = ''; $('#pl-f-status').value = ''; $('#pl-f-tipo').value = '';
+    plPreencheFiltros(); plRenderGrade();
+  });
+  $$('#pl-conteudo [data-pl-tudo-abre]').forEach(b => b.addEventListener('click', () => {
+    const abre = b.dataset.plTudoAbre === '1';
+    $$('#pl-conteudo details.pl-mod').forEach(dt => { dt.open = abre; });
+  }));
+  plLigaLinhas($('#pl-conteudo'));
+}
+
+function plCorpoModulo(lst) {
+  const ativ = lst.filter(i => i.tipo === 'atividade');
+  const cad = lst.filter(i => i.tipo === 'cadastro');
+  let h = '';
+  if (ativ.length) {
+    const etapas = [...new Set(ativ.map(i => i.etapa || '(sem etapa)'))]
+      .sort((a, b) => plOrdemEtapa(a) - plOrdemEtapa(b));
+    h += `<table class="w-full text-sm pl-tab"><thead><tr>
+        <th class="w-10">Seq</th><th>Atividade</th><th class="w-36">Período</th>
+        <th class="w-14 text-right">Horas</th><th class="w-48">Responsável</th>
+        <th class="w-44">Status</th></tr></thead><tbody>` +
+      etapas.map(e => `<tr class="pl-etapa"><td colspan="6">${escapeHtml(e)}</td></tr>` +
+        ativ.filter(i => (i.etapa || '(sem etapa)') === e)
+          .sort((a, b) => (a.sequencia ?? a.ordem) - (b.sequencia ?? b.ordem))
+          .map(plLinhaAtividade).join('')).join('') + '</tbody></table>';
+  }
+  if (cad.length) {
+    h += `<p class="px-4 pt-3 pb-1 text-xs font-semibold text-slate-600 uppercase tracking-wide">Cadastros</p>
+      <table class="w-full text-sm pl-tab"><thead><tr>
+        <th class="w-24">Rotina</th><th>Entidade</th><th class="w-36">Base → limite</th>
+        <th class="w-40">Resp. ${escapeHtml(plNomeCliente())}</th><th class="w-40">Consultor</th>
+        <th class="w-44">Status</th></tr></thead><tbody>` +
+      cad.sort((a, b) => a.ordem - b.ordem).map(plLinhaCadastro).join('') + '</tbody></table>';
+  }
+  return h;
+}
+
+function plLinhaAtividade(i) {
+  const obs = i.observacoes ? `<p class="text-xs text-slate-500 mt-0.5 line-clamp-2 whitespace-pre-line">${escapeHtml(i.observacoes)}</p>` : '';
+  return `<tr data-pl-item="${i.id}" class="${i.status === 'cancelado' ? 'opacity-60' : ''} ${i.atrasado ? 'pl-atrasado' : ''}">
+    <td class="font-mono text-xs text-slate-400">${i.sequencia ?? ''}</td>
+    <td><button data-pl-abre="${i.id}" class="text-left hover:text-totvs-blue">${escapeHtml(i.atividade)}</button>
+      ${i.produto ? `<span class="text-[11px] text-slate-500 ml-1">· ${escapeHtml(i.produto)}</span>` : ''}
+      ${i.tipo_agenda ? `<span class="text-[11px] text-slate-400 ml-1">· ${escapeHtml(i.tipo_agenda)}</span>` : ''}
+      <span class="ml-1">${plSelos(i)}</span>${obs}</td>
+    <td class="text-xs text-slate-600 whitespace-nowrap">${plPeriodo(i)}</td>
+    <td class="text-right font-mono tabular-nums text-xs">${i.horas ? fmtH(i.horas) : ''}</td>
+    <td class="text-xs">${plResp(i)}</td>
+    <td>${plStatusCtl(i)}</td></tr>`;
+}
+
+function plLinhaCadastro(i) {
+  const cons = i.consultor_nome ? escapeHtml(i.consultor_nome) : '<span class="text-slate-300">—</span>';
+  return `<tr data-pl-item="${i.id}" class="${i.atrasado ? 'pl-atrasado' : ''}">
+    <td class="font-mono text-xs">${escapeHtml(i.rotina || '')}</td>
+    <td><button data-pl-abre="${i.id}" class="text-left hover:text-totvs-blue">${escapeHtml(i.entidade || '')}</button>
+      <span class="ml-1">${plSelos(i)}</span>
+      ${i.observacoes ? `<p class="text-xs text-slate-500 mt-0.5 line-clamp-2">${escapeHtml(i.observacoes)}</p>` : ''}</td>
+    <td class="text-xs text-slate-600 whitespace-nowrap">${plPeriodo(i)}</td>
+    <td class="text-xs">${escapeHtml(i.responsavel_nome || '') || '<span class="text-amber-600">definir</span>'}</td>
+    <td class="text-xs">${cons}</td>
+    <td>${plStatusCtl(i)}</td></tr>`;
+}
+
+function plLigaLinhas(raiz) {
+  raiz.querySelectorAll('[data-pl-abre]').forEach(b =>
+    b.addEventListener('click', () => plAbreItem(b.dataset.plAbre)));
+  raiz.querySelectorAll('select[data-pl-status]').forEach(s =>
+    s.addEventListener('change', async () => {
+      const id = s.dataset.plStatus;
+      const it = pl.d.itens.find(x => x.id === id);
+      if (s.value === 'finalizado_restricoes' && !it.motivo_restricao) {
+        // o motivo é obrigatório: abre o detalhe já com o status escolhido
+        s.value = it.status;
+        plAbreItem(id, { status: 'finalizado_restricoes' });
+        return;
+      }
+      s.disabled = true;
+      const ok = await plSalva(id, { status: s.value });
+      if (!ok) { s.value = it.status; s.disabled = false; }
+    }));
+}
+
+/** Grava e atualiza o item na memória. Devolve o item novo ou null (erro já mostrado). */
+async function plSalva(id, campos, onErro) {
+  try {
+    const r = await api(`/api/plano/item/${id}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(campos) });
+    const ix = pl.d.itens.findIndex(x => x.id === id);
+    if (ix >= 0 && r.item) pl.d.itens[ix] = { ...pl.d.itens[ix], ...r.item };
+    plRender();
+    return r.item || true;
+  } catch (e) {
+    if (onErro) onErro(e.message); else alert(e.message);
+    return null;
+  }
+}
+
+// ── detalhe (gaveta) ────────────────────────────────────────────────────────
+function plFecharGaveta() { $$('.pl-scrim, .pl-gaveta').forEach(e => e.remove()); }
+
+function plAbreItem(id, pre = {}) {
+  const novo = typeof id === 'object';
+  const i = novo ? { ...id, editavel: true } : pl.d.itens.find(x => x.id === id);
+  if (!i) return;
+  plFecharGaveta();
+  const tudo = pl.d.permissao === 'tudo';
+  const podeCampo = (c) => i.editavel && (tudo || ['status', 'observacoes', 'motivo_restricao'].includes(c));
+  const v = { ...i, ...pre };
+  const inp = (c, rot, tipo = 'text', extra = '') => `
+    <label class="block"><span class="text-[11px] text-slate-500">${rot}</span>
+      <input data-c="${c}" type="${tipo}" value="${escapeAttr(v[c] ?? '')}" ${podeCampo(c) ? '' : 'disabled'} ${extra}
+        class="mt-0.5 w-full px-2 py-1.5 border border-slate-300 rounded text-sm disabled:bg-slate-50 disabled:text-slate-500"></label>`;
+  const sel = (c, rot, ops) => `
+    <label class="block"><span class="text-[11px] text-slate-500">${rot}</span>
+      <select data-c="${c}" ${podeCampo(c) ? '' : 'disabled'}
+        class="mt-0.5 w-full px-2 py-1.5 border border-slate-300 rounded text-sm bg-white disabled:bg-slate-50">${ops}</select></label>`;
+  const opStatus = (pl.d.status[v.tipo] || []).map(s =>
+    `<option value="${s}" ${s === v.status ? 'selected' : ''}>${PL_STATUS[s]?.rot || s}</option>`).join('');
+  const cands = pl.d.candidatos || [];
+  const opLogin = (atual) => '<option value="">(sem login)</option>' + cands.map(c =>
+    `<option value="${escapeAttr(c.email)}" ${c.email === (atual || '').toLowerCase() ? 'selected' : ''}>${escapeHtml(c.nome)} · ${escapeHtml(c.email)}</option>`).join('');
+  const mods = [...new Set(pl.d.itens.map(x => x.modulo))].sort();
+  const cliente = plNomeCliente();
+
+  const corpo = v.tipo === 'atividade' ? `
+      <div class="grid grid-cols-4 gap-2">${inp('sequencia', 'Seq', 'number')}
+        <div class="col-span-3">${inp('modulo', 'Módulo', 'text', 'list="pl-dl-mod"')}</div></div>
+      ${inp('atividade', 'Atividade')}
+      <div class="grid grid-cols-2 gap-2">${inp('etapa', 'Etapa', 'text', 'list="pl-dl-etapa"')}
+        ${sel('tipo_agenda', 'Tipo de agenda', ['', 'Individual', 'Coletiva'].map(o =>
+          `<option ${o === (v.tipo_agenda || '') ? 'selected' : ''} value="${o}">${o || '—'}</option>`).join(''))}</div>
+      <div class="grid grid-cols-3 gap-2">${inp('data_de', 'De', 'date')}${inp('data_ate', 'Até', 'date')}${inp('horas', 'Horas', 'number', 'step="0.5"')}</div>
+      ${inp('produto', 'Produto (MIT)')}`
+    : `
+      ${inp('modulo', 'Módulo', 'text', 'list="pl-dl-mod"')}
+      <div class="grid grid-cols-3 gap-2">${inp('rotina', 'Rotina')}<div class="col-span-2">${inp('entidade', 'Entidade')}</div></div>
+      <div class="grid grid-cols-2 gap-2">${inp('data_de', 'Base liberada', 'date')}${inp('data_ate', 'Data limite', 'date')}</div>
+      <div class="grid grid-cols-2 gap-2">${inp('ambiente', 'Ambiente')}${inp('tabela', 'Tabela (alias)')}</div>`;
+
+  const resp = `
+      <div class="grid grid-cols-2 gap-2">
+        ${sel('responsavel_lado', 'Lado', ['', 'totvs', 'cliente'].map(o =>
+          `<option value="${o}" ${o === (v.responsavel_lado || '') ? 'selected' : ''}>${o === 'totvs' ? 'TOTVS' : o === 'cliente' ? escapeHtml(cliente) : '—'}</option>`).join(''))}
+        ${inp('responsavel_nome', v.tipo === 'cadastro' ? `Responsável ${escapeHtml(cliente)}` : 'Responsável')}</div>
+      ${sel('responsavel_email', 'Login do responsável', opLogin(v.responsavel_email))}
+      ${v.tipo === 'cadastro' ? `<div class="grid grid-cols-2 gap-2">${inp('consultor_nome', 'Consultor TOTVS')}
+        ${sel('consultor_email', 'Login do consultor', opLogin(v.consultor_email))}</div>` : ''}`;
+
+  const g = document.createElement('div');
+  g.innerHTML = `<div class="pl-scrim rx-scrim"></div>
+    <aside class="pl-gaveta rx-drawer" role="dialog" aria-modal="true">
+      <div class="px-4 py-3 border-b border-slate-200 flex items-start gap-2">
+        <div class="flex-1 min-w-0">
+          <p class="text-[11px] uppercase tracking-wide text-slate-500">${novo ? 'Novo ' + v.tipo : escapeHtml(v.modulo) + ' · ' + v.tipo}</p>
+          <p class="font-totvs text-totvs-petroleo leading-snug">${novo ? '' : escapeHtml(plDescr(v))}</p>
+          ${novo ? '' : `<div class="mt-1">${plChip(i.status)} ${plSelos(i)}</div>`}
+        </div>
+        <button data-fecha class="text-slate-400 hover:text-slate-700 text-xl leading-none">×</button>
+      </div>
+      <div class="flex-1 overflow-y-auto p-4 space-y-2.5 text-sm">
+        ${i.inconsistencia ? `<p class="text-xs bg-amber-50 border border-amber-200 text-amber-900 rounded p-2">⚠ ${escapeHtml(i.inconsistencia)}</p>` : ''}
+        ${!i.editavel ? '<p class="text-xs bg-slate-50 border border-slate-200 text-slate-600 rounded p-2">Somente leitura para você neste item.</p>'
+          : !tudo ? '<p class="text-xs bg-sky-50 border border-sky-200 text-sky-900 rounded p-2">Você atualiza o status e as observações dos seus itens.</p>' : ''}
+        ${sel('status', 'Status', opStatus)}
+        <div data-motivo class="${v.status === 'finalizado_restricoes' ? '' : 'hidden'}">
+          <label class="block"><span class="text-[11px] text-slate-500">Motivo da restrição (o que ficou pendente) *</span>
+          <textarea data-c="motivo_restricao" rows="2" ${podeCampo('motivo_restricao') ? '' : 'disabled'}
+            class="mt-0.5 w-full px-2 py-1.5 border border-slate-300 rounded text-sm">${escapeHtml(v.motivo_restricao || '')}</textarea></label></div>
+        ${corpo}
+        ${resp}
+        <label class="block"><span class="text-[11px] text-slate-500">Observações</span>
+          <textarea data-c="observacoes" rows="5" ${podeCampo('observacoes') ? '' : 'disabled'}
+            class="mt-0.5 w-full px-2 py-1.5 border border-slate-300 rounded text-sm whitespace-pre-wrap disabled:bg-slate-50">${escapeHtml(v.observacoes || '')}</textarea></label>
+        <p data-erro class="text-xs text-rose-600"></p>
+        ${novo ? '' : `<div class="pt-2 border-t border-slate-100">
+          <p class="text-xs font-semibold text-slate-600 mb-1">Histórico</p>
+          <div data-hist class="text-xs text-slate-500">Carregando…</div></div>`}
+      </div>
+      <div class="px-4 py-3 border-t border-slate-200 flex items-center gap-2">
+        ${!novo && tudo ? '<button data-remove class="text-xs text-rose-600 hover:underline mr-auto">Remover item</button>' : '<span class="mr-auto"></span>'}
+        <button data-fecha class="px-3 py-1.5 rounded-md border border-slate-300 hover:bg-slate-50 text-sm">Fechar</button>
+        ${i.editavel ? `<button data-salva class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde text-sm">${novo ? 'Criar' : 'Salvar'}</button>` : ''}
+      </div>
+    </aside>
+    <datalist id="pl-dl-mod">${mods.map(m => `<option value="${escapeAttr(m)}">`).join('')}</datalist>
+    <datalist id="pl-dl-etapa">${PL_ETAPAS.map(m => `<option value="${escapeAttr(m)}">`).join('')}</datalist>`;
+  document.body.appendChild(g);
+  const gv = g.querySelector('.pl-gaveta');
+  g.querySelectorAll('[data-fecha], .pl-scrim').forEach(b => b.addEventListener('click', () => g.remove()));
+  gv.querySelector('[data-c="status"]').addEventListener('change', e =>
+    gv.querySelector('[data-motivo]').classList.toggle('hidden', e.target.value !== 'finalizado_restricoes'));
+  // escolher o login preenche o nome, se estava vazio
+  for (const [lg, nm] of [['responsavel_email', 'responsavel_nome'], ['consultor_email', 'consultor_nome']]) {
+    gv.querySelector(`[data-c="${lg}"]`)?.addEventListener('change', e => {
+      const n = gv.querySelector(`[data-c="${nm}"]`);
+      const c = cands.find(x => x.email === e.target.value);
+      if (c && n && !n.value) n.value = c.nome;
+    });
+  }
+  const erro = (m) => { gv.querySelector('[data-erro]').textContent = m || ''; };
+  gv.querySelector('[data-salva]')?.addEventListener('click', async (ev) => {
+    const btn = ev.target;
+    const campos = {};
+    gv.querySelectorAll('[data-c]').forEach(el => {
+      if (el.disabled) return;
+      const c = el.dataset.c, val = el.value.trim();
+      const orig = i[c] == null ? '' : String(i[c]);
+      if (novo || val !== orig) campos[c] = val === '' ? null : val;
+    });
+    if (pre.status && !('status' in campos) && pre.status !== i.status) campos.status = pre.status;
+    if (!Object.keys(campos).length) { g.remove(); return; }
+    btn.disabled = true; erro('');
+    if (novo) {
+      try {
+        const r = await api(`/api/plano/${encodeURIComponent(state.selected.cli)}/${encodeURIComponent(state.selected.cod)}/item`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tipo: v.tipo, ...campos }) });
+        g.remove();
+        pl.abertos.add(r.item.modulo);
+        await initPlano(true);
+      } catch (e) { erro(e.message); btn.disabled = false; }
+      return;
+    }
+    const r = await plSalva(i.id, campos, (m) => { erro(m); btn.disabled = false; });
+    if (r) g.remove();
+  });
+  gv.querySelector('[data-remove]')?.addEventListener('click', async () => {
+    if (!confirm('Remover este item do plano? Ele some da lista (o histórico fica guardado).')) return;
+    try {
+      await api(`/api/plano/item/${i.id}/inativar`, { method: 'POST' });
+      g.remove();
+      pl.d.itens = pl.d.itens.filter(x => x.id !== i.id);
+      plRender();
+    } catch (e) { erro(e.message); }
+  });
+  if (!novo) plCarregaHist(i.id, gv.querySelector('[data-hist]'));
+}
+
+const PL_CAMPO_ROT = {
+  criado: 'criado', status: 'status', observacoes: 'observações', data_de: 'início',
+  data_ate: 'fim', motivo_restricao: 'motivo', responsavel_nome: 'responsável',
+  responsavel_email: 'login do responsável', ativo: 'ativo', horas: 'horas',
+};
+
+async function plCarregaHist(id, el) {
+  try {
+    const { hist } = await api(`/api/plano/item/${id}/hist`);
+    if (!hist.length) { el.textContent = 'Sem histórico.'; return; }
+    const val = (c, x) => x == null ? '∅' : c === 'status' ? (PL_STATUS[x]?.rot || x)
+      : /^\d{4}-\d{2}-\d{2}$/.test(x) ? fmtData(x) : (x.length > 80 ? x.slice(0, 80) + '…' : x);
+    el.innerHTML = hist.map(h => `<div class="py-1 border-b border-slate-50">
+      <span class="text-slate-400">${fmtDataHora(h.em)}</span> ·
+      <b class="text-slate-600">${escapeHtml(h.por_nome || h.por || '')}</b>
+      ${h.origem === 'importacao' ? '<span class="pl-selo bg-slate-100 text-slate-500">planilha</span>' : ''}
+      <br>${h.campo === 'criado' ? `criado (${escapeHtml(h.para || '')})`
+        : `${escapeHtml(PL_CAMPO_ROT[h.campo] || h.campo)}: <span class="line-through">${escapeHtml(val(h.campo, h.de))}</span> → ${escapeHtml(val(h.campo, h.para))}`}
+    </div>`).join('');
+  } catch (e) { el.textContent = 'Erro ao carregar o histórico: ' + e.message; }
+}
+
+// ── marcos ───────────────────────────────────────────────────────────────────
+function plEditaMarcos() {
+  const m = pl.d.marcos || {};
+  const md = modal('Marcos do projeto',
+    Object.entries(PL_MARCOS).map(([k, rot]) => campo(`pl-m-${k}`, rot, m[k] || '', 'date')).join('') +
+    '<p class="text-xs text-slate-500">Data em branco remove o marco. A importação da planilha nunca sobrescreve um marco já definido aqui.</p>',
+    'Salvar marcos');
+  md.aoConfirmar(async () => {
+    const marcos = {};
+    for (const k of Object.keys(PL_MARCOS)) marcos[k] = md.campo(`pl-m-${k}`).value || null;
+    md.ocupado(true, 'Salvando…');
+    try {
+      const r = await api(`/api/plano/${encodeURIComponent(state.selected.cli)}/${encodeURIComponent(state.selected.cod)}/marcos`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ marcos }) });
+      md.fecha();
+      await initPlano(true);      // atraso de cadastro depende do marco
+      void r;
+    } catch (e) { md.erro(e.message); md.ocupado(false, 'Salvar marcos'); }
+  });
+}
+
+// ── importação ──────────────────────────────────────────────────────────────
+async function plImporta(ev) {
+  const arq = ev.target.files[0];
+  ev.target.value = '';
+  if (!arq) return;
+  const fd = new FormData();
+  fd.append('arquivo', arq, arq.name);
+  const wrap = $('#pl-upload-wrap');
+  wrap.classList.add('opacity-60', 'pointer-events-none');
+  try {
+    const r = await api(`/api/plano/${encodeURIComponent(state.selected.cli)}/${encodeURIComponent(state.selected.cod)}/importar`,
+                        { method: 'POST', body: fd });
+    await initPlano(true);
+    plResumoImportacao(r, arq.name);
+  } catch (e) {
+    alert('Falha ao importar: ' + e.message);
+  } finally {
+    wrap.classList.remove('opacity-60', 'pointer-events-none');
+  }
+}
+
+function plResumoImportacao(r, nome) {
+  const lista = (titulo, arr, cls = 'text-slate-600') => arr && arr.length ? `
+    <details class="border border-slate-200 rounded"><summary class="px-3 py-1.5 text-xs font-semibold ${cls}">${titulo} (${arr.length})</summary>
+      <ul class="px-5 py-2 text-xs list-disc space-y-0.5">${arr.map(x => `<li>${escapeHtml(typeof x === 'string' ? x : `${x.modulo} · ${x.descricao}`)}</li>`).join('')}</ul></details>` : '';
+  const mp = Object.entries(r.marcos_planilha || {}).map(([k, d]) =>
+    `${PL_MARCOS[k] || k} ${fmtData(d)}${pl.d.marcos[k] && pl.d.marcos[k] !== d ? ` <span class="text-amber-700">(mantido o definido: ${fmtData(pl.d.marcos[k])})</span>` : ''}`).join(' · ');
+  const md = modal(`Planilha importada`, `
+    <p class="text-xs text-slate-500">${escapeHtml(nome)}</p>
+    <div class="grid grid-cols-4 gap-2 text-center">
+      ${[['Criados', r.criados], ['Alterados', r.alterados], ['Mantidos da tela', r.preservados || 0], ['Linhas ignoradas', r.ignorados]]
+        .map(([t, n]) => `<div class="border border-slate-200 rounded p-2"><p class="text-lg font-totvs">${n}</p><p class="text-[11px] text-slate-500">${t}</p></div>`).join('')}
+    </div>
+    <p class="text-xs text-slate-600">${r.atividades} atividades e ${r.cadastros} cadastros na planilha.${mp ? ' Marcos na planilha: ' + mp + '.' : ''}</p>
+    ${lista('⚠ Para revisar', r.inconsistencias, 'text-amber-800')}
+    ${lista('Responsáveis sem login no Cockpit', r.sem_login)}
+    ${lista('Nomes com mais de um login possível', r.ambiguos, 'text-amber-800')}
+    ${lista('No dashboard mas fora da planilha (não removidos)', r.ausentes)}
+    ${lista('Avisos', r.avisos)}`, 'Ok');
+  md.aoConfirmar(() => md.fecha());
+}
+
+// ── PAINEL (visão do CP TOTVS) ───────────────────────────────────────────────
+function plKpis(itens) {
+  const ativ = itens.filter(i => i.tipo === 'atividade' && i.status !== 'cancelado');
+  const cad = itens.filter(i => i.tipo === 'cadastro' && i.status !== 'nao_aplicavel');
+  const hoje = plHoje(), em7 = plAddDias(hoje, 7);
+  return {
+    ativ: ativ.length,
+    fin: ativ.filter(i => PL_CONCLUIDO.has(i.status)).length,
+    atr: itens.filter(i => i.atrasado).length,
+    atrCli: itens.filter(i => i.atrasado && i.responsavel_lado === 'cliente').length,
+    restr: ativ.filter(i => i.status === 'finalizado_restricoes').length,
+    prox7: ativ.filter(i => !PL_FEITO.has(i.status) && i.data_de && i.data_de >= hoje && i.data_de <= em7).length,
+    cad: cad.length,
+    cadOk: cad.filter(i => i.status === 'validado' || i.status === 'entregue').length,
+    cadVal: cad.filter(i => i.status === 'validado').length,
+    horas: ativ.reduce((s, i) => s + Number(i.horas || 0), 0),
+    horasFin: ativ.filter(i => PL_CONCLUIDO.has(i.status)).reduce((s, i) => s + Number(i.horas || 0), 0),
+    revisar: itens.filter(i => i.inconsistencia).length,
+  };
+}
+
+function plCard(rot, val, sub = '', cor = '') {
+  return `<div class="bg-white border border-slate-200 rounded-lg p-3">
+    <p class="text-[11px] uppercase tracking-wide text-slate-500">${rot}</p>
+    <p class="text-2xl font-totvs ${cor}">${val}</p>
+    ${sub ? `<p class="text-xs text-slate-500">${sub}</p>` : ''}</div>`;
+}
+
+function plRenderPainel() {
+  const it = pl.d.itens, k = plKpis(it);
+  const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+  const kpis = `<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3 mb-5">
+    ${plCard('Atividades', k.ativ, `${fmtH(k.horas)} h planejadas`)}
+    ${plCard('Finalizadas', pct(k.fin, k.ativ) + '%', `${k.fin} de ${k.ativ} · ${fmtH(k.horasFin)} h`, 'text-emerald-700')}
+    ${plCard('Atrasados', k.atr, k.atrCli ? `${k.atrCli} do lado ${escapeHtml(plNomeCliente())}` : 'atividades e cadastros', k.atr ? 'text-rose-600' : '')}
+    ${plCard('Restrições abertas', k.restr, 'finalizadas com pendência', k.restr ? 'text-amber-600' : '')}
+    ${plCard('Próximos 7 dias', k.prox7, 'atividades que começam')}
+    ${plCard('Cadastros', `${k.cadOk}/${k.cad}`, `${k.cadVal} validados`)}
+    ${plCard('A revisar', k.revisar, 'vindos da planilha', k.revisar ? 'text-amber-600' : '')}
+  </div>`;
+  $('#pl-conteudo').innerHTML = kpis + `
+    <div class="grid lg:grid-cols-2 gap-4">
+      <section class="bg-white border border-slate-200 rounded-lg p-4 lg:col-span-2">
+        <h3 class="text-sm font-semibold text-slate-700 mb-2">Módulo × etapa <span class="font-normal text-xs text-slate-500">— atividades finalizadas / total</span></h3>
+        ${plMatriz(it)}</section>
+      <section class="bg-white border border-slate-200 rounded-lg p-4 lg:col-span-2">
+        <h3 class="text-sm font-semibold text-slate-700 mb-2">Carga semanal por responsável <span class="font-normal text-xs text-slate-500">— horas das atividades em aberto, distribuídas nos dias úteis do período</span></h3>
+        ${plCarga(it)}</section>
+      <section class="bg-white border border-slate-200 rounded-lg p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-2">Atrasados <span class="font-normal text-xs text-slate-500">— mais antigo primeiro</span></h3>
+        ${plListaCurta(it.filter(i => i.atrasado).sort((a, b) => String(a.data_ate).localeCompare(String(b.data_ate))), 'Nada atrasado.')}</section>
+      <section class="bg-white border border-slate-200 rounded-lg p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-2">Restrições em aberto</h3>
+        ${plListaCurta(it.filter(i => i.status === 'finalizado_restricoes'), 'Nenhuma restrição em aberto.', true)}</section>
+    </div>`;
+  plLigaLinhas($('#pl-conteudo'));
+}
+
+function plMatriz(it) {
+  const ativ = it.filter(i => i.tipo === 'atividade' && i.status !== 'cancelado');
+  const mods = [...new Set(ativ.map(i => i.modulo))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const etapas = [...new Set(ativ.map(i => i.etapa || '(sem etapa)'))].sort((a, b) => plOrdemEtapa(a) - plOrdemEtapa(b));
+  if (!mods.length) return '<p class="text-xs text-slate-400">Sem atividades.</p>';
+  const cel = (m, e) => {
+    const l = ativ.filter(i => i.modulo === m && (i.etapa || '(sem etapa)') === e);
+    if (!l.length) return '<td class="text-center text-slate-200">·</td>';
+    const f = l.filter(i => PL_CONCLUIDO.has(i.status)).length;
+    const atr = l.some(i => i.atrasado);
+    const p = f / l.length;
+    const bg = atr ? 'background:#fee2e2;color:#b91c1c' : p === 1 ? 'background:#d1fae5;color:#065f46'
+      : p > 0 ? 'background:#e0f2fe;color:#075985' : 'background:#f8fafc;color:#475569';
+    return `<td class="text-center"><button data-pl-celula="${escapeAttr(m)}|${escapeAttr(e)}" style="${bg}"
+      class="w-full rounded px-2 py-1 text-xs font-mono tabular-nums hover:ring-1 hover:ring-slate-300" title="${atr ? 'tem atrasado' : ''}">${f}/${l.length}</button></td>`;
+  };
+  const html = `<div class="overflow-x-auto"><table class="w-full text-sm"><thead><tr>
+      <th class="text-left text-xs text-slate-500 font-normal py-1 pr-3">Módulo</th>
+      ${etapas.map(e => `<th class="text-xs text-slate-500 font-normal px-1">${escapeHtml(e)}</th>`).join('')}</tr></thead>
+    <tbody>${mods.map(m => `<tr><td class="py-1 pr-3 whitespace-nowrap">${escapeHtml(m)}</td>${etapas.map(e => cel(m, e)).join('')}</tr>`).join('')}</tbody></table></div>`;
+  setTimeout(() => $$('#pl-conteudo [data-pl-celula]').forEach(b => b.addEventListener('click', () => {
+    const [m, e] = b.dataset.plCelula.split('|');
+    pl.f = { ...pl.f, modulo: m, etapa: e === '(sem etapa)' ? '' : e, busca: '', status: '', lado: '', resp: '', tipo: '' };
+    pl.sub = 'grade'; plPreencheFiltros(); $('#pl-f-modulo').value = m; plRender();
+  })), 0);
+  return html;
+}
+
+/** Segunda-feira da semana ISO da data. */
+function plSegunda(iso) {
+  const d = new Date(iso + 'T12:00:00');
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  return d.toISOString().slice(0, 10);
+}
+
+function plCarga(it) {
+  const hoje = plHoje();
+  const ab = it.filter(i => i.tipo === 'atividade' && !PL_FEITO.has(i.status) && Number(i.horas) > 0
+                         && i.data_de && (i.data_ate || i.data_de) >= hoje);
+  if (!ab.length) return '<p class="text-xs text-slate-400">Sem horas em aberto com data.</p>';
+  const semanas = [];
+  let s = plSegunda(hoje);
+  const fim = ab.reduce((m, i) => (i.data_ate || i.data_de) > m ? (i.data_ate || i.data_de) : m, hoje);
+  while (s <= fim && semanas.length < 16) { semanas.push(s); s = plAddDias(s, 7); }
+  const carga = new Map();
+  for (const i of ab) {
+    const quem = plQuem(i) || '(sem responsável)';
+    const dias = [];
+    for (let d = i.data_de; d <= (i.data_ate || i.data_de); d = plAddDias(d, 1)) {
+      const dw = new Date(d + 'T12:00:00').getDay();
+      if (dw !== 0 && dw !== 6) dias.push(d);
+      if (dias.length > 120) break;
+    }
+    if (!dias.length) dias.push(i.data_de);
+    const porDia = Number(i.horas) / dias.length;
+    if (!carga.has(quem)) carga.set(quem, { lado: i.responsavel_lado, sem: {} });
+    for (const d of dias) {
+      const w = plSegunda(d);
+      carga.get(quem).sem[w] = (carga.get(quem).sem[w] || 0) + porDia;
+    }
+  }
+  const pessoas = [...carga.entries()].sort((a, b) => a[0].localeCompare(b[0], 'pt-BR'));
+  return `<div class="overflow-x-auto"><table class="text-sm"><thead><tr>
+      <th class="text-left text-xs text-slate-500 font-normal py-1 pr-3">Responsável</th>
+      ${semanas.map(w => `<th class="text-[11px] text-slate-500 font-normal px-1 whitespace-nowrap">${fmtData(w).slice(0, 5)}</th>`).join('')}</tr></thead>
+    <tbody>${pessoas.map(([p, c]) => `<tr><td class="py-1 pr-3 whitespace-nowrap text-xs">${escapeHtml(p)}
+        ${c.lado === 'cliente' ? `<span class="pl-lado bg-totvs-purple/15 text-totvs-purple">${escapeHtml(plNomeCliente())}</span>` : ''}</td>
+      ${semanas.map(w => {
+        const h = c.sem[w] || 0;
+        const st = h > 40 ? 'background:#fee2e2;color:#b91c1c;font-weight:600'
+          : h > 0 ? `background:rgba(0,219,255,${Math.min(0.15 + h / 60, 0.7)})` : '';
+        return `<td class="px-0.5"><div class="rounded text-center text-[11px] font-mono tabular-nums py-1 min-w-[38px]" style="${st}"
+          title="${h ? fmtH(h) + ' h na semana de ' + fmtData(w) : ''}">${h ? fmtH(h) : ''}</div></td>`;
+      }).join('')}</tr>`).join('')}</tbody></table></div>
+    <p class="text-[11px] text-slate-400 mt-1">Vermelho: mais de 40 h na semana.</p>`;
+}
+
+function plListaCurta(lst, vazio, comMotivo = false) {
+  if (!lst.length) return `<p class="text-xs text-slate-400">${vazio}</p>`;
+  return `<ul class="divide-y divide-slate-100">${lst.slice(0, 40).map(i => `
+    <li class="py-1.5 flex items-start gap-2 text-sm">
+      <span class="text-xs text-slate-500 w-20 shrink-0 font-mono">${fmtData(i.data_ate || i.data_de)}</span>
+      <div class="flex-1 min-w-0">
+        <button data-pl-abre="${i.id}" class="text-left hover:text-totvs-blue">${escapeHtml(plDescr(i))}</button>
+        <p class="text-xs text-slate-500">${escapeHtml(i.modulo)} · ${escapeHtml(plQuem(i) || plQuem(i, 'consultor') || '—')}</p>
+        ${comMotivo && i.motivo_restricao ? `<p class="text-xs text-amber-800">${escapeHtml(i.motivo_restricao)}</p>` : ''}
+      </div>${plChip(i.status)}</li>`).join('')}</ul>
+    ${lst.length > 40 ? `<p class="text-xs text-slate-400 mt-1">+${lst.length - 40} itens</p>` : ''}`;
+}
+
+// ── PENDÊNCIAS (visão do CP do cliente / do consultor) ──────────────────────
+function plRenderPendencias() {
+  const it = pl.d.itens, hoje = plHoje(), em14 = plAddDias(hoje, 14);
+  const proprio = pl.d.permissao === 'proprio';
+  const cli = plNomeCliente();
+  const meus = proprio
+    ? it.filter(i => i.meu && !PL_FEITO.has(i.status))
+    : it.filter(i => i.responsavel_lado === 'cliente' && !PL_FEITO.has(i.status));
+  const ordena = (a, b) => (b.atrasado - a.atrasado) ||
+    String(a.data_ate || a.data_de || '9').localeCompare(String(b.data_ate || b.data_de || '9'));
+  const ativ = meus.filter(i => i.tipo === 'atividade').sort(ordena);
+  const cad = meus.filter(i => i.tipo === 'cadastro').sort(ordena);
+  const proximas = it.filter(i => i.tipo === 'atividade' && !PL_FEITO.has(i.status) && i.data_de
+                               && i.data_de >= hoje && i.data_de <= em14)
+    .sort((a, b) => a.data_de.localeCompare(b.data_de));
+  const aprov = it.filter(i => i.tipo === 'atividade' && i.produto && !/^n[aã]o h[aá]/i.test(i.produto)
+    && (i.status === 'finalizado_restricoes' || /aguardando aprova/i.test(i.observacoes || '')));
+  const k = plKpis(meus);
+  const cadPorMod = new Map();
+  cad.forEach(i => { if (!cadPorMod.has(i.modulo)) cadPorMod.set(i.modulo, []); cadPorMod.get(i.modulo).push(i); });
+
+  const tituloMeus = proprio ? 'Seus itens em aberto' : `O que está com ${escapeHtml(cli)}`;
+  $('#pl-conteudo').innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
+      ${plCard(proprio ? 'Seus itens abertos' : `Pendências ${escapeHtml(cli)}`, meus.length)}
+      ${plCard('Atrasados', k.atr, '', k.atr ? 'text-rose-600' : '')}
+      ${plCard('Cadastros a entregar', cad.length, cad.filter(i => i.atrasado).length ? `${cad.filter(i => i.atrasado).length} vencidos` : '')}
+      ${plCard('Agendas em 14 dias', proximas.length)}
+    </div>
+    <div class="grid lg:grid-cols-2 gap-4">
+      <section class="bg-white border border-slate-200 rounded-lg p-4">
+        <h3 class="text-sm font-semibold text-slate-700 mb-2">${tituloMeus} — atividades</h3>
+        ${plListaPend(ativ, 'Nenhuma atividade em aberto.')}
+        <h3 class="text-sm font-semibold text-slate-700 mt-4 mb-2">Cadastros a entregar</h3>
+        ${cad.length ? [...cadPorMod.entries()].map(([m, l]) => `
+          <details class="border border-slate-100 rounded mb-1" ${l.some(i => i.atrasado) ? 'open' : ''}>
+            <summary class="px-2 py-1.5 text-sm flex items-center gap-2"><span class="chev text-slate-400 text-xs">▶</span>
+              ${escapeHtml(m)} <span class="text-xs text-slate-500">${l.length} · limite ${fmtData(l[0].data_ate)}</span>
+              ${l.some(i => i.atrasado) ? '<span class="pl-selo bg-rose-100 text-rose-700">vencido</span>'
+                : (l[0].data_ate && plDias(l[0].data_ate) <= 7)
+                  ? `<span class="pl-selo bg-amber-100 text-amber-900">vence ${plDias(l[0].data_ate) === 0 ? 'hoje' : 'em ' + plDias(l[0].data_ate) + 'd'}</span>` : ''}</summary>
+            ${plListaPend(l, '')}</details>`).join('') : '<p class="text-xs text-slate-400">Nenhum cadastro pendente.</p>'}
+      </section>
+      <div class="space-y-4">
+        <section class="bg-white border border-slate-200 rounded-lg p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-2">Próximas agendas <span class="font-normal text-xs text-slate-500">— 14 dias, para mobilizar os usuários-chave</span></h3>
+          ${proximas.length ? `<ul class="divide-y divide-slate-100">${proximas.map(i => `
+            <li class="py-1.5 flex gap-2 text-sm"><span class="text-xs font-mono text-slate-500 w-24 shrink-0">${plPeriodo(i)}</span>
+              <div class="flex-1 min-w-0"><button data-pl-abre="${i.id}" class="text-left hover:text-totvs-blue">${escapeHtml(i.atividade)}</button>
+              <p class="text-xs text-slate-500">${escapeHtml(i.modulo)} · ${escapeHtml(i.etapa || '')}${i.tipo_agenda ? ' · ' + escapeHtml(i.tipo_agenda) : ''} · ${escapeHtml(i.responsavel_nome || '')}</p></div></li>`).join('')}</ul>`
+            : '<p class="text-xs text-slate-400">Nenhuma agenda nos próximos 14 dias.</p>'}
+        </section>
+        <section class="bg-white border border-slate-200 rounded-lg p-4">
+          <h3 class="text-sm font-semibold text-slate-700 mb-2">Aguardando aprovação <span class="font-normal text-xs text-slate-500">— entregas (MIT) com pendência ou aguardando o aceite</span></h3>
+          ${plListaCurta(aprov, 'Nada aguardando aprovação.', true)}
+        </section>
+      </div>
+    </div>`;
+  plLigaLinhas($('#pl-conteudo'));
+}
+
+function plListaPend(lst, vazio) {
+  if (!lst.length) return vazio ? `<p class="text-xs text-slate-400">${vazio}</p>` : '';
+  return `<ul class="divide-y divide-slate-100">${lst.map(i => {
+    const prazo = i.data_ate || i.data_de;
+    const dias = prazo ? plDias(prazo) : null;
+    const quando = dias == null ? '' : dias < 0 ? `<span class="text-rose-600">venceu há ${-dias}d</span>`
+      : dias === 0 ? '<span class="text-amber-700">vence hoje</span>' : `<span class="text-slate-500">em ${dias}d</span>`;
+    return `<li class="py-1.5 flex items-start gap-2 text-sm ${i.atrasado ? 'pl-atrasado' : ''}">
+      <div class="flex-1 min-w-0"><button data-pl-abre="${i.id}" class="text-left hover:text-totvs-blue">${escapeHtml(plDescr(i))}</button>
+        <p class="text-xs text-slate-500">${escapeHtml(i.modulo)}${i.responsavel_nome ? ' · ' + escapeHtml(i.responsavel_nome) : ''} · ${fmtData(prazo)} ${quando}</p></div>
+      ${plStatusCtl(i)}</li>`;
+  }).join('')}</ul>`;
+}
+
+// ── relatório (Exportar HTML / rascunho) ────────────────────────────────────
+function relatorioPlanoHTML() {
+  if (!pl.d || !pl.d.itens.length) return null;
+  const it = pl.d.itens, k = plKpis(it), m = pl.d.marcos || {}, cli = plNomeCliente();
+  const hoje = plHoje(), em14 = plAddDias(hoje, 14);
+  const C = { borda: '#e2e8f0', cinza: '#64748b', rosa: '#b91c1c' };
+  const card = (t, v, s = '') => `<td style="border:1px solid ${C.borda};border-radius:8px;padding:10px;vertical-align:top">
+    <div style="font-size:10px;text-transform:uppercase;color:${C.cinza};letter-spacing:.04em">${t}</div>
+    <div style="font-size:22px;font-weight:700">${v}</div><div style="font-size:11px;color:${C.cinza}">${s}</div></td>`;
+  const tabela = (cab, linhas) => linhas.length ? `<table style="width:100%;border-collapse:collapse;font-size:12px">
+    <tr>${cab.map(c => `<th style="text-align:left;border-bottom:2px solid ${C.borda};padding:4px 6px;color:${C.cinza}">${c}</th>`).join('')}</tr>
+    ${linhas.map(l => `<tr>${l.map(c => `<td style="border-bottom:1px solid ${C.borda};padding:4px 6px;vertical-align:top">${c}</td>`).join('')}</tr>`).join('')}</table>`
+    : `<p style="font-size:12px;color:${C.cinza}">Nada.</p>`;
+  const st = (s) => escapeHtml(PL_STATUS[s]?.rot || s);
+  const atr = it.filter(i => i.atrasado).sort((a, b) => String(a.data_ate).localeCompare(String(b.data_ate)));
+  const pendCli = it.filter(i => i.responsavel_lado === 'cliente' && !PL_FEITO.has(i.status));
+  const prox = it.filter(i => i.tipo === 'atividade' && !PL_FEITO.has(i.status) && i.data_de && i.data_de >= hoje && i.data_de <= em14)
+    .sort((a, b) => a.data_de.localeCompare(b.data_de));
+  const h2 = (t) => `<h2 style="font-size:15px;margin:22px 0 6px">${t}</h2>`;
+  const marcos = Object.entries(PL_MARCOS).filter(([x]) => m[x]).map(([x, rot]) => {
+    const d = plDias(m[x]);
+    return `<b>${rot}</b>: ${fmtData(m[x])} (${d >= 0 ? 'em ' + d + ' dias' : 'há ' + (-d) + ' dias'})`;
+  }).join(' &nbsp;·&nbsp; ');
+  const corpo = `
+    <p style="font-size:13px;margin:0 0 10px">${marcos || ''}</p>
+    <table style="width:100%;border-collapse:separate;border-spacing:6px"><tr>
+      ${card('Atividades finalizadas', `${k.fin}/${k.ativ}`, `${k.ativ ? Math.round(k.fin / k.ativ * 100) : 0}%`)}
+      ${card('Atrasados', `<span style="color:${k.atr ? C.rosa : 'inherit'}">${k.atr}</span>`, k.atrCli ? `${k.atrCli} do lado ${escapeHtml(cli)}` : '')}
+      ${card('Restrições abertas', k.restr)}
+      ${card('Cadastros entregues', `${k.cadOk}/${k.cad}`, `${k.cadVal} validados`)}
+    </tr></table>
+    ${h2('Atrasados')}
+    ${tabela(['Prazo', 'Módulo', 'Item', 'Responsável', 'Status'], atr.slice(0, 60).map(i =>
+      [fmtData(i.data_ate || i.data_de), escapeHtml(i.modulo), escapeHtml(plDescr(i)), escapeHtml(i.responsavel_nome || '—'), st(i.status)]))}
+    ${h2(`Pendências ${escapeHtml(cli)}`)}
+    ${tabela(['Prazo', 'Módulo', 'Item', 'Responsável', 'Status'], pendCli.sort((a, b) => String(a.data_ate).localeCompare(String(b.data_ate))).slice(0, 120).map(i =>
+      [fmtData(i.data_ate || i.data_de), escapeHtml(i.modulo), escapeHtml(plDescr(i)), escapeHtml(i.responsavel_nome || '—'), st(i.status)]))}
+    ${h2('Próximas 2 semanas')}
+    ${tabela(['Período', 'Módulo', 'Atividade', 'Agenda', 'Responsável'], prox.map(i =>
+      [plPeriodo(i), escapeHtml(i.modulo), escapeHtml(i.atividade), escapeHtml(i.tipo_agenda || ''), escapeHtml(i.responsavel_nome || '')]))}`;
+  return molduraRelatorio('Plano de Trabalho', corpo, ` · posição de ${fmtData(hoje)}`, 900);
+}
+
+// ── eventos fixos da aba ─────────────────────────────────────────────────────
+$$('.pl-sub').forEach(b => b.addEventListener('click', () => { pl.sub = b.dataset.plsub; plRender(); }));
+$('#pl-busca').addEventListener('input', e => { pl.f.busca = e.target.value; plRenderGrade(); });
+for (const [id, k] of [['pl-f-modulo', 'modulo'], ['pl-f-etapa', 'etapa'], ['pl-f-status', 'status'],
+                       ['pl-f-lado', 'lado'], ['pl-f-resp', 'resp'], ['pl-f-tipo', 'tipo']]) {
+  $('#' + id).addEventListener('change', e => { pl.f[k] = e.target.value; plRenderGrade(); });
+}
+$('#pl-reload').addEventListener('click', () => initPlano(true));
+$('#pl-file').addEventListener('change', plImporta);
+$('#pl-nova-ativ').addEventListener('click', () => plAbreItem({ tipo: 'atividade', status: 'agendado', modulo: pl.f.modulo || '', responsavel_lado: 'totvs' }));
+$('#pl-novo-cad').addEventListener('click', () => plAbreItem({ tipo: 'cadastro', status: 'nao_iniciado', modulo: pl.f.modulo || '', responsavel_lado: 'cliente' }));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') plFecharGaveta(); });
+
 const tar = {
   customer: null, itens: [], modo: 'lista',
   tags: new Set(), tagModo: 'ou',            // ou | e
@@ -5753,6 +6688,7 @@ function snapshotAba(el, opt = {}) {
 const RELATORIOS = {
   resumo:    { titulo: 'Resumo do Projeto',       alvo: '#tab-resumo' },
   crono:     { titulo: 'Cronograma',              alvo: '#d-crono' },
+  plano:     { titulo: 'Plano de Trabalho',       alvo: '#tab-plano', curado: relatorioPlanoHTML },
   modulos:   { titulo: 'Apontamentos por Módulo', alvo: '#d-modulos' },
   etapas:    { titulo: 'Apontamentos por Etapa',  alvo: '#d-etapas' },
   consumo:   { titulo: 'Consumo por Etapa',       alvo: '#tab-consumo' },
@@ -8525,6 +9461,9 @@ function pintaAcessos() {
           </div>
           ${abasVis.some(a => a.sensivel) ? '<p class="text-[11px] text-amber-700 mt-1">⚠ aba interna: Consumo mostra margem/valoração, Integrações mostra matrícula e nome de funcionário, Estrutura/Compara/Auditoria são de configuração.</p>' : ''}
           <p class="text-[11px] text-slate-400 mt-1">Sem nenhuma marcada, o usuário do cliente fica liberado no cliente e sem aba — de propósito, não por engano.</p>
+          ${abasVis.some(a => a.id === 'plano') ? `<p data-acs-nota-plano class="text-[11px] text-slate-600 mt-1 bg-sky-50 border border-sky-100 rounded px-2 py-1">
+            <b>Plano de Trabalho</b> — quem edita é o <b>papel</b> abaixo: <b>CP TOTVS</b> e <b>CP do Cliente</b> editam tudo e importam a planilha;
+            <b>Consultor TOTVS</b> atualiza status e observações só dos itens dele; usuário-chave e perfil Leitor só consultam.</p>` : ''}
         </div>
         <div class="border-t border-slate-100 pt-2">
           <label class="block text-xs text-slate-500 mb-1">Papel no cliente

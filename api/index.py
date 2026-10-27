@@ -289,6 +289,9 @@ PERFIS_INTERNOS = ("admin", "comum", "consultoria", "leitor")   # gente da TOTVS
 ABAS = [
     {"id": "resumo",    "label": "Resumo",               "cliente": True},
     {"id": "crono",     "label": "Cronograma",           "cliente": True},
+    # Plano de Trabalho (27/10/2026): substitui a planilha de atividades do CP.
+    # Liberável ao cliente — o CP do cliente é quem mais usa (Minhas pendências).
+    {"id": "plano",     "label": "Plano de Trabalho",    "cliente": True},
     {"id": "modulos",   "label": "Por Módulo",           "cliente": True},
     {"id": "etapas",    "label": "Por Etapa",            "cliente": True},
     {"id": "consumo",   "label": "Consumo",              "cliente": True, "sensivel": True},
@@ -9552,6 +9555,754 @@ def api_radar_rejeitar(customer, pid):
     mot = ((request.get_json(silent=True) or {}).get("motivo") or "").strip() or None
     q("select cockpit.radar_rejeitar_proposta(%s, %s, %s)", (pid, current_user(), mot), one=True)
     return _json({"ok": True})
+
+
+# ── PLANO DE TRABALHO (aba "plano") ─────────────────────────────────────────
+# Substitui a planilha de atividades do CP (Açosul - Plano de Trabalho Completo).
+# Spec: docs/specs/2026-10-27-aba-plano-trabalho.md · SQL: docs/sql/2026-10-27-plano-trabalho.sql
+#
+# Atividades e cadastros moram na MESMA tabela (coluna tipo). As datas de
+# protótipo/go-live NÃO ficam na linha: vêm de plano_marcos — eram iguais nas
+# 97 linhas da Lista de Tarefas e foi assim que o go-live divergiu entre abas.
+PLANO_STATUS = {
+    "atividade": ("agendado", "em_andamento", "finalizado", "finalizado_restricoes", "cancelado"),
+    "cadastro": ("nao_iniciado", "em_cadastro", "entregue", "validado", "nao_aplicavel"),
+}
+PLANO_STATUS_INICIAL = {"atividade": "agendado", "cadastro": "nao_iniciado"}
+PLANO_FINALIZADOS = ("finalizado", "finalizado_restricoes")
+PLANO_ABERTOS = {"atividade": ("agendado", "em_andamento"),
+                 "cadastro": ("nao_iniciado", "em_cadastro")}
+PLANO_MARCOS = ("base_liberada", "treinamentos", "prototipo", "go_live")
+
+# De-para do texto da planilha. Chave normalizada por _norm_col.
+PLANO_STATUS_DE = {
+    "AGENDADO": "agendado", "PLANEJADO": "agendado", "": None,
+    "EMANDAMENTO": "em_andamento", "INICIADO": "em_andamento", "EMEXECUCAO": "em_andamento",
+    "FINALIZADO": "finalizado", "CONCLUIDO": "finalizado", "REALIZADO": "finalizado",
+    "FINALIZADOCOMRESTRICOES": "finalizado_restricoes",
+    "FINALIZADOCOMRESTRICAO": "finalizado_restricoes",
+    "CONCLUIDOCOMRESTRICOES": "finalizado_restricoes",
+    "CANCELADO": "cancelado",
+    "NAOINICIADO": "nao_iniciado", "EMCADASTRO": "em_cadastro", "ENTREGUE": "entregue",
+    "VALIDADO": "validado", "NAOAPLICAVEL": "nao_aplicavel", "NA": "nao_aplicavel",
+}
+
+# Cabeçalho das abas de módulo. "Produto da Atividade" (Financeiro/Faturamento)
+# e "Produto" (PCP/Fiscal) coexistem NO MESMO ARQUIVO da Açosul.
+PLANO_COLS_ATIV = {
+    "SEQUENCIA": "sequencia", "SEQ": "sequencia", "ETAPA": "etapa",
+    "TIPODEAGENDA": "tipo_agenda", "TIPOAGENDA": "tipo_agenda",
+    "ATIVIDADE": "atividade", "DATADE": "data_de", "DATAINICIO": "data_de",
+    "DATAATE": "data_ate", "DATAFIM": "data_ate",
+    "NROHORAS": "horas", "NHORAS": "horas", "HORAS": "horas",
+    "RESPONSAVEL": "lado", "USUARIOCONSULTOR": "usuario", "USUARIO": "usuario",
+    "CONSULTOR": "usuario", "PRODUTODAATIVIDADE": "produto", "PRODUTO": "produto",
+    "STATUS": "status", "OBSERVACOES": "observacoes", "OBSERVACAO": "observacoes",
+}
+PLANO_COLS_CAD = {
+    "MODULO": "modulo", "CADASTROENTIDADEBASICA": "cadastro", "CADASTRO": "cadastro",
+    "CONSULTOR": "consultor", "AMBIENTE": "ambiente",
+    "BASELIBERADAAPARTIR": "base_liberada", "BASELIBERADA": "base_liberada",
+    "DATALIMITETREINAMENTOS": "treinamentos", "DATALIMITEPROTOTIPO": "prototipo",
+    "DATALIMITEGOLIVE": "go_live", "STATUS": "status", "OBSERVACOES": "observacoes",
+}
+
+# Campos que a tela grava. 'proprio' = consultor nas atividades/cadastros dele.
+PLANO_CAMPOS = {
+    "modulo": "txt", "ordem": "int", "status": "txt", "responsavel_lado": "txt",
+    "responsavel_nome": "txt", "responsavel_email": "txt", "consultor_nome": "txt",
+    "consultor_email": "txt", "observacoes": "txt", "sequencia": "int", "etapa": "txt",
+    "tipo_agenda": "txt", "atividade": "txt", "data_de": "data", "data_ate": "data",
+    "horas": "num", "produto": "txt", "motivo_restricao": "txt", "rotina": "txt",
+    "entidade": "txt", "ambiente": "txt", "tabela": "txt",
+}
+PLANO_CAMPOS_PROPRIO = {"status", "observacoes", "motivo_restricao"}
+
+
+def _plano_txt(v):
+    if v is None:
+        return None
+    s = str(v).strip()
+    return s or None
+
+
+def _plano_num(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    try:
+        return float(str(v).replace(",", "."))
+    except ValueError:
+        return None
+
+
+def _plano_int(v):
+    n = _plano_num(v)
+    return int(n) if n is not None else None
+
+
+def _plano_status_de(v, tipo):
+    """Status da planilha → domínio. Vazio vira o inicial do tipo; texto
+    desconhecido também, mas volta como aviso (None no 2º elemento = ok)."""
+    chave = _norm_col(str(v or ""))
+    st = PLANO_STATUS_DE.get(chave)
+    if st is None:
+        return PLANO_STATUS_INICIAL[tipo], (None if not chave else f"status '{v}' desconhecido")
+    if st not in PLANO_STATUS[tipo]:
+        return PLANO_STATUS_INICIAL[tipo], f"status '{v}' não vale para {tipo}"
+    return st, None
+
+
+def _plano_modulo(nome_aba):
+    return (nome_aba or "").strip().replace("_", "/")
+
+
+def _plano_rotina(txt):
+    """'MATA030 - Clientes' → ('MATA030', 'Clientes'). Sem o traço, tudo é entidade."""
+    s = _plano_txt(txt) or ""
+    m = re.match(r"^\s*([A-Za-z]{2,6}\d{2,4}[A-Za-z]?)\s*[-–—:]\s*(.+)$", s)
+    if m:
+        return m.group(1).upper(), m.group(2).strip()
+    return None, s or None
+
+
+def _plano_cabecalho(rows, obrigatorias, limite=12):
+    """Índice da linha de cabeçalho: a primeira, entre as `limite` iniciais, que
+    tem todas as colunas obrigatórias (normalizadas)."""
+    for i, r in enumerate(rows[:limite]):
+        nomes = {_norm_col(str(c)) for c in r if c not in (None, "")}
+        if obrigatorias <= nomes:
+            return i
+    return None
+
+
+def _plano_mapa_cols(header, aliases):
+    mapa = {}
+    for j, c in enumerate(header):
+        k = aliases.get(_norm_col(str(c or "")))
+        if k and k not in mapa:
+            mapa[k] = j
+    return mapa
+
+
+def _plano_le_xlsx(dados):
+    """{nome_aba: [linhas]} — só valores, cortando as linhas vazias do fim
+    (as abas da planilha vêm formatadas até a linha 1000)."""
+    import openpyxl
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(dados), data_only=True, read_only=True)
+    except Exception as e:
+        raise ValueError(f"Não consegui abrir o .xlsx: {e}")
+    abas = {}
+    for ws in wb.worksheets:
+        linhas = []
+        for r in ws.iter_rows(max_col=40, values_only=True):
+            linhas.append(list(r))
+        while linhas and not any(c not in (None, "") for c in linhas[-1]):
+            linhas.pop()
+        abas[ws.title] = linhas
+    wb.close()
+    return abas
+
+
+def _plano_parse(abas, cliente_nome="", hoje=None):
+    """Planilha do CP → itens. Função pura (recebe {aba: linhas}) para o teste
+    rodar sem banco nem arquivo. Devolve atividades, cadastros, marcos sugeridos,
+    avisos e quantas linhas foram ignoradas."""
+    hoje = hoje or _cp_hoje()
+    atividades, cadastros, avisos = [], [], []
+    marcos_cont = {m: {} for m in PLANO_MARCOS}
+    ignoradas = 0
+    cli_norm = _norm_col(cliente_nome)
+
+    for aba, rows in abas.items():
+        # ── aba de cadastros (Lista de Tarefas) ─────────────────────────────
+        hi = _plano_cabecalho(rows, {"CADASTROENTIDADEBASICA"})
+        if hi is not None:
+            header = rows[hi]
+            mapa = _plano_mapa_cols(header, PLANO_COLS_CAD)
+            # Responsável do cliente: a linha de cima traz as EMPRESAS sobre as
+            # colunas (Açosul | Cortesul | Perfilados). Só a do cliente vale.
+            col_resp, empresas = None, []
+            if hi > 0:
+                empresas = [(j, str(c).strip()) for j, c in enumerate(rows[hi - 1])
+                            if c not in (None, "")]
+                for j, nome in empresas:
+                    n = _norm_col(nome)
+                    if n and cli_norm and (cli_norm.startswith(n) or n.startswith(cli_norm)):
+                        col_resp = j
+                        break
+            if col_resp is None:
+                col_resp = next((j for j, c in enumerate(header)
+                                 if _norm_col(str(c or "")).startswith("PESSOARESPONSAVEL")), None)
+            ordem_mod = {}
+            for r in rows[hi + 1:]:
+                g = lambda k: r[mapa[k]] if k in mapa and mapa[k] < len(r) else None
+                cad_txt = _plano_txt(g("cadastro"))
+                if not cad_txt:
+                    if any(c not in (None, "") for c in r):
+                        ignoradas += 1
+                    continue
+                modulo = _plano_txt(g("modulo")) or "(sem módulo)"
+                rotina, entidade = _plano_rotina(cad_txt)
+                st, av = _plano_status_de(g("status"), "cadastro")
+                if av:
+                    avisos.append(f"{aba} · {cad_txt}: {av}")
+                ordem_mod[modulo] = ordem_mod.get(modulo, 0) + 1
+                resp = _plano_txt(r[col_resp]) if col_resp is not None and col_resp < len(r) else None
+                # a MESMA rotina aparece em mais de uma linha (FISA170 tem cinco:
+                # perfis, regras de base, TTDs, cBenef, ajuste) — a chave leva a entidade
+                chave = f"C|{_norm_col(modulo)}|{rotina or ''}|{_norm_col(entidade)}"
+                cadastros.append({
+                    "tipo": "cadastro", "modulo": modulo, "ordem": ordem_mod[modulo],
+                    "status": st, "rotina": rotina, "entidade": entidade,
+                    "consultor_nome": _plano_txt(g("consultor")),
+                    "responsavel_lado": "cliente", "responsavel_nome": resp,
+                    "ambiente": _plano_txt(g("ambiente")),
+                    # Base liberada e limite de treinamento VARIAM POR MÓDULO
+                    # (Compras/Estoque/PCP/Fiscal vencem antes): são o período do
+                    # cadastro, não marco do projeto.
+                    "data_de": _proto_data(g("base_liberada")),
+                    "data_ate": _proto_data(g("treinamentos")),
+                    "observacoes": _plano_txt(g("observacoes")),
+                    "origem_chave": chave, "inconsistencia": None,
+                })
+                for m in PLANO_MARCOS:
+                    d = _proto_data(g(m))
+                    if d:
+                        marcos_cont[m][d] = marcos_cont[m].get(d, 0) + 1
+            continue
+
+        # ── abas de módulo (Plano de Trabalho) ──────────────────────────────
+        hi = _plano_cabecalho(rows, {"ETAPA", "ATIVIDADE", "STATUS"})
+        if hi is None:
+            avisos.append(f"Aba '{aba}' ignorada: sem cabeçalho de atividades nem de cadastros.")
+            continue
+        mapa = _plano_mapa_cols(rows[hi], PLANO_COLS_ATIV)
+        modulo = _plano_modulo(aba)
+        ordem = 0
+        vistos = set()
+        for r in rows[hi + 1:]:
+            g = lambda k: r[mapa[k]] if k in mapa and mapa[k] < len(r) else None
+            atividade = _plano_txt(g("atividade"))
+            if not atividade:
+                # linha de total (só horas) e linhas vazias
+                if any(c not in (None, "") for c in r):
+                    ignoradas += 1
+                continue
+            ordem += 1
+            seq = _plano_int(g("sequencia"))
+            st, av = _plano_status_de(g("status"), "atividade")
+            if av:
+                avisos.append(f"{modulo} · {atividade[:50]}: {av}")
+            lado_txt = _norm_col(str(g("lado") or ""))
+            lado = None if not lado_txt else ("totvs" if lado_txt == "TOTVS" else "cliente")
+            d_de, d_ate = _proto_data(g("data_de")), _proto_data(g("data_ate"))
+            inc = None
+            if st in PLANO_FINALIZADOS and d_de and d_de > hoje.isoformat():
+                inc = f"Marcada como finalizada, mas começa em {d_de[8:10]}/{d_de[5:7]}/{d_de[:4]}."
+            elif st == "finalizado_restricoes":
+                inc = "Finalizada com restrições sem motivo registrado."
+            chave_base = f"A|{_norm_col(modulo)}|{seq if seq is not None else 'o' + str(ordem)}"
+            chave = chave_base
+            n = 2
+            while chave in vistos:          # sequência repetida na mesma aba
+                chave = f"{chave_base}#{n}"
+                n += 1
+            vistos.add(chave)
+            atividades.append({
+                "tipo": "atividade", "modulo": modulo, "ordem": ordem, "sequencia": seq,
+                "etapa": _plano_txt(g("etapa")), "tipo_agenda": _plano_txt(g("tipo_agenda")),
+                "atividade": atividade, "data_de": d_de, "data_ate": d_ate,
+                "horas": _plano_num(g("horas")), "responsavel_lado": lado,
+                "responsavel_nome": _plano_txt(g("usuario")),
+                "produto": _plano_txt(g("produto")), "status": st,
+                "observacoes": _plano_txt(g("observacoes")),
+                "origem_chave": chave, "inconsistencia": inc,
+            })
+
+    # Módulo do cadastro casado com o da aba de atividades: a Lista de Tarefas
+    # diz "Estoque" e a aba se chama "Estoque_Custos". Só casa quando há UM
+    # candidato que começa com o nome do cadastro — senão fica como veio.
+    mods_ativ = {a["modulo"] for a in atividades}
+    for c in cadastros:
+        if c["modulo"] in mods_ativ:
+            continue
+        cand = [m for m in mods_ativ if _norm_col(m).startswith(_norm_col(c["modulo"]))]
+        if len(cand) == 1:
+            c["modulo"] = cand[0]
+            c["origem_chave"] = "C|" + _norm_col(cand[0]) + "|" + c["origem_chave"].split("|", 2)[2]
+
+    # Só vira marco a coluna com UMA data só (protótipo e go-live na Açosul).
+    # Coluna que varia por módulo já está no período de cada cadastro.
+    marcos = {m: next(iter(c)) for m, c in marcos_cont.items() if len(c) == 1}
+    if not atividades and not cadastros:
+        raise ValueError("Nenhuma atividade nem cadastro encontrado. A planilha precisa de "
+                         "abas com as colunas Etapa/Atividade/Status ou "
+                         "'Cadastro/Entidade Básica'.")
+    return {"atividades": atividades, "cadastros": cadastros, "marcos": marcos,
+            "avisos": avisos, "ignoradas": ignoradas}
+
+
+def _plano_sem_acento(s):
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", " ", s).strip()
+
+
+def _plano_resolve(nome, candidatos):
+    """Nome da planilha → e-mail do login. Todo token do nome tem de aparecer no
+    nome do login OU na parte local do e-mail ('Fabrício Andrade' casa com
+    'fabricio.sandrade'). Dois candidatos = não adivinha (devolve None, True)."""
+    toks = [t for t in _plano_sem_acento(nome).split() if len(t) >= 2]
+    if not toks:
+        return None, False
+    achados = []
+    for c in candidatos:
+        alvo = _plano_sem_acento(c.get("nome") or "") + " " + \
+            _plano_sem_acento((c.get("email") or "").split("@")[0])
+        if all(t in alvo for t in toks):
+            achados.append(c["email"])
+    achados = sorted(set(achados))
+    if len(achados) == 1:
+        return achados[0], False
+    return None, len(achados) > 1
+
+
+def _plano_atrasado(it, marcos, hoje):
+    """Derivado, nunca gravado: o item envelhece mesmo sem ninguém mexer."""
+    h = hoje.isoformat() if hasattr(hoje, "isoformat") else str(hoje)
+    if it.get("tipo") == "atividade":
+        return bool(it.get("data_ate") and str(it["data_ate"]) < h
+                    and it.get("status") in PLANO_ABERTOS["atividade"])
+    prazo = it.get("data_ate") or marcos.get("prototipo")
+    return bool(prazo and str(prazo) < h and it.get("status") in PLANO_ABERTOS["cadastro"])
+
+
+def _plano_coage(campo, v):
+    tipo = PLANO_CAMPOS[campo]
+    if tipo == "txt":
+        return _plano_txt(v)
+    if tipo == "int":
+        return _plano_int(v)
+    if tipo == "num":
+        return _plano_num(v)
+    return _proto_data(v)
+
+
+def _plano_valida(atual, mud, hoje):
+    """Regras de gravação da TELA. `atual` = linha do banco, `mud` = só os campos
+    que mudaram. Devolve (erro|None, reagendou). A importação NÃO passa por
+    aqui — ela traz a planilha fiel e só aponta a inconsistência."""
+    novo = {**atual, **mud}
+    tipo = novo["tipo"]
+    h = hoje.isoformat()
+    if "status" in mud and novo["status"] not in PLANO_STATUS[tipo]:
+        return f"Status '{novo['status']}' não vale para {tipo}.", False
+    for c in ("atividade",) if tipo == "atividade" else ():
+        if c in mud and not novo.get(c):
+            return "A atividade precisa de descrição.", False
+    if tipo == "cadastro" and ("rotina" in mud or "entidade" in mud) \
+            and not (novo.get("rotina") or novo.get("entidade")):
+        return "O cadastro precisa de rotina ou entidade.", False
+    if novo.get("data_de") and novo.get("data_ate") and str(novo["data_ate"]) < str(novo["data_de"]):
+        return "A data final é anterior à inicial.", False
+    if tipo == "atividade":
+        if ({"status", "data_de"} & set(mud)) and novo["status"] in PLANO_FINALIZADOS \
+                and novo.get("data_de") and str(novo["data_de"]) > h:
+            d = str(novo["data_de"])
+            return (f"Não dá para finalizar uma atividade que começa em "
+                    f"{d[8:10]}/{d[5:7]}/{d[:4]}."), False
+        if ({"status", "motivo_restricao"} & set(mud)) \
+                and novo["status"] == "finalizado_restricoes" and not novo.get("motivo_restricao"):
+            return "Finalizado com restrições exige o motivo (o que ficou pendente).", False
+    reag = (tipo == "atividade" and bool({"data_de", "data_ate"} & set(mud))
+            and atual.get("status") not in PLANO_FINALIZADOS + ("cancelado",)
+            and (atual.get("data_de") or atual.get("data_ate")) is not None)
+    return None, reag
+
+
+def _plano_serial(v):
+    if isinstance(v, (date, datetime)):
+        return v.isoformat()
+    if hasattr(v, "as_integer_ratio") and not isinstance(v, (int, float)):
+        return float(v)                       # Decimal
+    return v
+
+
+def _plano_row(r):
+    return {k: _plano_serial(v) for k, v in dict(r).items()}
+
+
+def plano_permissao(customer, email=None):
+    """'tudo' | 'proprio' | None. Os dois eixos de sempre: perfil no SISTEMA
+    (leitor nunca grava) × papel NESTE cliente. Decisão de 27/10/2026: o CP do
+    cliente edita TUDO, igual ao CP TOTVS; consultor só os itens dele."""
+    email = (email or effective_user() or "").lower()
+    if not email:
+        return None
+    perfil = perfil_do(email)
+    if perfil == "leitor":
+        return None
+    if eh_cp_totvs(customer, email):
+        return "tudo"
+    papel = papel_no_cliente(customer, email)
+    if papel == "cp_cliente":
+        return "tudo"
+    if papel == "consultor" and perfil in PERFIS_INTERNOS:
+        return "proprio"
+    return None
+
+
+def _plano_e_meu(it, email):
+    e = (email or "").lower()
+    return bool(e) and e in ((it.get("responsavel_email") or "").lower(),
+                             (it.get("consultor_email") or "").lower())
+
+
+def _plano_candidatos(customer):
+    """Quem pode ser responsável: os logins liberados no cliente."""
+    return q("""select lower(uc.email) as email, coalesce(u.nome, uc.email) as nome,
+                       uc.papel, u.perfil
+                  from cockpit.usuario_clientes uc
+                  left join cockpit.usuarios_login u on lower(u.email) = lower(uc.email)
+                 where uc.customer = %s and coalesce(u.ativo, true)
+                 order by 2""", (customer,))
+
+
+def _plano_marcos(customer, projeto):
+    return {r["marco"]: r["data"].isoformat() for r in
+            q("select marco, data from cockpit.plano_marcos where customer=%s and codigo_projeto=%s",
+              (customer, projeto))}
+
+
+def _plano_gate_escrita(customer):
+    if (r := require_auth()):
+        return r, None
+    if (d := deny_aba(customer, "plano")):
+        return d, None
+    if effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de alterar o plano."), None
+    perm = plano_permissao(customer)
+    if not perm:
+        return _err(403, "Você não tem permissão para alterar o plano deste projeto."), None
+    return None, perm
+
+
+@app.get("/api/plano/<customer>/<projeto>")
+def api_plano(customer, projeto):
+    if (r := require_auth()):
+        return r
+    if (d := deny_aba(customer, "plano")):
+        return d
+    hoje = _cp_hoje()
+    marcos = _plano_marcos(customer, projeto)
+    itens = [_plano_row(r) for r in q(
+        """select * from cockpit.plano_itens
+            where customer=%s and codigo_projeto=%s and ativo
+            order by tipo, modulo, ordem, sequencia nulls last, created_at""",
+        (customer, projeto))]
+    eu = (effective_user() or "").lower()
+    perm = plano_permissao(customer)
+    for it in itens:
+        it["atrasado"] = _plano_atrasado(it, marcos, hoje)
+        it["meu"] = _plano_e_meu(it, eu)
+        it["editavel"] = perm == "tudo" or (perm == "proprio" and it["meu"])
+    imp = q("""select arquivo, por, em, criados, alterados, ignorados
+                 from cockpit.plano_importacoes where customer=%s and codigo_projeto=%s
+                order by em desc limit 1""", (customer, projeto), one=True)
+    return _json({"ok": True, "hoje": hoje.isoformat(), "itens": itens, "marcos": marcos,
+                  "permissao": perm, "eu": eu,
+                  "papel": papel_no_cliente(customer),
+                  "candidatos": [dict(c) for c in _plano_candidatos(customer)],
+                  "ultima_importacao": _plano_row(imp) if imp else None,
+                  "status": PLANO_STATUS, "marcos_ids": PLANO_MARCOS})
+
+
+@app.post("/api/plano/<customer>/<projeto>/importar")
+def api_plano_importar(customer, projeto):
+    """Importa o xlsx do CP. Idempotente por origem_chave: reimportar atualiza o
+    que veio da planilha, não apaga o que foi criado na tela e não inativa nada
+    sozinho. Traz a planilha FIEL — o que violaria as regras vira inconsistência."""
+    err, perm = _plano_gate_escrita(customer)
+    if err:
+        return err
+    if perm != "tudo":
+        return _err(403, "Importar é do CP (TOTVS ou do cliente).")
+    arq = request.files.get("arquivo")
+    dados = arq.read() if arq else request.get_data()
+    nome = (arq.filename if arq else request.args.get("arquivo")) or None
+    if not dados:
+        return _err(400, "Envie o arquivo .xlsx do plano.")
+    cli = q("select nome from cockpit.clientes where customer=%s", (customer,), one=True)
+    if not cli:
+        return _err(404, "Cliente não cadastrado no Cockpit.")
+    try:
+        parsed = _plano_parse(_plano_le_xlsx(dados), cli["nome"] or "")
+    except ValueError as e:
+        return _err(422, str(e))
+
+    cands = [dict(c) for c in _plano_candidatos(customer)]
+    sem_login, ambiguos = set(), set()
+
+    def resolve(nome_):
+        if not nome_:
+            return None
+        em, amb = _plano_resolve(nome_, cands)
+        if not em:
+            (ambiguos if amb else sem_login).add(nome_)
+        return em
+
+    itens = parsed["atividades"] + parsed["cadastros"]
+    for it in itens:
+        it["responsavel_email"] = resolve(it.get("responsavel_nome"))
+        if it["tipo"] == "cadastro":
+            it["consultor_email"] = resolve(it.get("consultor_nome"))
+
+    por = current_user()
+    existentes = {r["origem_chave"]: dict(r) for r in q(
+        """select * from cockpit.plano_itens
+            where customer=%s and codigo_projeto=%s and origem_chave is not null""",
+        (customer, projeto))}
+    # A TELA VENCE: campo que alguém já mudou na tela não volta ao valor da
+    # planilha numa reimportação (senão reimportar o xlsx antigo desfaria o dia
+    # de trabalho do CP sem ninguém perceber). Fica contado em "preservados".
+    na_tela = {(str(r["item_id"]), r["campo"]) for r in q(
+        """select distinct h.item_id, h.campo from cockpit.plano_itens_hist h
+             join cockpit.plano_itens i on i.id = h.item_id
+            where i.customer=%s and i.codigo_projeto=%s and h.origem='tela'""",
+        (customer, projeto))}
+    criados = alterados = preservados = 0
+    vindos = set()
+    with db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conn.autocommit = False
+        for it in itens:
+            chave = it["origem_chave"]
+            vindos.add(chave)
+            campos = {k: v for k, v in it.items() if k in PLANO_CAMPOS or k == "inconsistencia"}
+            atual = existentes.get(chave)
+            if not atual:
+                cols = ["customer", "codigo_projeto", "tipo", "origem_chave",
+                        "created_by", "updated_by"] + list(campos)
+                vals = [customer, projeto, it["tipo"], chave, por, por] + list(campos.values())
+                cur.execute(f"""insert into cockpit.plano_itens ({', '.join(cols)})
+                                values ({', '.join(['%s'] * len(cols))}) returning id""", vals)
+                iid = cur.fetchone()["id"]
+                cur.execute("""insert into cockpit.plano_itens_hist (item_id, campo, de, para, por, origem)
+                               values (%s, 'criado', null, %s, %s, 'importacao')""",
+                            (iid, nome or "planilha", por))
+                criados += 1
+                continue
+            mud = {}
+            for k, v in campos.items():
+                # e-mail resolvido à mão na tela não é apagado por uma planilha
+                # que não sabe resolver o nome
+                if k in ("responsavel_email", "consultor_email") and v is None:
+                    continue
+                if (str(atual["id"]), k) in na_tela:
+                    if str(_plano_serial(atual.get(k)) if atual.get(k) is not None else "") != \
+                            str(v if v is not None else ""):
+                        preservados += 1
+                    continue
+                if str(_plano_serial(atual.get(k)) if atual.get(k) is not None else "") != \
+                        str(v if v is not None else ""):
+                    mud[k] = v
+            if "inconsistencia" in mud and any((str(atual["id"]), c) in na_tela
+                                               for c in ("status", "data_de", "motivo_restricao")):
+                mud.pop("inconsistencia")       # a tela já resolveu; não ressuscita o ⚠
+            if not mud and atual["ativo"]:
+                continue
+            sets = ", ".join(f"{k}=%s" for k in mud)
+            cur.execute(f"""update cockpit.plano_itens set {sets + ', ' if sets else ''}
+                            ativo=true, updated_by=%s, updated_at=now() where id=%s""",
+                        list(mud.values()) + [por, atual["id"]])
+            for k, v in mud.items():
+                if k == "inconsistencia":
+                    continue
+                cur.execute("""insert into cockpit.plano_itens_hist (item_id, campo, de, para, por, origem)
+                               values (%s, %s, %s, %s, %s, 'importacao')""",
+                            (atual["id"], k, _plano_txt(_plano_serial(atual.get(k))),
+                             _plano_txt(v), por))
+            alterados += 1
+        for m, d in parsed["marcos"].items():
+            # o marco OFICIAL não é sobrescrito: o go-live da Lista de Tarefas
+            # (17/12) não pode derrubar o que o CP definiu (virada 04/01/2027)
+            cur.execute("""insert into cockpit.plano_marcos (customer, codigo_projeto, marco, data, updated_by)
+                           values (%s, %s, %s, %s, %s) on conflict do nothing""",
+                        (customer, projeto, m, d, por))
+        ausentes = [{"chave": k, "descricao": v.get("atividade") or v.get("entidade") or v.get("rotina"),
+                     "modulo": v.get("modulo")}
+                    for k, v in existentes.items() if k not in vindos and v["ativo"]]
+        resumo = {"avisos": parsed["avisos"],
+                  "inconsistencias": [f"{i['modulo']} · {i.get('atividade') or i.get('entidade')}: "
+                                      f"{i['inconsistencia']}" for i in itens if i.get("inconsistencia")],
+                  "sem_login": sorted(sem_login), "ambiguos": sorted(ambiguos),
+                  "ausentes": ausentes, "marcos_planilha": parsed["marcos"],
+                  "preservados": preservados,
+                  "atividades": len(parsed["atividades"]), "cadastros": len(parsed["cadastros"])}
+        cur.execute("""insert into cockpit.plano_importacoes
+                         (customer, codigo_projeto, arquivo, por, criados, alterados, ignorados, resumo)
+                       values (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (customer, projeto, nome, por, criados, alterados, parsed["ignoradas"],
+                     json.dumps(resumo, ensure_ascii=False)))
+        conn.commit()
+    return _json({"ok": True, "criados": criados, "alterados": alterados,
+                  "ignorados": parsed["ignoradas"], **resumo})
+
+
+@app.post("/api/plano/<customer>/<projeto>/item")
+def api_plano_novo(customer, projeto):
+    err, perm = _plano_gate_escrita(customer)
+    if err:
+        return err
+    if perm != "tudo":
+        return _err(403, "Criar item é do CP (TOTVS ou do cliente).")
+    b = request.get_json(silent=True) or {}
+    tipo = b.get("tipo")
+    if tipo not in PLANO_STATUS:
+        return _err(400, "tipo deve ser 'atividade' ou 'cadastro'.")
+    campos = {k: _plano_coage(k, b[k]) for k in PLANO_CAMPOS if k in b}
+    campos.setdefault("status", PLANO_STATUS_INICIAL[tipo])
+    if not campos.get("modulo"):
+        return _err(400, "Informe o módulo.")
+    base = {"tipo": tipo, "status": campos["status"], "data_de": None, "data_ate": None}
+    erro, _ = _plano_valida(base, campos, _cp_hoje())
+    if not erro and tipo == "atividade" and not campos.get("atividade"):
+        erro = "A atividade precisa de descrição."
+    if not erro and tipo == "cadastro" and not (campos.get("rotina") or campos.get("entidade")):
+        erro = "O cadastro precisa de rotina ou entidade."
+    if erro:
+        return _err(422, erro)
+    if "ordem" not in campos:
+        mx = q("""select coalesce(max(ordem), 0) m from cockpit.plano_itens
+                   where customer=%s and codigo_projeto=%s and tipo=%s and modulo=%s""",
+               (customer, projeto, tipo, campos["modulo"]), one=True)
+        campos["ordem"] = (mx["m"] or 0) + 1
+    por = current_user()
+    cols = ["customer", "codigo_projeto", "tipo", "created_by", "updated_by"] + list(campos)
+    row = q(f"""insert into cockpit.plano_itens ({', '.join(cols)})
+                values ({', '.join(['%s'] * len(cols))}) returning *""",
+            [customer, projeto, tipo, por, por] + list(campos.values()), one=True)
+    execute("""insert into cockpit.plano_itens_hist (item_id, campo, de, para, por, origem)
+               values (%s, 'criado', null, 'tela', %s, 'tela')""", (row["id"], por))
+    return _json({"ok": True, "item": _plano_row(row)})
+
+
+def _plano_item_dono(iid):
+    """O customer vem do ITEM, nunca da URL: é ele que diz de quem é a linha."""
+    if not re.fullmatch(r"[0-9a-fA-F-]{36}", iid or ""):
+        return None
+    return q("select * from cockpit.plano_itens where id=%s", (iid,), one=True)
+
+
+@app.post("/api/plano/item/<iid>")
+def api_plano_item(iid):
+    it = _plano_item_dono(iid)
+    if not it:
+        return _err(404, "Item não encontrado.")
+    err, perm = _plano_gate_escrita(it["customer"])
+    if err:
+        return err
+    it = dict(it)
+    eu = (current_user() or "").lower()
+    b = request.get_json(silent=True) or {}
+    pedidos = {k: _plano_coage(k, v) for k, v in b.items() if k in PLANO_CAMPOS}
+    if perm == "proprio":
+        if not _plano_e_meu(it, eu):
+            return _err(403, "Você só altera as atividades e cadastros em que é o responsável.")
+        fora = set(pedidos) - PLANO_CAMPOS_PROPRIO
+        if fora:
+            return _err(403, "Consultor altera só status e observações. Campo(s) recusado(s): "
+                             + ", ".join(sorted(fora)))
+    mud = {k: v for k, v in pedidos.items()
+           if str(_plano_serial(it.get(k)) if it.get(k) is not None else "") != str(v if v is not None else "")}
+    if not mud:
+        return _json({"ok": True, "item": _plano_row(it), "sem_mudanca": True})
+    erro, reag = _plano_valida(it, mud, _cp_hoje())
+    if erro:
+        return _err(422, erro)
+    if reag:
+        mud["qtd_reagendamentos"] = (it.get("qtd_reagendamentos") or 0) + 1
+    # saiu pela tela passando nas regras → a inconsistência da importação acabou
+    mud["inconsistencia"] = None
+    with db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conn.autocommit = False
+        sets = ", ".join(f"{k}=%s" for k in mud)
+        cur.execute(f"""update cockpit.plano_itens set {sets}, updated_by=%s, updated_at=now()
+                        where id=%s returning *""", list(mud.values()) + [eu, iid])
+        novo = cur.fetchone()
+        for k, v in mud.items():
+            if k in ("inconsistencia", "qtd_reagendamentos"):
+                continue
+            cur.execute("""insert into cockpit.plano_itens_hist (item_id, campo, de, para, por, origem)
+                           values (%s, %s, %s, %s, %s, 'tela')""",
+                        (iid, k, _plano_txt(_plano_serial(it.get(k))), _plano_txt(_plano_serial(v)), eu))
+        conn.commit()
+    out = _plano_row(novo)
+    out["atrasado"] = _plano_atrasado(out, _plano_marcos(it["customer"], it["codigo_projeto"]), _cp_hoje())
+    out["meu"] = _plano_e_meu(out, eu)
+    out["editavel"] = perm == "tudo" or out["meu"]
+    return _json({"ok": True, "item": out, "reagendou": reag})
+
+
+@app.post("/api/plano/item/<iid>/inativar")
+def api_plano_inativar(iid):
+    it = _plano_item_dono(iid)
+    if not it:
+        return _err(404, "Item não encontrado.")
+    err, perm = _plano_gate_escrita(it["customer"])
+    if err:
+        return err
+    if perm != "tudo":
+        return _err(403, "Remover item é do CP (TOTVS ou do cliente).")
+    por = current_user()
+    execute("update cockpit.plano_itens set ativo=false, updated_by=%s, updated_at=now() where id=%s",
+            (por, iid))
+    execute("""insert into cockpit.plano_itens_hist (item_id, campo, de, para, por, origem)
+               values (%s, 'ativo', 'true', 'false', %s, 'tela')""", (iid, por))
+    return _json({"ok": True})
+
+
+@app.get("/api/plano/item/<iid>/hist")
+def api_plano_hist(iid):
+    if (r := require_auth()):
+        return r
+    it = _plano_item_dono(iid)
+    if not it:
+        return _err(404, "Item não encontrado.")
+    if (d := deny_aba(it["customer"], "plano")):
+        return d
+    rows = q("""select h.campo, h.de, h.para, h.por, h.origem, h.em,
+                       coalesce(u.nome, h.por) as por_nome
+                  from cockpit.plano_itens_hist h
+                  left join cockpit.usuarios_login u on lower(u.email) = lower(h.por)
+                 where h.item_id=%s order by h.em desc, h.id desc""", (iid,))
+    return _json({"ok": True, "hist": [_plano_row(r) for r in rows]})
+
+
+@app.post("/api/plano/<customer>/<projeto>/marcos")
+def api_plano_marcos(customer, projeto):
+    err, perm = _plano_gate_escrita(customer)
+    if err:
+        return err
+    if perm != "tudo":
+        return _err(403, "Marcos são do CP (TOTVS ou do cliente).")
+    b = (request.get_json(silent=True) or {}).get("marcos") or {}
+    por = current_user()
+    for m, v in b.items():
+        if m not in PLANO_MARCOS:
+            return _err(400, f"Marco desconhecido: {m}")
+        d = _proto_data(v)
+        if d:
+            execute("""insert into cockpit.plano_marcos (customer, codigo_projeto, marco, data, updated_by)
+                       values (%s, %s, %s, %s, %s)
+                       on conflict (customer, codigo_projeto, marco)
+                       do update set data=excluded.data, updated_by=excluded.updated_by, updated_at=now()""",
+                    (customer, projeto, m, d, por))
+        else:
+            execute("delete from cockpit.plano_marcos where customer=%s and codigo_projeto=%s and marco=%s",
+                    (customer, projeto, m))
+    return _json({"ok": True, "marcos": _plano_marcos(customer, projeto)})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────
