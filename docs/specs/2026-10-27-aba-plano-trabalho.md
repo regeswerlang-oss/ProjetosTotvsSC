@@ -49,6 +49,18 @@ Não usar "Tarefas": esse nome já é da aba de tickets do Tasks SC
   com `abas` nulo. O CP do cliente recebe `plano` explicitamente na liberação.
 - Front: `TABS` (depois de `crono`), `RAIL_ABA.plano = 'pl'`,
   `RELATORIOS.plano` com relatório curado (`relatorioPlanoHTML`).
+- **Tela de Acessos** (admin): a aba entra na lista "Abas liberadas" sozinha,
+  porque a lista vem do catálogo `ABAS`. Logo abaixo, uma nota
+  (`data-acs-nota-plano`) explica que no Plano **quem edita é o papel**: CP
+  TOTVS e CP do Cliente editam tudo e importam; Consultor só os itens dele;
+  usuário-chave e Leitor só consultam. É ali que se dá `cp_totvs` à Viviani e
+  `cp_cliente` + aba `plano` ao Lucas.
+
+> **Armadilha (cockpit-unico-tsc, pré-existente):** salvar os clientes de um
+> usuário no `/admin` do Cockpit Único (`salvarLiberacoes`) apaga e regrava as
+> linhas de `usuario_clientes` **sem** `abas` e `papel` — o usuário perde as
+> abas e o papel em todos os clientes. Gerencie Viviani/Lucas pela tela de
+> Acessos deste app.
 - Toda rota passa por `deny_aba(customer, "plano")`.
 - Trabalha sempre com o cliente do projeto aberto (`state.selected.cli`), como
   Cadastros e Transição. O `codigo_projeto` vai junto: um cliente pode ter dois
@@ -266,7 +278,8 @@ Rotas de item conferem o `customer` **dono** do item antes de qualquer coisa
 
 ## Antes de liberar para a Açosul (TFESR000)
 
-0. **Aplicar o SQL** `docs/sql/2026-10-27-plano-trabalho.sql` no Supabase.
+0. ~~Aplicar o SQL~~ — **aplicado em 27/10/2026** no Supabase (migration
+   `plano_trabalho`; RLS ligado, sem policy).
 1. **Viviani sem papel**: em `usuario_clientes` ela está liberada no
    TFESR000 com `papel` vazio — precisa virar `cp_totvs`, senão não importa.
 2. **Lucas sem login**: criar login perfil `cliente`, liberar TFESR000 com
@@ -304,11 +317,12 @@ já atrasadas em 27/10 e 52 cadastros com limite em 29/10.
   consultor próprio/alheio, usuário-chave, leitor, sem aba), simulação 409,
   regras na rota, criar/inativar, histórico. **Nunca aponte para o Supabase**:
   o teste recria o schema `cockpit` no banco que recebe.
-- `docs/testes/plano-front.js` — **39 asserções**, Playwright com `/api/*`
+- `docs/testes/plano-front.js` — **43 asserções**, Playwright com `/api/*`
   interceptado: subaba inicial por papel, grade recolhida sem DOM, selos,
   etapas na ordem, status na linha (payload só com o status), restrição sem
   motivo abrindo a gaveta, histórico, Esc, filtros (atrasados, responsável pelo
   login, busca sem acento), Painel (KPIs, restrição, matriz → filtro, carga
   agrupada pelo login), relatório, visão do cliente (só o lado dele, "vence em
-  2d", importar visível) e do consultor (só as linhas dele, gaveta travada),
-  zero erro de JS.
+  2d", importar visível), do consultor (só as linhas dele, gaveta travada) e
+  a tela de Acessos (aba listada, nota de papéis, liberação existente), zero
+  erro de JS.

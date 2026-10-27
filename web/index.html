@@ -9461,6 +9461,9 @@ function pintaAcessos() {
           </div>
           ${abasVis.some(a => a.sensivel) ? '<p class="text-[11px] text-amber-700 mt-1">⚠ aba interna: Consumo mostra margem/valoração, Integrações mostra matrícula e nome de funcionário, Estrutura/Compara/Auditoria são de configuração.</p>' : ''}
           <p class="text-[11px] text-slate-400 mt-1">Sem nenhuma marcada, o usuário do cliente fica liberado no cliente e sem aba — de propósito, não por engano.</p>
+          ${abasVis.some(a => a.id === 'plano') ? `<p data-acs-nota-plano class="text-[11px] text-slate-600 mt-1 bg-sky-50 border border-sky-100 rounded px-2 py-1">
+            <b>Plano de Trabalho</b> — quem edita é o <b>papel</b> abaixo: <b>CP TOTVS</b> e <b>CP do Cliente</b> editam tudo e importam a planilha;
+            <b>Consultor TOTVS</b> atualiza status e observações só dos itens dele; usuário-chave e perfil Leitor só consultam.</p>` : ''}
         </div>
         <div class="border-t border-slate-100 pt-2">
           <label class="block text-xs text-slate-500 mb-1">Papel no cliente

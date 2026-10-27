@@ -227,6 +227,40 @@ async function abre(b, { perm, papel, eu, modo = 'interno', abas = null }) {
      !(await p.$eval('.pl-gaveta [data-c="observacoes"]', e => e.disabled)), 'gaveta: descrição travada, observação livre');
   ok(!(await p.$('.pl-gaveta [data-remove]')), 'consultor não remove');
   ok(erros.length === 0, 'zero erro de JS (consultor): ' + erros.join(' | '));
+  await p.context().close();
+
+  // ── gestor de acessos (admin): a aba aparece para liberar ──────────────
+  {
+    const ctx = await b.newContext({ viewport: { width: 1440, height: 1000 } });
+    const q = await ctx.newPage();
+    const errs = [];
+    q.on('pageerror', e => errs.push(e.message));
+    await q.route('**/api/**', r => r.fulfill({ json: { ok: true } }));
+    await q.route('**/api/me', r => r.fulfill({ json: {
+      ok: true, email: 'adm@totvs.com.br', nome: 'Admin', is_admin: true, view_as: null,
+      efetivo: 'adm@totvs.com.br', perfil: 'admin', interno: true, modo: 'interno', abas_catalogo: [], abas: null } }));
+    await q.route('**/api/projetos*', r => r.fulfill({ json: { ok: true, projetos: [PROJETO], sincronizado_em: HOJE } }));
+    await q.route('**/api/acessos', r => r.fulfill({ json: {
+      ok: true, usuarios: [{ email: 'lucas@clientex.com.br', nome: 'Lucas', perfil: 'cliente', is_admin: false, ativo: true }],
+      liberacoes: [{ email: 'lucas@clientex.com.br', customer: CLI, abas: ['plano'], papel: 'cp_cliente', cliente_nome: 'CLIENTE X' }],
+      clientes: [{ customer: CLI, nome: 'CLIENTE X' }],
+      abas: [{ id: 'resumo', label: 'Resumo', cliente: true }, { id: 'crono', label: 'Cronograma', cliente: true },
+             { id: 'plano', label: 'Plano de Trabalho', cliente: true },
+             { id: 'consumo', label: 'Consumo', cliente: true, sensivel: true }],
+      perfis: ['admin', 'comum', 'consultoria', 'cliente', 'leitor'], abas_padrao_cliente: ['cadastros'],
+      papeis: [{ id: 'cp_totvs', label: 'CP TOTVS', totvs: true }, { id: 'consultor', label: 'Consultor TOTVS', totvs: true },
+               { id: 'cp_cliente', label: 'CP do Cliente', totvs: false }, { id: 'usuario_chave', label: 'Usuário-chave', totvs: false }],
+      modulos_cliente: {}, modulos_liberados: [] } }));
+    await q.goto(BASE);
+    await q.waitForSelector('#btn-acessos:not(.hidden)');
+    await q.click('#btn-acessos');
+    await q.waitForSelector('input[data-aba="plano"]');
+    ok((await q.textContent('label:has(input[data-aba="plano"])')).includes('Plano de Trabalho'), 'Acessos lista a aba Plano de Trabalho');
+    ok(await q.isVisible('[data-acs-nota-plano]'), 'Acessos explica quem edita o plano por papel');
+    ok((await q.textContent('#acs-corpo')).includes('Plano de Trabalho'), 'liberação existente mostra a aba');
+    ok(errs.length === 0, 'zero erro de JS (acessos): ' + errs.join(' | '));
+    await ctx.close();
+  }
 
   await b.close();
   console.log(`plano-front: ${OK} asserções OK`);
