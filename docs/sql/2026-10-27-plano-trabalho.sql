@@ -15,6 +15,8 @@ create table if not exists cockpit.plano_itens (
   responsavel_lado    text check (responsavel_lado in ('totvs','cliente')),
   responsavel_nome    text,                 -- como veio da planilha
   responsavel_email   text,                 -- login resolvido (null = sem login)
+  consultor_nome      text,                 -- cadastro: consultor TOTVS que valida
+  consultor_email     text,
   observacoes         text,                 -- texto livre, importado como está
   -- atividade
   sequencia           integer,
@@ -28,10 +30,10 @@ create table if not exists cockpit.plano_itens (
   motivo_restricao    text,
   qtd_reagendamentos  integer not null default 0,
   -- cadastro
+  -- cadastro: data_de = base liberada, data_ate = limite (antes do treinamento)
   rotina              text,                 -- ex.: MATA030
   entidade            text,                 -- ex.: Clientes
   ambiente            text,
-  base_liberada_em    date,
   tabela              text,                 -- alias Protheus (fase 2: liga ao monitcad)
   -- controle
   inconsistencia      text,                 -- apontada na importação, não barra
@@ -56,6 +58,8 @@ create index if not exists plano_itens_proj
   on cockpit.plano_itens(customer, codigo_projeto, tipo, modulo, ordem);
 create index if not exists plano_itens_resp
   on cockpit.plano_itens(lower(responsavel_email));
+create index if not exists plano_itens_cons
+  on cockpit.plano_itens(lower(consultor_email));
 create unique index if not exists plano_itens_origem
   on cockpit.plano_itens(customer, codigo_projeto, origem_chave)
   where origem_chave is not null;

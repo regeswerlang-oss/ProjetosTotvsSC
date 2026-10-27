@@ -44,9 +44,11 @@ Aba **`plano`** — rótulo **"Plano de Trabalho"** — logo depois de Cronogram
 Não usar "Tarefas": esse nome já é da aba de tickets do Tasks SC
 (`2026-08-26-aba-tarefas.md`).
 
-- Entra em `ABAS` com `"cliente": True` (sem `sensivel`) e em
-  `ABAS_PADRAO_CLIENTE` — o login do cliente que tem papel `cp_cliente` abre
-  direto nela.
+- Entra em `ABAS` com `"cliente": True` (sem `sensivel`). **Não** entrou em
+  `ABAS_PADRAO_CLIENTE`: isso mostraria a aba (vazia) a todo login de cliente
+  com `abas` nulo. O CP do cliente recebe `plano` explicitamente na liberação.
+- Front: `TABS` (depois de `crono`), `RAIL_ABA.plano = 'pl'`,
+  `RELATORIOS.plano` com relatório curado (`relatorioPlanoHTML`).
 - Toda rota passa por `deny_aba(customer, "plano")`.
 - Trabalha sempre com o cliente do projeto aberto (`state.selected.cli`), como
   Cadastros e Transição. O `codigo_projeto` vai junto: um cliente pode ter dois
@@ -67,27 +69,34 @@ backend (`DATABASE_URL`) lê e grava.
 ### `plano_itens` — campos
 
 Comuns: `customer`, `codigo_projeto`, `tipo` (`atividade`|`cadastro`),
-`modulo`, `ordem`, `status`, `responsavel_lado` (`totvs`|`cliente`),
-`responsavel_nome` (texto da planilha), `responsavel_email` (login resolvido),
-`observacoes`, `ativo`, `origem_chave` (para reimportar sem duplicar),
-`created_*`/`updated_*`.
+`modulo`, `ordem`, `status`, `data_de`, `data_ate`, `responsavel_lado`
+(`totvs`|`cliente`), `responsavel_nome` (texto da planilha),
+`responsavel_email` (login resolvido), `observacoes`, `inconsistencia`,
+`ativo`, `origem_chave` (para reimportar sem duplicar), `created_*`/`updated_*`.
 
 Só de **atividade**: `sequencia`, `etapa`, `tipo_agenda`
-(`Individual`|`Coletiva`), `atividade`, `data_de`, `data_ate`, `horas`,
-`produto` (MIT entregue), `motivo_restricao`, `qtd_reagendamentos`.
+(`Individual`|`Coletiva`), `atividade`, `horas`, `produto` (MIT entregue),
+`motivo_restricao`, `qtd_reagendamentos`.
 
 Só de **cadastro**: `rotina` (ex.: `MATA030`), `entidade` (ex.: `Clientes`),
-`ambiente`, `base_liberada_em`, `tabela` (alias Protheus, opcional — ver fase 2).
-Os prazos (treinamento/protótipo/go-live) **não** ficam na linha: vêm de
-`plano_marcos` — eram iguais nas 97 linhas da planilha e foi assim que o go-live
-divergiu entre as abas.
+`consultor_nome`/`consultor_email` (o consultor TOTVS que valida — o
+responsável é a pessoa do cliente que cadastra), `ambiente`, `tabela` (alias
+Protheus, opcional — fase 2). No cadastro, `data_de` = **base liberada** e
+`data_ate` = **data limite** (antes do treinamento do módulo).
+
+> **Por que o prazo do cadastro fica na linha.** Na Lista de Tarefas da Açosul a
+> base liberada e o limite de treinamento **variam por módulo** (Compras,
+> Estoque, PCP e Fiscal vencem em 29/10; Ativo Fixo e Contabilidade em 12/11;
+> Faturamento e Financeiro em 20/11). Só protótipo e go-live são iguais em todas
+> as linhas — esses viram marco. Regra do parser: **coluna com uma data só vira
+> marco; coluna que varia fica no período de cada cadastro.**
 
 ## Status
 
 | Tipo | Status gravados | Derivado na leitura |
 |---|---|---|
 | atividade | `agendado`, `em_andamento`, `finalizado`, `finalizado_restricoes`, `cancelado` | **`atrasada`** = `data_ate < hoje` e não finalizada/cancelada |
-| cadastro | `nao_iniciado`, `em_cadastro`, `entregue`, `validado`, `nao_aplicavel` | **`atrasado`** = prazo do marco passou e não `entregue`/`validado`/`nao_aplicavel` |
+| cadastro | `nao_iniciado`, `em_cadastro`, `entregue`, `validado`, `nao_aplicavel` | **`atrasado`** = `data_ate` (ou, sem ela, o marco do protótipo) passou e ainda `nao_iniciado`/`em_cadastro` |
 
 De-para da planilha (normalizado como `_norm_col`): `AGENDADO` → `agendado`;
 `FINALIZADO` → `finalizado`; `FINALIZADOCOMRESTRICOES` → `finalizado_restricoes`;
@@ -98,13 +107,17 @@ vazio → `agendado` (atividade) / `nao_iniciado` (cadastro).
 ### Regras de gravação (backend — a tela só reflete)
 
 1. **Não finaliza atividade futura**: `finalizado`/`finalizado_restricoes`
-   exige `data_de <= hoje`. Erro 422 com a data.
+   exige `data_de <= hoje`. Erro 422 com a data. As regras só valem para o que
+   **mudou** no pedido: um item que veio inconsistente da planilha aceita editar
+   a observação sem ser barrado.
 2. **`finalizado_restricoes` exige `motivo_restricao`** não vazio; o item fica
    em "Restrições em aberto" até virar `finalizado`.
 3. **Reagendamento conta**: mudar `data_de`/`data_ate` de item não finalizado
    soma 1 em `qtd_reagendamentos` e grava o par de datas no histórico.
 4. **Todo update gera uma linha por campo alterado em `plano_itens_hist`**,
-   na mesma transação.
+   na mesma transação. Gravar pela tela passando nas regras limpa a
+   `inconsistencia` vinda da importação.
+5. **"Ver como" não grava** (409), como no resto do app.
 
 ## Permissões
 
@@ -115,10 +128,11 @@ Os dois eixos de sempre (`perfil` no sistema × `papel` no cliente — ver
 |---|---|---|
 | `eh_cp_totvs(customer)` (Viviani; admin) | tudo | **tudo**: campos, novo item, inativar, marcos, importar |
 | `papel_no_cliente == "cp_cliente"` (Lucas) | tudo | **tudo**, igual à Viviani (decisão 4) — inclusive marcos e importar |
-| `papel_no_cliente == "consultor"` | tudo | **só `status`, `observacoes` e `motivo_restricao`** dos itens com `responsavel_email` = ele |
-| demais com a aba liberada (`usuario_chave`, leitor…) | tudo | nada |
+| `papel_no_cliente == "consultor"` (perfil interno) | tudo | **só `status`, `observacoes` e `motivo_restricao`** dos itens em que é `responsavel_email` **ou** `consultor_email` |
+| perfil `leitor` (mesmo com papel de CP) | tudo | nada |
+| demais com a aba liberada (`usuario_chave`…) | tudo | nada |
 
-Helper novo `pode_editar_plano(customer, item=None)` devolve
+Helper `plano_permissao(customer)` devolve
 `"tudo" | "proprio" | None`; o payload de leitura manda o resultado para a
 tela esconder o que não pode (o backend confere de novo em cada gravação).
 
@@ -131,13 +145,16 @@ tela esconder o que não pode (o backend confere de novo em cada gravação).
 
 A planilha traz só o primeiro nome (`Elayne`, `Maurício`, `Lucas`) ou nome e
 sobrenome (`Maurício Vitto`, `Fabrício Andrade`, `Murilo Mota`). Na importação,
-`_plano_resolve_email()` casa com os logins **liberados no cliente**
-(`usuario_clientes`), pelo mesmo critério do Painel CP: todo token do nome da
-planilha tem de estar em `usuarios_login.nome` (ou na parte local do e-mail),
-sem acento e sem caixa. **Dois candidatos = não adivinha**: fica sem e-mail e
-entra na lista "responsáveis sem login" do resumo da importação, para o CP
-escolher na tela. Lado: `Responsável = Totvs` → `totvs`; nome do cliente →
-`cliente`.
+`_plano_resolve()` casa com os logins **liberados no cliente**
+(`usuario_clientes`): todo token do nome da planilha tem de **estar contido** no
+nome do login ou na parte local do e-mail, sem acento e sem caixa — contido, e
+não igual, porque o login da Açosul é `fabricio.sandrade` e a planilha diz
+"Fabrício Andrade". **Dois candidatos = não adivinha** (`ambiguos` no resumo);
+nenhum = `sem_login`. O CP escolhe o login na gaveta do item. Lado:
+`Responsável = Totvs` → `totvs`; qualquer outro texto → `cliente`.
+
+Na tela, pessoas são agrupadas **pelo login** (`plQuem()`): "Maurício" e
+"Maurício Vitto" são a mesma linha na carga semanal e no filtro.
 
 ## Importação do xlsx
 
@@ -145,18 +162,22 @@ escolher na tela. Lado: `Responsável = Totvs` → `totvs`; nome do cliente →
 
 1. **Abas de módulo** = toda aba cujo cabeçalho tenha `Etapa`, `Atividade` e
    `Status` (o nome da aba vira `modulo`; `Estoque_Custos` → `Estoque/Custos`).
+   O módulo do cadastro ("Estoque") é casado com o da aba ("Estoque/Custos")
+   quando há **um** candidato que começa com ele.
    Cabeçalho tolerante a acento/caixa (`Produto da Atividade` e `Produto` são o
    mesmo campo — as duas grafias existem no arquivo da Açosul).
 2. **Aba de cadastros** = a que tiver `Cadastro/Entidade Básica`. A linha 1
    traz as empresas (Açosul, Cortesul, Perfilados) sobre a coluna de
    responsável; **só a coluna da empresa do projeto é lida** (o escopo da Açosul
    é só Açosul desde 01/07/2026). `MATA030 - Clientes` → `rotina` + `entidade`.
-   As datas da linha alimentam `plano_marcos` **apenas se o marco ainda não
-   existir** — o go-live da planilha (17/12) não sobrescreve o oficial.
+   Colunas de data **uniformes** alimentam `plano_marcos` **apenas se o marco
+   ainda não existir** — o go-live da planilha (17/12) não sobrescreve o
+   oficial (virada 04/01/2027). Por isso: **grave os marcos antes de importar.**
 3. **Linhas sem `Atividade`/`Cadastro` são ignoradas** (as abas têm linha de
    total e linhas vazias até a 1000).
-4. **Idempotente**: `origem_chave` = `modulo|sequencia` (atividade) ou
-   `modulo|rotina` (cadastro). Reimportar atualiza o que veio e **não apaga** o
+4. **Idempotente**: `origem_chave` = `A|modulo|sequencia` (atividade) ou
+   `C|modulo|rotina|entidade` (cadastro — a mesma rotina aparece em várias
+   linhas: FISA170 tem cinco). Reimportar atualiza o que veio e **não apaga** o
    que foi criado na tela; item que sumiu da planilha só é listado no resumo
    ("presentes no dashboard e ausentes na planilha"), nunca inativado sozinho.
 5. **Importa como está, mas aponta inconsistência.** As regras de status
@@ -164,41 +185,57 @@ escolher na tela. Lado: `Responsável = Totvs` → `totvs`; nome do cliente →
    as violaria vira `inconsistencias[]` no resumo e um selo ⚠ na linha. No
    arquivo de 16/10 já existe uma: *Faturamento — "Treinamento de processos e
    movimentos" 25–26/11/2026 marcado Finalizado*.
-6. Cada importação grava `plano_importacoes` e uma linha de histórico
-   `origem = importacao` por item criado/alterado.
+6. **A tela vence.** Campo que já foi alterado pela tela (há linha de
+   histórico `origem = tela`) **não volta** ao valor da planilha numa
+   reimportação — senão reimportar o xlsx antigo desfaria o trabalho do dia sem
+   ninguém perceber. Contado em `preservados` no resumo. Campos nunca tocados na
+   tela acompanham a planilha.
+7. Cada importação grava `plano_importacoes` e o histórico `origem =
+   importacao` (uma linha "criado" por item novo; uma por campo alterado).
 
-## Tela — três subabas (`SUBABAS.plano`)
+## Tela — três subabas (`pl.sub`)
 
 ### Grade (padrão para interno)
 
-- Um `<details>` por módulo, na ordem da planilha, com `x/y finalizadas` e
-  horas no cabeçalho; dentro, atividades agrupadas por etapa e, ao final, o
-  bloco **Cadastros** do módulo.
-- Edição na linha (status, datas, responsável, observações) conforme
-  `pode_editar_plano`; salvar por linha, sem botão global.
-- Filtros: etapa, status (com "atrasadas"), lado (TOTVS/cliente),
-  responsável, período, tipo (atividade/cadastro), busca.
-- Selos: atrasada, ⚠ inconsistência, `↻ N` reagendamentos, restrição.
-- Clique na linha → drawer com observações e **histórico** (`/hist`).
-- Botões: ＋ Atividade, ＋ Cadastro, Importar xlsx, Exportar.
+- Um `<details>` por módulo (alfabético), com `x/y atividades finalizadas`,
+  horas, `x/y cadastros` e selos de atrasado/a revisar no cabeçalho; dentro,
+  atividades agrupadas por etapa na ordem do método e, ao final, o bloco
+  **Cadastros** do módulo.
+- **Status na linha** (select) para quem pode editar o item; o resto na gaveta.
+  Escolher "Finalizado c/ restrições" sem motivo **abre a gaveta** pedindo o
+  motivo em vez de gravar e tomar 422.
+- Filtros: módulo, etapa, status (em aberto / atrasados / ⚠ a revisar / cada
+  status), lado, responsável (pelo login), tipo, busca sem acento.
+- Selos: atrasado (barra vermelha à esquerda), ⚠ revisar, `↻ N`, restrição.
+- Clique na descrição → **gaveta** com todos os campos (travados conforme a
+  permissão), login do responsável/consultor, observações e **histórico**.
+- Rail: ⬆ Importar planilha, ＋ Atividade, ＋ Cadastro — só para `tudo`
+  (atributo `data-pl-tudo`, **não** `data-interno`: o CP do cliente usa).
 - Blocos recolhidos **não geram DOM** (corpo como função, como em Compara e
   Painel CP) — 186 linhas abertas de uma vez travam a aba.
 
 ### Painel (visão da Viviani)
 
-- **KPIs**: atividades, finalizadas (%), atrasadas, restrições em aberto,
-  próximas 7 dias, cadastros validados/total, horas planejadas.
-- **Marcos**: contagem regressiva para protótipo e go-live, com quantos itens
-  ainda precisam fechar antes de cada um.
-- **Matriz módulo × etapa**: % finalizado por célula, cor por atraso.
-- **Carga semanal por consultor**: horas das atividades agendadas por semana
-  (sobreposição de datas do mesmo consultor em destaque).
-- **Restrições em aberto** e **atrasadas**, ordenadas pela mais antiga.
+- **Marcos** (faixa comum às três subabas): data e contagem regressiva;
+  ✎ marcos para quem edita tudo.
+- **KPIs**: atividades (+ horas), finalizadas %, atrasados (quantos do lado do
+  cliente), restrições abertas, próximos 7 dias, cadastros entregues/total, a
+  revisar.
+- **Matriz módulo × etapa**: finalizadas/total por célula; vermelho se tem
+  atrasado. **Clique na célula filtra a Grade.**
+- **Carga semanal por responsável**: horas em aberto distribuídas nos dias
+  úteis do período, por semana; vermelho acima de 40 h.
+- **Atrasados** (mais antigo primeiro) e **restrições em aberto** com o motivo.
 
-### Minhas pendências (visão do Lucas — padrão para `cp_cliente`)
+### Pendências (padrão para `cp_cliente`, perfil cliente e consultor)
 
-- **O que é da Açosul**: itens com `responsavel_lado = cliente` não
-  finalizados, ordenados por prazo (inclui os 97 cadastros).
+Rótulo "Minhas pendências" para o CP do cliente e o consultor; "Pendências
+<cliente>" para o CP TOTVS. Para o consultor (`proprio`) a lista é **dos itens
+dele**; para os demais, do lado do cliente.
+
+- **O que está com o cliente**: atividades em aberto ordenadas (atrasadas
+  primeiro, depois prazo) e **cadastros a entregar** por módulo, com o limite
+  e o selo "vence em Nd" a 7 dias ou menos.
 - **Próximas agendas (14 dias)**: para mobilizar os usuários-chave.
 - **Aguardando aprovação**: itens com `produto` (MIT) e status
   `finalizado_restricoes` ou observação contendo "aguardando aprovação"
@@ -208,15 +245,15 @@ escolher na tela. Lado: `Responsável = Totvs` → `totvs`; nome do cliente →
 ## Exportar HTML e e-mail
 
 Mesmo padrão das outras abas (`2026-08-25-exportar-html-e-gmail-em-todas-as-abas.md`):
-`EXPORTS.plano` → HTML one-page do status do plano (marcos, KPIs, atrasadas,
-pendências do cliente, próximas 2 semanas) no layout TOTVS, e rascunho de e-mail
-HTML para o CP do cliente.
+`RELATORIOS.plano.curado = relatorioPlanoHTML` → HTML one-page com estilo
+inline (serve ao Gmail): marcos, KPIs, atrasados, pendências do cliente e
+próximas 2 semanas, na moldura padrão (`molduraRelatorio`).
 
 ## Rotas
 
 | Rota | Faz |
 |---|---|
-| `GET /api/plano/<customer>/<projeto>` | itens + marcos + KPIs + `permissao` + responsáveis possíveis |
+| `GET /api/plano/<customer>/<projeto>` | itens (com `atrasado`, `meu`, `editavel`) + marcos + `permissao` + `papel` + candidatos (logins liberados) + última importação |
 | `POST /api/plano/<customer>/<projeto>/importar` | importa o xlsx (ver acima) e devolve o resumo |
 | `POST /api/plano/<customer>/<projeto>/item` | cria item |
 | `POST /api/plano/item/<id>` | altera campos (regras + histórico) |
@@ -229,15 +266,22 @@ Rotas de item conferem o `customer` **dono** do item antes de qualquer coisa
 
 ## Antes de liberar para a Açosul (TFESR000)
 
+0. **Aplicar o SQL** `docs/sql/2026-10-27-plano-trabalho.sql` no Supabase.
 1. **Viviani sem papel**: em `usuario_clientes` ela está liberada no
    TFESR000 com `papel` vazio — precisa virar `cp_totvs`, senão não importa.
 2. **Lucas sem login**: criar login perfil `cliente`, liberar TFESR000 com
    papel `cp_cliente` e abas `plano` (+ as que a Viviani quiser mostrar).
 3. **Consultores**: já liberados com papel `consultor` (Elayne, Fabrício,
    Maurício, Murilo) — incluir `plano` nas abas deles.
-4. **Protótipo diverge**: a Lista de Tarefas diz 27/11; o Plano de Trabalho
-   agenda o 1º protótipo integrado de 02 a 04/12. Confirmar o marco com a
-   Viviani antes de importar.
+4. **Gravar os marcos antes de importar** (go-live = 04/01/2027).
+   **Protótipo diverge**: a Lista de Tarefas diz 27/11; o Plano de Trabalho
+   agenda o 1º protótipo integrado de 02 a 04/12. Confirmar com a Viviani.
+
+Ensaio com o arquivo real (16/10), em banco local: 186 itens (89 atividades +
+97 cadastros), 8 linhas ignoradas (totais), 8 módulos, todos os nomes
+resolvidos menos "Lucas" (sem login ainda), 2 inconsistências (Financeiro —
+restrição sem motivo; Faturamento — finalizado com data futura), 14 atividades
+já atrasadas em 27/10 e 52 cadastros com limite em 29/10.
 
 ## Fases
 
@@ -250,14 +294,21 @@ Rotas de item conferem o `customer` **dono** do item antes de qualquer coisa
 
 ## Testes
 
-- `docs/testes/plano-back.py` — funções puras: de-para de status, cabeçalho
-  tolerante (`Produto`/`Produto da Atividade`), linhas de total ignoradas,
-  `origem_chave` idempotente, coluna da empresa certa na Lista de Tarefas,
-  marco existente não sobrescrito, inconsistência de finalizado futuro
-  apontada (e não barrada), resolução nome → login (único, ambíguo, sem login),
-  regras 1–3 de gravação, matriz de permissões (cp_totvs, cp_cliente,
-  consultor próprio/alheio, usuario_chave) e `hoje` em UTC‑3.
-- `docs/testes/plano-front.js` — Playwright com `/api/*` interceptado (padrão
-  `**/api/plano/*`): aba aparece e abre na subaba certa por papel, grade monta
-  recolhida, filtros, edição na linha respeitando a permissão, drawer de
-  histórico, KPIs/marcos do Painel, Minhas pendências, export, zero erro de JS.
+- `docs/testes/plano-back.py` — **83 asserções**. Sempre: funções puras com
+  planilha **sintética** (repo público — nada de dado de cliente): de-para,
+  cabeçalho tolerante, total ignorado, empresa certa, rotina repetida, módulo
+  casado, regra do marco uniforme, inconsistências, nome → login (contido,
+  ambíguo, sem login), regras 1–3, atraso, UTC‑3. Com
+  `PLANO_TEST_DB=<Postgres descartável>`: as rotas pelo test client —
+  importação, idempotência, **a tela vence**, permissões (cp_totvs, cp_cliente,
+  consultor próprio/alheio, usuário-chave, leitor, sem aba), simulação 409,
+  regras na rota, criar/inativar, histórico. **Nunca aponte para o Supabase**:
+  o teste recria o schema `cockpit` no banco que recebe.
+- `docs/testes/plano-front.js` — **39 asserções**, Playwright com `/api/*`
+  interceptado: subaba inicial por papel, grade recolhida sem DOM, selos,
+  etapas na ordem, status na linha (payload só com o status), restrição sem
+  motivo abrindo a gaveta, histórico, Esc, filtros (atrasados, responsável pelo
+  login, busca sem acento), Painel (KPIs, restrição, matriz → filtro, carga
+  agrupada pelo login), relatório, visão do cliente (só o lado dele, "vence em
+  2d", importar visível) e do consultor (só as linhas dele, gaveta travada),
+  zero erro de JS.
