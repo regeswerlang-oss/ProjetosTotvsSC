@@ -305,6 +305,10 @@ ABAS = [
     {"id": "integracoes", "label": "Integrações",        "cliente": True, "sensivel": True},
     {"id": "prototipo", "label": "Protótipo",            "cliente": True},
     {"id": "transicao", "label": "Transição",            "cliente": True},
+    # Radar (27/10/2026): definições pendentes da equipe TOTVS e do cliente,
+    # alimentado pela leitura agendada (e-mails, transcrições, Drive, Tasks).
+    # INTERNO por natureza — "cliente": False impede liberar na tela de Acessos.
+    {"id": "radar",     "label": "Radar de Definições",  "cliente": False, "sensivel": True},
 ]
 ABAS_IDS = [a["id"] for a in ABAS]
 # 23/10/2026: TODAS as abas passaram a ser liberáveis para o perfil cliente
@@ -9352,6 +9356,202 @@ def api_integracoes_coletar(customer):
                 linhas=linhas_tot, itens=len(inds),
                 erro=("; ".join(falhas)[:1800] or None))
     return _json(_integ_payload(customer, amb))
+
+
+# ── RADAR DE DEFINIÇÕES ─────────────────────────────────────────────────────
+# Spec: docs/specs/2026-10-27-aba-radar.md · SQL: docs/sql/2026-10-27-radar.sql
+# Camada INTERNA (separada da MIT006): itens por processo e por ligação da
+# cadeia, evidências e a fila de PROPOSTAS que a leitura agendada grava. Nada
+# muda num item sem alguém aprovar — a aprovação é a RPC
+# cockpit.radar_aplicar_proposta(), a mesma que o radar.html do DashboardIndex usa.
+# Portão: require_interno() + deny_customer() em TODA rota (o usuário do
+# cliente nunca vê; a aba nem é liberável em Acessos).
+RADAR_STATUS = ("aberta", "em_discussao", "decidida", "implementada", "cancelada")
+RADAR_LADOS = ("TOTVS", "DIGITRO", "AMBOS")
+RADAR_PRIOS = ("alta", "media", "baixa")
+RADAR_TIPOS = ("definicao", "atividade")
+# Campos que a tela pode gravar num item (o resto é do banco: código, datas, autor)
+RADAR_CAMPOS = ("titulo", "contexto", "status", "tipo", "prioridade", "processo_id",
+                "ligacao_id", "dono_lado", "dono_nome", "prazo", "bloqueia",
+                "decisao", "task_ids", "mit006_ref")
+
+
+def _radar_gate(customer):
+    if (d := require_interno()):
+        return d
+    return deny_customer(customer)
+
+
+def _radar_campos(b, novo=False):
+    """Valida e normaliza o que veio da tela. Devolve (dict, erro)."""
+    out = {}
+    for k in RADAR_CAMPOS:
+        if k not in b:
+            continue
+        v = b[k]
+        if isinstance(v, str):
+            v = v.strip() or None
+        if v is None and k in ("status", "dono_lado", "prioridade", "tipo", "processo_id"):
+            continue          # colunas NOT NULL: vazio na tela = "não mexer"
+        if k == "task_ids":
+            if isinstance(v, str):
+                v = re.split(r"[,;\s]+", v)
+            v = [str(x).strip() for x in (v or []) if str(x).strip()]
+        elif k in ("processo_id", "ligacao_id"):
+            v = int(v) if v not in (None, "") else None
+        elif k == "status" and v not in RADAR_STATUS:
+            return None, "Status inválido."
+        elif k == "dono_lado" and v not in RADAR_LADOS:
+            return None, "Dono (lado) inválido."
+        elif k == "prioridade" and v not in RADAR_PRIOS:
+            return None, "Prioridade inválida."
+        elif k == "tipo" and v not in RADAR_TIPOS:
+            return None, "Tipo inválido."
+        elif k == "prazo" and v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            return None, "Prazo inválido (use AAAA-MM-DD)."
+        out[k] = v
+    if (novo or "titulo" in out) and not out.get("titulo"):
+        return None, "O título é obrigatório."
+    if novo and not out.get("processo_id"):
+        return None, "Escolha o processo."
+    return out, None
+
+
+def _radar_proc_ok(customer, *ids):
+    ids = [i for i in ids if i]
+    if not ids:
+        return True
+    r = q("select count(*) n from cockpit.radar_processos where customer=%s and id = any(%s)",
+          (customer, ids), one=True)
+    return r["n"] == len(set(ids))
+
+
+@app.get("/api/radar/<customer>")
+def api_radar(customer):
+    """Tudo que a aba desenha numa ida só: taxonomia, itens (com aging),
+    propostas pendentes e a última leitura agendada."""
+    if (d := _radar_gate(customer)):
+        return d
+    procs = q("select * from cockpit.radar_processos where customer=%s and ativo order by ordem",
+              (customer,))
+    itens = q("select * from cockpit.vw_radar_itens where customer=%s", (customer,))
+    props = q("select * from cockpit.radar_propostas where customer=%s and situacao='pendente' "
+              "order by created_at, id", (customer,))
+    ex = q("select * from cockpit.radar_execucoes where customer=%s order by iniciada_em desc limit 1",
+           (customer,), one=True)
+    return _json({"ok": True, "processos": procs, "itens": itens, "propostas": props,
+                  "execucao": ex, "usuario": current_user()})
+
+
+@app.get("/api/radar/<customer>/item/<int:item_id>/evidencias")
+def api_radar_evidencias(customer, item_id):
+    if (d := _radar_gate(customer)):
+        return d
+    rows = q("select e.* from cockpit.radar_evidencias e join cockpit.radar_itens i on i.id=e.item_id "
+             "where i.customer=%s and e.item_id=%s order by e.ocorrido_em desc nulls last, e.id desc",
+             (customer, item_id))
+    return _json({"ok": True, "evidencias": rows})
+
+
+@app.post("/api/radar/<customer>/item")
+def api_radar_item_novo(customer):
+    if (d := _radar_gate(customer)):
+        return d
+    campos, erro = _radar_campos(request.get_json(silent=True) or {}, novo=True)
+    if erro:
+        return _err(400, erro)
+    if not _radar_proc_ok(customer, campos.get("processo_id"), campos.get("ligacao_id")):
+        return _err(400, "Processo ou ligação não pertence a este cliente.")
+    u = current_user()
+    campos.update(customer=customer, created_by=u, updated_by=u)
+    if campos.get("status") == "decidida":
+        campos["decidida_em"] = date.today().isoformat()
+    cols = list(campos)
+    r = q(f"insert into cockpit.radar_itens ({', '.join(cols)}) values ({', '.join(['%s'] * len(cols))}) "
+          "returning id, codigo", [campos[c] for c in cols], one=True)
+    return _json({"ok": True, "id": r["id"], "codigo": r["codigo"]})
+
+
+@app.post("/api/radar/<customer>/item/<int:item_id>")
+def api_radar_item_salvar(customer, item_id):
+    if (d := _radar_gate(customer)):
+        return d
+    atual = q("select id, decidida_em from cockpit.radar_itens where id=%s and customer=%s",
+              (item_id, customer), one=True)
+    if not atual:
+        return _err(404, "Item não encontrado neste cliente.")
+    campos, erro = _radar_campos(request.get_json(silent=True) or {})
+    if erro:
+        return _err(400, erro)
+    if not campos:
+        return _err(400, "Nada para salvar.")
+    if not _radar_proc_ok(customer, campos.get("processo_id"), campos.get("ligacao_id")):
+        return _err(400, "Processo ou ligação não pertence a este cliente.")
+    if campos.get("status") == "decidida" and not atual["decidida_em"]:
+        campos["decidida_em"] = date.today().isoformat()
+    campos["updated_by"] = current_user()
+    sets = ", ".join(f"{c}=%s" for c in campos)
+    q(f"update cockpit.radar_itens set {sets} where id=%s and customer=%s returning id",
+      [*campos.values(), item_id, customer], one=True)
+    return _json({"ok": True})
+
+
+@app.post("/api/radar/<customer>/item/<int:item_id>/evidencia")
+def api_radar_evidencia_nova(customer, item_id):
+    """Registro manual ('confirmado por telefone', 'Izabel respondeu no WhatsApp')."""
+    if (d := _radar_gate(customer)):
+        return d
+    b = request.get_json(silent=True) or {}
+    txt = (b.get("trecho") or "").strip()
+    if not txt:
+        return _err(400, "Escreva o que foi dito ou decidido.")
+    if not q("select 1 from cockpit.radar_itens where id=%s and customer=%s", (item_id, customer), one=True):
+        return _err(404, "Item não encontrado neste cliente.")
+    u = current_user()
+    q("insert into cockpit.radar_evidencias (item_id, fonte, fonte_ref, titulo, autor, ocorrido_em, link, trecho, created_by) "
+      "values (%s,'manual',%s,'Registro manual',%s,now(),%s,%s,%s) returning id",
+      (item_id, f"manual-{int(time.time() * 1000)}", u, (b.get("link") or "").strip() or None, txt[:4000], u), one=True)
+    return _json({"ok": True})
+
+
+@app.post("/api/radar/<customer>/proposta/<int:pid>/aprovar")
+def api_radar_aprovar(customer, pid):
+    """Aprova. Se a tela mandou `payload` (campos corrigidos antes de aprovar),
+    ele substitui o proposto — só os campos conhecidos, validados."""
+    if (d := _radar_gate(customer)):
+        return d
+    p = q("select id, payload from cockpit.radar_propostas where id=%s and customer=%s and situacao='pendente'",
+          (pid, customer), one=True)
+    if not p:
+        return _err(404, "Proposta não encontrada ou já revisada.")
+    b = request.get_json(silent=True) or {}
+    if isinstance(b.get("payload"), dict):
+        ed, erro = _radar_campos(b["payload"])
+        if erro:
+            return _err(400, erro)
+        novo = {**(p["payload"] or {}), **ed}
+        novo = {k: v for k, v in novo.items() if v not in (None, "", [])}
+        if not _radar_proc_ok(customer, novo.get("processo_id"), novo.get("ligacao_id")):
+            return _err(400, "Processo ou ligação não pertence a este cliente.")
+        q("update cockpit.radar_propostas set payload=%s where id=%s returning id",
+          (json.dumps(novo, ensure_ascii=False), pid), one=True)
+    try:
+        r = q("select cockpit.radar_aplicar_proposta(%s, %s) as item_id", (pid, current_user()), one=True)
+    except psycopg2.Error as e:
+        return _err(400, f"Não foi possível aplicar: {getattr(e.diag, 'message_primary', None) or e}")
+    return _json({"ok": True, "item_id": r["item_id"]})
+
+
+@app.post("/api/radar/<customer>/proposta/<int:pid>/rejeitar")
+def api_radar_rejeitar(customer, pid):
+    if (d := _radar_gate(customer)):
+        return d
+    if not q("select 1 from cockpit.radar_propostas where id=%s and customer=%s and situacao='pendente'",
+             (pid, customer), one=True):
+        return _err(404, "Proposta não encontrada ou já revisada.")
+    mot = ((request.get_json(silent=True) or {}).get("motivo") or "").strip() or None
+    q("select cockpit.radar_rejeitar_proposta(%s, %s, %s)", (pid, current_user(), mot), one=True)
+    return _json({"ok": True})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────

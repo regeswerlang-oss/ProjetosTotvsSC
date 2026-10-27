@@ -515,6 +515,7 @@
             <button data-tab="etapas"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
             <button data-tab="consumo"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
+            <button data-tab="radar"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Definições pendentes (interno TOTVS)">Radar</button>
             <button data-tab="gaps"     class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
             <button data-tab="tarefas"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Tarefas</button>
             <button data-tab="cadastros" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
@@ -864,6 +865,36 @@
           <div id="transicao-box" class="hidden -mx-5 -mb-5 border-t border-slate-200 overflow-hidden">
             <iframe id="frame-transicao" title="Painel de status do cliente" loading="lazy"></iframe>
           </div>
+        </div>
+
+        <!-- Aba Radar — definições e atividades pendentes (TOTVS × cliente), por
+             processo e por ligação da cadeia. INTERNA: a aba não é liberável
+             para o perfil cliente e toda rota /api/radar exige require_interno.
+             A leitura agendada grava PROPOSTAS; nada muda sem aprovação. -->
+        <div id="tab-radar" class="p-5 hidden">
+          <div class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="rad-cliente-nome" class="font-medium"></span>
+            <span id="rad-exec" class="text-xs text-slate-400"></span>
+            <span class="flex-1"></span>
+            <button id="rad-novo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">+ Novo item</button>
+            <button id="rad-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="rad-kpis" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 mb-3"></div>
+          <div class="flex items-center gap-1 mb-3 border-b border-slate-200">
+            <button data-radv="propostas" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px">Propostas <span id="rad-pill" class="ml-1 inline-block min-w-[18px] px-1.5 rounded-full bg-totvs-purple text-white text-[11px] text-center">0</span></button>
+            <button data-radv="processo" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px">Por processo</button>
+            <button data-radv="ligacao" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px">Por ligação</button>
+          </div>
+          <div id="rad-filtros" class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <input id="rad-q" type="search" placeholder="Buscar código, título, dono, contexto…" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white flex-1 min-w-[200px] max-w-md">
+            <select id="rad-tipo" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"><option value="">Definições e atividades</option><option value="definicao">Só definições</option><option value="atividade">Só atividades</option></select>
+            <select id="rad-lado" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"><option value="">Qualquer dono</option><option value="TOTVS">TOTVS</option><option value="DIGITRO">Cliente</option><option value="AMBOS">Ambos</option></select>
+            <select id="rad-proc" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"><option value="">Todos os processos</option></select>
+            <label class="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" id="rad-blq"> só o que bloqueia</label>
+            <label class="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" id="rad-fech"> mostrar concluídos</label>
+          </div>
+          <div id="rad-conteudo"></div>
         </div>
       </div>
       </div>
@@ -2254,7 +2285,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'modulos', 'etapas', 'consumo', 'radar', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2319,6 +2350,7 @@ function setTab(nome) {
   if (nome === 'integracoes') initIntegracoes();
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
+  if (nome === 'radar') initRadar();
 }
 
 function setSub(nome) {
@@ -4951,6 +4983,364 @@ $('#cob-file').addEventListener('change', (ev) => enviaMovimentos(ev, () => {
 // ============================================================================
 const tr = { customer: null, atual: null, podeSubir: false };
 
+// ============================================================================
+//  RADAR DE DEFINIÇÕES — Spec: docs/specs/2026-10-27-aba-radar.md
+//  Itens (definição/atividade) por processo e por ligação, evidências e a fila
+//  de PROPOSTAS da leitura agendada. Tudo via /api/radar (só interno).
+// ============================================================================
+const rad = { customer: null, d: null, view: 'processo', aberto: null, extra: null };
+const RAD_ST = { aberta: 'Aberta', em_discussao: 'Em discussão', decidida: 'Decidida', implementada: 'Implementada', cancelada: 'Cancelada' };
+const RAD_ST_CLS = { aberta: 'bg-sky-100 text-sky-800', em_discussao: 'bg-amber-100 text-amber-900', decidida: 'bg-emerald-100 text-emerald-800', implementada: 'bg-slate-200 text-slate-700', cancelada: 'bg-slate-100 text-slate-400 line-through' };
+const RAD_ABERTOS = ['aberta', 'em_discussao'];
+const RAD_LADO = { TOTVS: 'TOTVS', DIGITRO: 'Cliente', AMBOS: 'Ambos' };
+const RAD_LADO_CLS = { TOTVS: 'bg-violet-100 text-violet-800', DIGITRO: 'bg-orange-100 text-orange-800', AMBOS: 'bg-slate-100 text-slate-700' };
+const RAD_PRIO_CLS = { alta: 'bg-rose-100 text-rose-700', media: 'bg-slate-100 text-slate-600', baixa: 'bg-slate-50 text-slate-400' };
+const RAD_FONTE = { email: '✉️ E-mail', transcricao: '🎙️ Transcrição', drive_doc: '📄 Documento', tasks_status: '🔁 Status Tasks', tasks_ocorrencia: '💬 Ocorrência Tasks', reuniao: '🤝 Reunião', manual: '✍️ Manual' };
+const RAD_ACAO = { criar: 'Novo item', atualizar: 'Atualizar item', mudar_status: 'Mudar status', adicionar_evidencia: 'Nova evidência', vincular_task: 'Vincular task' };
+const RAD_CAMPOS = { titulo: 'Título', contexto: 'Contexto', status: 'Status', dono_lado: 'Dono (lado)', dono_nome: 'Dono', prioridade: 'Prioridade', bloqueia: 'Bloqueia', prazo: 'Prazo', decisao: 'Decisão', task_ids: 'Tasks', processo_id: 'Processo', ligacao_id: 'Ligação', tipo: 'Tipo', mit006_ref: 'MIT006' };
+const RAD_ALERTA_DIAS = 10;
+const radBadge = (txt, cls) => `<span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${cls}">${txt}</span>`;
+const radNorm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+
+function radProc(id) { return (rad.d?.processos || []).find(p => p.id === id); }
+function radProcs(tipo) { return (rad.d?.processos || []).filter(p => p.tipo === tipo); }
+
+async function initRadar() {
+  const cli = state.selected?.cli;
+  $('#rad-cliente-nome').textContent = (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (rad.customer === cli && rad.d) { desenhaRadar(); return; }
+  await carregaRadar(cli);
+}
+
+async function carregaRadar(customer) {
+  rad.customer = customer || null;
+  const box = $('#rad-conteudo');
+  if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver o Radar do cliente.'); return; }
+  box.innerHTML = '<p class="text-sm text-slate-400 p-6 text-center">Carregando o Radar…</p>';
+  try {
+    rad.d = await api(`/api/radar/${encodeURIComponent(customer)}`);
+  } catch (e) {
+    rad.d = null;
+    box.innerHTML = blocoErro('Não foi possível carregar o Radar', e, () => carregaRadar(customer));
+    return;
+  }
+  const sel = $('#rad-proc'), cur = sel.value;
+  sel.innerHTML = '<option value="">Todos os processos</option>' +
+    radProcs('processo').map(p => `<option value="${p.id}">${escapeHtml(p.nome)}</option>`).join('');
+  sel.value = cur;
+  const ex = rad.d.execucao;
+  $('#rad-exec').textContent = ex ? `· última leitura ${fmtDataHora(ex.finalizada_em || ex.iniciada_em)}` : '· sem leitura agendada ainda';
+  if (!rad.d.itens.length && rad.d.propostas.length) rad.view = 'propostas';
+  desenhaRadar();
+}
+
+function radFiltrados() {
+  const termos = radNorm($('#rad-q').value.trim()).split(/\s+/).filter(Boolean);
+  const tipo = $('#rad-tipo').value, lado = $('#rad-lado').value, proc = +$('#rad-proc').value || 0;
+  const blq = $('#rad-blq').checked, fech = $('#rad-fech').checked;
+  const pr = { alta: 0, media: 1, baixa: 2 };
+  let l = (rad.d?.itens || []).filter(i => {
+    if (!fech && !RAD_ABERTOS.includes(i.status)) return false;
+    if (tipo && i.tipo !== tipo) return false;
+    if (lado && i.dono_lado !== lado) return false;
+    if (proc && i.processo_id !== proc) return false;
+    if (blq && !i.bloqueia) return false;
+    if (termos.length) {
+      const hay = radNorm([i.codigo, i.titulo, i.contexto, i.dono_nome, i.processo_nome, i.ligacao_nome, i.bloqueia, i.decisao, (i.task_ids || []).join(' ')].join(' '));
+      if (!termos.every(t => hay.includes(t))) return false;
+    }
+    return true;
+  });
+  if (rad.extra === 'parados') l = l.filter(i => RAD_ABERTOS.includes(i.status) && (i.dias_sem_evidencia || 0) > RAD_ALERTA_DIAS);
+  if (rad.extra === 'decididos') l = l.filter(i => i.decidida_em && (Date.now() - new Date(i.decidida_em + 'T12:00:00')) < 30 * 864e5);
+  return l.sort((a, b) => (pr[a.prioridade] - pr[b.prioridade]) || ((b.dias_sem_evidencia || 0) - (a.dias_sem_evidencia || 0)) || a.codigo.localeCompare(b.codigo));
+}
+
+function radLimpaFiltros() {
+  $('#rad-q').value = ''; $('#rad-tipo').value = ''; $('#rad-lado').value = ''; $('#rad-proc').value = '';
+  $('#rad-blq').checked = false; $('#rad-fech').checked = false; rad.extra = null;
+}
+
+function desenhaRadarKpis() {
+  const it = rad.d.itens, ab = it.filter(i => RAD_ABERTOS.includes(i.status));
+  const k = [
+    ['Em aberto', ab.length, false, () => { radLimpaFiltros(); rad.view = 'processo'; }],
+    ['Bloqueiam marcos', ab.filter(i => i.bloqueia).length, true, () => { radLimpaFiltros(); $('#rad-blq').checked = true; rad.view = 'processo'; }],
+    [`Parados +${RAD_ALERTA_DIAS} dias`, ab.filter(i => (i.dias_sem_evidencia || 0) > RAD_ALERTA_DIAS).length, true, () => { radLimpaFiltros(); rad.extra = 'parados'; rad.view = 'processo'; }],
+    ['Dependem do cliente', ab.filter(i => i.dono_lado === 'DIGITRO').length, false, () => { radLimpaFiltros(); $('#rad-lado').value = 'DIGITRO'; rad.view = 'processo'; }],
+    ['Decididos (30 dias)', it.filter(i => i.decidida_em && (Date.now() - new Date(i.decidida_em + 'T12:00:00')) < 30 * 864e5).length, false, () => { radLimpaFiltros(); $('#rad-fech').checked = true; rad.extra = 'decididos'; rad.view = 'processo'; }],
+    ['Propostas p/ revisar', rad.d.propostas.length, true, () => { rad.view = 'propostas'; }],
+  ];
+  $('#rad-kpis').innerHTML = k.map((x, ix) => `<button data-radk="${ix}" class="text-left rounded-lg px-3 py-2 ${x[2] && x[1] ? 'bg-totvs-petroleo text-white' : 'bg-slate-50 text-totvs-petroleo border border-slate-200'} hover:ring-2 hover:ring-totvs-blue">
+      <div class="text-xl font-bold leading-tight ${x[2] && x[1] ? 'text-totvs-blue' : ''}">${x[1]}</div><div class="text-[11px] opacity-80">${escapeHtml(x[0])}</div></button>`).join('');
+  $$('#rad-kpis [data-radk]').forEach(b => b.onclick = () => { k[+b.dataset.radk][3](); desenhaRadar(); });
+  $('#rad-pill').textContent = rad.d.propostas.length;
+}
+
+function radLinha(i) {
+  const idade = i.dias_sem_evidencia || 0, ab = RAD_ABERTOS.includes(i.status);
+  const verm = ab && idade > RAD_ALERTA_DIAS;
+  return `<div data-radi="${i.id}" class="grid grid-cols-[80px_1fr_auto] gap-3 px-4 py-2.5 border-t border-slate-100 hover:bg-cyan-50/40 cursor-pointer">
+    <div class="font-mono text-xs font-bold text-totvs-purple pt-0.5">${escapeHtml(i.codigo)}</div>
+    <div class="min-w-0">
+      <div class="font-medium text-sm text-totvs-petroleo">${escapeHtml(i.titulo)}</div>
+      <div class="flex flex-wrap gap-1 mt-1 items-center text-xs text-slate-500">
+        ${radBadge(RAD_ST[i.status], RAD_ST_CLS[i.status])}
+        ${radBadge(i.tipo === 'definicao' ? 'Definição' : 'Atividade', i.tipo === 'definicao' ? 'bg-fuchsia-50 text-fuchsia-700' : 'bg-teal-50 text-teal-700')}
+        ${radBadge(RAD_LADO[i.dono_lado] + (i.dono_nome ? ' · ' + escapeHtml(i.dono_nome) : ''), RAD_LADO_CLS[i.dono_lado])}
+        ${radBadge(i.prioridade, RAD_PRIO_CLS[i.prioridade])}
+        ${i.ligacao_nome ? radBadge('↔ ' + escapeHtml(i.ligacao_nome), 'bg-slate-50 text-slate-500') : ''}
+        ${i.bloqueia ? radBadge('⛔ ' + escapeHtml(i.bloqueia), 'bg-yellow-100 text-yellow-900') : ''}
+        ${i.prazo ? `<span>prazo ${fmtData(i.prazo)}</span>` : ''}
+        ${(i.task_ids || []).length ? `<span>tasks ${escapeHtml(i.task_ids.join(', '))}</span>` : ''}
+        ${i.propostas_pendentes ? radBadge(i.propostas_pendentes + ' proposta(s)', 'bg-violet-100 text-violet-800') : ''}
+      </div>
+    </div>
+    <div class="text-right text-xs whitespace-nowrap ${verm ? 'text-rose-600 font-bold' : 'text-slate-500'}">
+      ${ab ? `${idade} dias sem evidência` : (i.decidida_em ? 'decidida ' + fmtData(i.decidida_em) : '')}
+      <div class="text-slate-400 font-normal">${i.n_evidencias} evid.</div></div>
+  </div>`;
+}
+
+function radBloco(titulo, its, sub, aberto) {
+  return `<details class="bg-white border border-slate-200 rounded-lg mb-2 overflow-hidden" ${aberto ? 'open' : ''}>
+    <summary class="flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none">
+      <span class="font-semibold text-totvs-petroleo">${escapeHtml(titulo)}</span>
+      <span class="text-xs text-slate-500">${sub}</span></summary>
+    ${its.map(radLinha).join('') || '<p class="px-4 py-2.5 border-t border-slate-100 text-xs text-slate-400">Nada com esses filtros.</p>'}
+  </details>`;
+}
+
+function radFiltroAtivo() {
+  return $('#rad-q').value || $('#rad-proc').value || $('#rad-lado').value || $('#rad-tipo').value || $('#rad-blq').checked || rad.extra;
+}
+
+function desenhaRadarProcesso() {
+  if (!rad.d.itens.length) return blocoVazioCad('Nenhum item no Radar ainda.', '<p class="text-xs text-slate-400 mt-1">Revise a fila em <b>Propostas</b>.</p>');
+  const l = radFiltrados(), filt = radFiltroAtivo();
+  let h = '';
+  for (const g of ['principal', 'complementar']) {
+    const blocos = radProcs('processo').filter(p => p.grupo === g).map(p => {
+      const its = l.filter(i => i.processo_id === p.id);
+      if (!its.length && filt) return '';
+      const ab = rad.d.itens.filter(i => i.processo_id === p.id && RAD_ABERTOS.includes(i.status)).length;
+      return radBloco(p.nome, its, `${ab} em aberto${filt ? ` · ${its.length} na lista` : ''}`, its.length && (its.length <= 8 || filt));
+    }).join('');
+    if (blocos) h += `<p class="text-[11px] uppercase tracking-wider text-slate-400 mt-4 mb-1.5">${g === 'principal' ? 'Processos principais' : 'Complementares'}</p>` + blocos;
+  }
+  return h || blocoVazioCad('Nenhum item com esses filtros.');
+}
+
+function desenhaRadarLigacao() {
+  const l = radFiltrados();
+  const abertos = pid => rad.d.itens.filter(i => i.processo_id === pid && RAD_ABERTOS.includes(i.status)).length;
+  const ligs = radProcs('ligacao');
+  const nos = radProcs('processo').filter(p => p.grupo === 'principal' || ligs.some(x => x.origem_id === p.id || x.destino_id === p.id));
+  const cadeia = `<div class="flex flex-wrap items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3">${nos.map((p, ix) =>
+    `${ix ? '<span class="text-slate-400">→</span>' : ''}<span class="bg-white border border-slate-200 rounded-md px-2.5 py-1 text-sm font-semibold text-totvs-petroleo">${escapeHtml(p.nome)}<span class="block text-[11px] font-normal text-slate-500">${abertos(p.id)} em aberto</span></span>`).join('')}</div>`;
+  const blocos = ligs.map(x => {
+    const its = l.filter(i => i.ligacao_id === x.id);
+    const ab = rad.d.itens.filter(i => i.ligacao_id === x.id && RAD_ABERTOS.includes(i.status)).length;
+    return radBloco(x.nome, its, `${ab} em aberto`, its.length > 0);
+  }).join('');
+  const sem = l.filter(i => !i.ligacao_id);
+  return cadeia + '<p class="text-[11px] uppercase tracking-wider text-slate-400 mb-1.5">Pendências entre processos</p>' + blocos +
+    `<p class="text-[11px] uppercase tracking-wider text-slate-400 mt-4 mb-1.5">Dentro de um processo só · ${sem.length}</p>` + radBloco('Itens sem ligação', sem, '', false);
+}
+
+function radOpcoes(sel, tipo) {
+  const arr = radProcs(tipo);
+  return (tipo === 'ligacao' ? '<option value="">— nenhuma —</option>' : '') +
+    arr.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${escapeHtml(p.nome)}</option>`).join('');
+}
+
+function radEvidencias(evs) {
+  return (evs || []).map(e => `<div class="border-l-[3px] border-violet-200 pl-2.5 py-1 my-1.5 text-xs text-slate-600">
+    <div class="font-semibold text-slate-800">${RAD_FONTE[e.fonte] || escapeHtml(e.fonte)} · ${escapeHtml(e.titulo || e.fonte_ref)}${e.ocorrido_em ? ' · ' + fmtDataHora(e.ocorrido_em) : ''}${e.autor ? ' · ' + escapeHtml(e.autor) : ''}
+      ${e.link ? ` · <a class="text-cyan-700 underline" href="${escapeHtml(e.link)}" target="_blank" rel="noopener">abrir</a>` : ''}</div>
+    ${e.trecho ? escapeHtml(e.trecho) : ''}</div>`).join('');
+}
+
+const RAD_IN = 'w-full px-2 py-1.5 border border-slate-300 rounded-md bg-white text-sm';
+function radFormItem(i, attr) {
+  const v = k => escapeHtml(i[k] == null ? '' : i[k]);
+  const opt = (obj, cur) => Object.keys(obj).map(k => `<option value="${k}" ${cur === k ? 'selected' : ''}>${obj[k]}</option>`).join('');
+  const L = (t, c, wide) => `<label class="block ${wide ? 'col-span-full' : ''}"><span class="text-[11px] text-slate-500">${t}</span>${c}</label>`;
+  return `<div class="grid grid-cols-2 md:grid-cols-4 gap-2" ${attr}>
+    ${L('Título', `<input data-f="titulo" class="${RAD_IN}" value="${v('titulo')}">`, true)}
+    ${L('Processo', `<select data-f="processo_id" data-n="1" class="${RAD_IN}">${radOpcoes(i.processo_id, 'processo')}</select>`)}
+    ${L('Ligação', `<select data-f="ligacao_id" data-n="1" class="${RAD_IN}">${radOpcoes(i.ligacao_id, 'ligacao')}</select>`)}
+    ${L('Tipo', `<select data-f="tipo" class="${RAD_IN}">${opt({ definicao: 'Definição', atividade: 'Atividade' }, i.tipo || 'definicao')}</select>`)}
+    ${'status' in i ? L('Status', `<select data-f="status" class="${RAD_IN}">${opt(RAD_ST, i.status)}</select>`) : ''}
+    ${L('Dono (lado)', `<select data-f="dono_lado" class="${RAD_IN}">${opt(RAD_LADO, i.dono_lado || 'TOTVS')}</select>`)}
+    ${L('Dono', `<input data-f="dono_nome" class="${RAD_IN}" value="${v('dono_nome')}">`)}
+    ${L('Prioridade', `<select data-f="prioridade" class="${RAD_IN}">${opt({ alta: 'alta', media: 'média', baixa: 'baixa' }, i.prioridade || 'media')}</select>`)}
+    ${L('Prazo', `<input type="date" data-f="prazo" class="${RAD_IN}" value="${v('prazo')}">`)}
+    ${'status' in i ? L('Tasks (vírgula)', `<input data-f="task_ids" class="${RAD_IN}" value="${escapeHtml((i.task_ids || []).join(', '))}">`) : ''}
+    ${'status' in i ? L('Ref. MIT006', `<input data-f="mit006_ref" class="${RAD_IN}" value="${v('mit006_ref')}" placeholder="se promovido">`) : ''}
+    ${L('Bloqueia', `<input data-f="bloqueia" class="${RAD_IN}" value="${v('bloqueia')}">`, true)}
+    ${L('Contexto', `<textarea data-f="contexto" rows="2" class="${RAD_IN}">${v('contexto')}</textarea>`, true)}
+    ${'status' in i ? L('Decisão (o que foi decidido)', `<textarea data-f="decisao" rows="2" class="${RAD_IN}">${v('decisao')}</textarea>`, true) : ''}
+  </div>`;
+}
+
+function radLeForm(el) {
+  const out = {};
+  el.querySelectorAll('[data-f]').forEach(c => {
+    const val = c.value.trim();
+    out[c.dataset.f] = c.dataset.n ? (val ? +val : null) : val;
+  });
+  return out;
+}
+
+function desenhaRadarPropostas() {
+  const P = rad.d.propostas;
+  if (!P.length) return blocoVazioCad('Nenhuma proposta pendente. 🎉', '<p class="text-xs text-slate-400 mt-1">A leitura agendada grava aqui o que achar em e-mails, transcrições, documentos e Tasks.</p>');
+  const showVal = (k, val) => (k === 'processo_id' || k === 'ligacao_id') ? escapeHtml(radProc(val)?.nome || val || '—')
+    : k === 'status' ? (RAD_ST[val] || escapeHtml(val)) : Array.isArray(val) ? escapeHtml(val.join(', '))
+    : k === 'prazo' ? fmtData(val) : escapeHtml(val == null || val === '' ? '—' : val);
+  return `<div class="flex items-center gap-3 mb-3 flex-wrap">
+      <button id="rad-apr-todas" class="px-3 py-1.5 rounded-md bg-emerald-600 text-white font-semibold hover:bg-emerald-700 text-sm">Aprovar todas as ${P.length}</button>
+      <span class="text-xs text-slate-500">Corrija os campos antes de aprovar, se precisar. Nada muda no Radar sem aprovação.</span></div>` +
+    P.map(p => {
+      const pl = p.payload || {}, item = p.item_id ? rad.d.itens.find(i => i.id === p.item_id) : null;
+      const corpo = p.acao === 'criar' ? radFormItem(pl, `data-radform="${p.id}"`)
+        : `<div class="text-sm"><b>${item ? escapeHtml(item.codigo + ' · ' + item.titulo) : 'Item #' + p.item_id}</b>
+            <table class="mt-1 text-xs">${Object.keys(pl).filter(k => RAD_CAMPOS[k]).map(k =>
+              `<tr><td class="pr-3 text-slate-500">${RAD_CAMPOS[k]}</td><td class="pr-3 text-rose-600 line-through">${item ? showVal(k, item[k]) : ''}</td><td class="text-emerald-700 font-semibold">${showVal(k, pl[k])}</td></tr>`).join('')}</table></div>`;
+      return `<div class="bg-white border border-slate-200 rounded-lg p-4 mb-2" data-radp="${p.id}">
+        <div class="flex items-center gap-2 flex-wrap mb-2"><span class="text-[11px] uppercase tracking-wider font-bold text-totvs-purple">${RAD_ACAO[p.acao] || p.acao}</span>
+          ${p.justificativa ? `<span class="text-xs text-slate-500">${escapeHtml(p.justificativa)}</span>` : ''}
+          <span class="ml-auto text-xs text-slate-400">confiança ${p.confianca != null ? Math.round(p.confianca * 100) + '%' : '—'} · ${fmtDataHora(p.created_at)}</span></div>
+        ${corpo}${radEvidencias(p.evidencias)}
+        <div class="flex items-center gap-2 mt-2 flex-wrap">
+          <button data-radapr="${p.id}" class="px-3 py-1.5 rounded-md bg-emerald-600 text-white font-semibold hover:bg-emerald-700 text-sm">Aprovar</button>
+          <input data-radmot="${p.id}" placeholder="motivo da rejeição (opcional)" class="px-2 py-1.5 border border-slate-300 rounded-md text-sm min-w-[220px]">
+          <button data-radrej="${p.id}" class="px-3 py-1.5 rounded-md border border-slate-300 text-rose-600 hover:bg-rose-50 text-sm">Rejeitar</button></div>
+      </div>`;
+    }).join('');
+}
+
+async function radAprovar(pid) {
+  const f = document.querySelector(`[data-radform="${pid}"]`);
+  const body = f ? { payload: radLeForm(f) } : {};
+  await api(`/api/radar/${encodeURIComponent(rad.customer)}/proposta/${pid}/aprovar`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+function desenhaRadar() {
+  if (!rad.d) return;
+  desenhaRadarKpis();
+  $$('#tab-radar .rad-v').forEach(b => {
+    const on = b.dataset.radv === rad.view;
+    b.classList.toggle('border-totvs-blue', on); b.classList.toggle('font-semibold', on);
+    b.classList.toggle('text-totvs-petroleo', on); b.classList.toggle('border-transparent', !on); b.classList.toggle('text-slate-500', !on);
+  });
+  $('#rad-filtros').classList.toggle('hidden', rad.view === 'propostas');
+  const box = $('#rad-conteudo');
+  box.innerHTML = rad.view === 'propostas' ? desenhaRadarPropostas() : rad.view === 'ligacao' ? desenhaRadarLigacao() : desenhaRadarProcesso();
+  box.querySelectorAll('[data-radi]').forEach(el => el.onclick = () => radAbreItem(+el.dataset.radi));
+  box.querySelectorAll('[data-radapr]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try { await radAprovar(+b.dataset.radapr); await carregaRadar(rad.customer); }
+    catch (e) { alert(e.message); b.disabled = false; }
+  });
+  box.querySelectorAll('[data-radrej]').forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    const motivo = box.querySelector(`[data-radmot="${b.dataset.radrej}"]`)?.value || '';
+    try {
+      await api(`/api/radar/${encodeURIComponent(rad.customer)}/proposta/${b.dataset.radrej}/rejeitar`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motivo }) });
+      await carregaRadar(rad.customer);
+    } catch (e) { alert(e.message); b.disabled = false; }
+  });
+  const todas = $('#rad-apr-todas');
+  if (todas) todas.onclick = async () => {
+    todas.disabled = true; let ok = 0, falha = 0; const ids = rad.d.propostas.map(p => p.id);
+    for (const id of ids) {
+      try { await radAprovar(id); ok++; } catch (e) { falha++; console.warn('radar aprovar', id, e); }
+      todas.textContent = `Aprovando… ${ok + falha}/${ids.length}`;
+    }
+    if (falha) alert(`${ok} aprovada(s), ${falha} com erro.`);
+    await carregaRadar(rad.customer);
+  };
+}
+
+// ── Gaveta do item (editar, evidências, MIT006) ──────────────────────────────
+function radGaveta(titulo, corpo, rodape) {
+  let g = $('#rad-gaveta');
+  if (!g) {
+    g = document.createElement('div');
+    g.id = 'rad-gaveta';
+    g.innerHTML = `<div data-radfecha class="fixed inset-0 bg-totvs-petroleo/40 z-40"></div>
+      <aside class="fixed top-0 right-0 bottom-0 w-full max-w-xl bg-white z-50 shadow-2xl flex flex-col">
+        <div class="flex items-center gap-2 px-5 py-3 border-b border-slate-200"><h3 id="rad-g-tit" class="flex-1 font-semibold text-totvs-petroleo"></h3>
+          <button data-radfecha class="text-2xl leading-none text-slate-400 hover:text-slate-700" aria-label="Fechar">×</button></div>
+        <div id="rad-g-corpo" class="flex-1 overflow-auto px-5 py-4"></div>
+        <div id="rad-g-rod" class="px-5 py-3 border-t border-slate-200 flex gap-2 flex-wrap"></div></aside>`;
+    document.body.appendChild(g);
+    g.addEventListener('click', e => { if (e.target.closest('[data-radfecha]')) g.classList.add('hidden'); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') g.classList.add('hidden'); });
+  }
+  g.classList.remove('hidden');
+  $('#rad-g-tit').innerHTML = titulo; $('#rad-g-corpo').innerHTML = corpo; $('#rad-g-rod').innerHTML = rodape;
+}
+
+async function radAbreItem(id) {
+  const i = rad.d.itens.find(x => x.id === id); if (!i) return;
+  const cli = encodeURIComponent(rad.customer);
+  radGaveta(`<span class="font-mono text-totvs-purple mr-1">${escapeHtml(i.codigo)}</span>${escapeHtml(i.titulo)}`,
+    radFormItem(i, 'id="rad-g-form"') +
+    `<p class="text-[11px] text-slate-400 mt-2">Aberto em ${fmtData(i.aberta_em)} · atualizado ${fmtDataHora(i.updated_at)}${i.updated_by ? ' por ' + escapeHtml(i.updated_by) : ''}</p>
+     <p class="text-[11px] uppercase tracking-wider text-slate-400 mt-4 mb-1">Evidências</p><div id="rad-g-ev" class="text-xs text-slate-400">carregando…</div>
+     <p class="text-[11px] uppercase tracking-wider text-slate-400 mt-4 mb-1">Registrar evidência manual</p>
+     <input id="rad-g-etxt" class="${RAD_IN} mb-1.5" placeholder="o que foi dito ou decidido">
+     <div class="flex gap-2"><input id="rad-g-elink" class="${RAD_IN}" placeholder="link (opcional)"><button id="rad-g-eadd" class="px-3 py-1.5 rounded-md border border-slate-300 text-sm hover:bg-slate-50">Adicionar</button></div>`,
+    `<button id="rad-g-salvar" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde text-sm">Salvar</button>
+     <button id="rad-g-mit" class="px-3 py-1.5 rounded-md border border-slate-300 text-sm hover:bg-slate-50">Copiar linha p/ MIT006</button>`);
+  $('#rad-g-salvar').onclick = async () => {
+    try {
+      await api(`/api/radar/${cli}/item/${id}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(radLeForm($('#rad-g-form'))) });
+      await carregaRadar(rad.customer); radAbreItem(id);
+    } catch (e) { alert(e.message); }
+  };
+  $('#rad-g-mit').onclick = () => {
+    const linha = [i.codigo, i.processo_nome, i.titulo, i.contexto || '', RAD_LADO[i.dono_lado] + (i.dono_nome ? ' - ' + i.dono_nome : ''), i.prazo ? fmtData(i.prazo) : '', RAD_ST[i.status]].join('\t');
+    navigator.clipboard?.writeText(linha).then(() => { $('#rad-g-mit').textContent = 'Copiado ✓ — cole na MIT006'; }, () => alert(linha));
+  };
+  $('#rad-g-eadd').onclick = async () => {
+    const trecho = $('#rad-g-etxt').value.trim(); if (!trecho) return;
+    try {
+      await api(`/api/radar/${cli}/item/${id}/evidencia`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trecho, link: $('#rad-g-elink').value.trim() }) });
+      await carregaRadar(rad.customer); radAbreItem(id);
+    } catch (e) { alert(e.message); }
+  };
+  try {
+    const r = await api(`/api/radar/${cli}/item/${id}/evidencias`);
+    $('#rad-g-ev').innerHTML = radEvidencias(r.evidencias) || 'Nenhuma evidência.';
+    $('#rad-g-ev').className = '';
+  } catch (e) { $('#rad-g-ev').textContent = e.message; }
+}
+
+function radNovoItem() {
+  if (!rad.d || !radProcs('processo').length) { alert('O Radar ainda não tem processos configurados para este cliente.'); return; }
+  const base = { processo_id: +$('#rad-proc').value || radProcs('processo')[0].id, tipo: 'definicao', dono_lado: 'TOTVS', prioridade: 'media' };
+  radGaveta('Novo item no Radar', radFormItem(base, 'id="rad-g-form"'),
+    '<button id="rad-g-criar" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde text-sm">Criar</button>');
+  $('#rad-g-criar').onclick = async () => {
+    try {
+      const r = await api(`/api/radar/${encodeURIComponent(rad.customer)}/item`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(radLeForm($('#rad-g-form'))) });
+      await carregaRadar(rad.customer); radAbreItem(r.id);
+    } catch (e) { alert(e.message); }
+  };
+}
+
+$$('#tab-radar .rad-v').forEach(b => b.addEventListener('click', () => { rad.view = b.dataset.radv; desenhaRadar(); }));
+['rad-q', 'rad-tipo', 'rad-lado', 'rad-proc', 'rad-blq', 'rad-fech'].forEach(id =>
+  $('#' + id).addEventListener(id === 'rad-q' ? 'input' : 'change', () => { rad.extra = null; desenhaRadar(); }));
+$('#rad-reload').addEventListener('click', () => carregaRadar(state.selected?.cli));
+$('#rad-novo').addEventListener('click', radNovoItem);
+
 async function initTransicao() {
   const cli = state.selected?.cli;
   $('#tr-cliente-nome').textContent =
@@ -5375,6 +5765,7 @@ const RELATORIOS = {
   integracoes: { titulo: 'Monitoramento de Integrações', alvo: '#int-conteudo' },
   prototipo: { titulo: 'Protótipo',               alvo: '#tab-prototipo' },
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
+  radar:     { titulo: 'Radar de Definições',     alvo: '#rad-conteudo' },
 };
 
 /** Cabeçalho/rodapé comuns — o que identifica de QUEM e de QUANDO é o número.
