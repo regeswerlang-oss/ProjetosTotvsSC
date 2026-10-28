@@ -965,9 +965,9 @@
   "processo_prefixo": "CTB",
   "camada": "movimento",
   "titulo": "Lançamentos contábeis nos últimos 120 dias (por LP)",
-  "pergunta": "A contabilização automática rodou no protótipo? AMOSTRA = LPs usados.",
+  "pergunta": "A contabilização automática rodou? VALOR = lançamentos no período, TOTAL = os que vieram de LP, AMOSTRA = LPs usados.",
   "tipo": "sql",
-  "sql": "SELECT COUNT(*) AS VALOR, SUM(CASE WHEN TRIM(CT2_LP) IS NOT NULL THEN 1 ELSE 0 END) AS TOTAL, (SELECT LISTAGG(LP||':'||N, ', ') WITHIN GROUP (ORDER BY N DESC) FROM (SELECT LP, N FROM (SELECT TRIM(CT2_LP) AS LP, COUNT(*) AS N FROM {CT2} WHERE D_E_L_E_T_=' ' AND CT2_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(CT2_LP) IS NOT NULL GROUP BY TRIM(CT2_LP) ORDER BY 2 DESC) WHERE ROWNUM<=15)) AS AMOSTRA FROM {CT2} WHERE D_E_L_E_T_=' ' AND CT2_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "sql": "SELECT (SELECT COUNT(*) FROM {CT2} WHERE D_E_L_E_T_=' ' AND CT2_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD')) AS VALOR, (SELECT COUNT(*) FROM {CT2} WHERE D_E_L_E_T_=' ' AND CT2_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(CT2_LP) IS NOT NULL) AS TOTAL, (SELECT LISTAGG(LP||':'||N, ', ') WITHIN GROUP (ORDER BY N DESC) FROM (SELECT LP, N FROM (SELECT TRIM(CT2_LP) AS LP, COUNT(*) AS N FROM {CT2} WHERE D_E_L_E_T_=' ' AND CT2_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(CT2_LP) IS NOT NULL GROUP BY TRIM(CT2_LP) ORDER BY 2 DESC) WHERE ROWNUM<=15)) AS AMOSTRA FROM DUAL",
   "regra": {
    "modo": "minimo",
    "min": 1,
