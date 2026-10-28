@@ -1,0 +1,984 @@
+[
+ {
+  "check_id": "CAD-C01",
+  "processo_prefixo": "CAD",
+  "camada": "cadastro",
+  "titulo": "Produtos ativos sem grupo de produto",
+  "pergunta": "Todo produto ativo já tem grupo? Grupo decide TES, conta e relatório.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND TRIM(B1_GRUPO) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(B1_COD) AS K FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND TRIM(B1_GRUPO) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 1
+ },
+ {
+  "check_id": "CAD-C02",
+  "processo_prefixo": "CAD",
+  "camada": "cadastro",
+  "titulo": "Clientes ativos sem CNPJ/CPF",
+  "pergunta": "Cliente nacional sem documento não emite NF.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1' AND A1_TIPO<>'X' AND TRIM(A1_CGC) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1' AND A1_TIPO<>'X') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(A1_COD) AS K FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1' AND A1_TIPO<>'X' AND TRIM(A1_CGC) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 2
+ },
+ {
+  "check_id": "CAD-C03",
+  "processo_prefixo": "CAD",
+  "camada": "cadastro",
+  "titulo": "Clientes ativos sem e-mail",
+  "pergunta": "Sem e-mail não sai NF-e/boleto por e-mail.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1' AND TRIM(A1_EMAIL) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(A1_COD) AS K FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1' AND TRIM(A1_EMAIL) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 3
+ },
+ {
+  "check_id": "CAD-C04",
+  "processo_prefixo": "CAD",
+  "camada": "cadastro",
+  "titulo": "Fornecedores ativos sem CNPJ/CPF",
+  "pergunta": "Fornecedor nacional sem documento trava NF de entrada e retenções.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1' AND A2_TIPO<>'X' AND TRIM(A2_CGC) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1' AND A2_TIPO<>'X') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(A2_COD) AS K FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1' AND A2_TIPO<>'X' AND TRIM(A2_CGC) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 4
+ },
+ {
+  "check_id": "CAD-C05",
+  "processo_prefixo": "CAD",
+  "camada": "cadastro",
+  "titulo": "Produtos: produção × teste",
+  "pergunta": "A produção já tem o que foi validado no teste?",
+  "tipo": "monitcad",
+  "sql": null,
+  "regra": {
+   "modo": "paridade",
+   "tabela": "SB1",
+   "verde": 0.9,
+   "amarelo": 0.6
+  },
+  "ambientes": [
+   "producao"
+  ],
+  "ordem": 5
+ },
+ {
+  "check_id": "FIS-C01",
+  "processo_prefixo": "FIS",
+  "camada": "cadastro",
+  "titulo": "Produtos físicos sem NCM",
+  "pergunta": "Produto físico sem NCM não emite NF-e.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND B1_TIPO IN ('PA','MP','PI','ME','EM','MC','PP','BN') AND TRIM(B1_POSIPI) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND B1_TIPO IN ('PA','MP','PI','ME','EM','MC','PP','BN')) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(B1_COD) AS K FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND B1_TIPO IN ('PA','MP','PI','ME','EM','MC','PP','BN') AND TRIM(B1_POSIPI) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 6
+ },
+ {
+  "check_id": "FIS-C02",
+  "processo_prefixo": "FIS",
+  "camada": "cadastro",
+  "titulo": "Produtos ativos sem TES de saída padrão",
+  "pergunta": "Itens faturáveis precisam da TES de saída padrão preenchida.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND TRIM(B1_TS) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(B1_COD) AS K FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND TRIM(B1_TS) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 7
+ },
+ {
+  "check_id": "FIS-C03",
+  "processo_prefixo": "FIS",
+  "camada": "cadastro",
+  "titulo": "Perfis tributários de participante: produção × teste",
+  "pergunta": "A configuração fiscal validada no teste já foi levada para a produção?",
+  "tipo": "monitcad",
+  "sql": null,
+  "regra": {
+   "modo": "paridade",
+   "tabela": "F22",
+   "verde": 0.9,
+   "amarelo": 0.5
+  },
+  "ambientes": [
+   "producao"
+  ],
+  "ordem": 8
+ },
+ {
+  "check_id": "FIS-C04",
+  "processo_prefixo": "FIS",
+  "camada": "cadastro",
+  "titulo": "Perfis tributários de produto: produção × teste",
+  "pergunta": "A configuração fiscal validada no teste já foi levada para a produção?",
+  "tipo": "monitcad",
+  "sql": null,
+  "regra": {
+   "modo": "paridade",
+   "tabela": "F24",
+   "verde": 0.9,
+   "amarelo": 0.5
+  },
+  "ambientes": [
+   "producao"
+  ],
+  "ordem": 9
+ },
+ {
+  "check_id": "FIS-C05",
+  "processo_prefixo": "FIS",
+  "camada": "cadastro",
+  "titulo": "Fórmulas do Configurador de Tributos: produção × teste",
+  "pergunta": "A configuração fiscal validada no teste já foi levada para a produção?",
+  "tipo": "monitcad",
+  "sql": null,
+  "regra": {
+   "modo": "paridade",
+   "tabela": "CIN",
+   "verde": 0.9,
+   "amarelo": 0.5
+  },
+  "ambientes": [
+   "producao"
+  ],
+  "ordem": 10
+ },
+ {
+  "check_id": "CMP-C01",
+  "processo_prefixo": "CMP",
+  "camada": "cadastro",
+  "titulo": "Fornecedores ativos sem condição de pagamento",
+  "pergunta": "Sem condição o pedido de compra nasce sem vencimento.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1' AND TRIM(A2_COND) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(A2_COD) AS K FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1' AND TRIM(A2_COND) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 11
+ },
+ {
+  "check_id": "CMP-C02",
+  "processo_prefixo": "CMP",
+  "camada": "cadastro",
+  "titulo": "Grupos de aprovação de compras",
+  "pergunta": "Existe alçada de aprovação cadastrada?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SAL} WHERE D_E_L_E_T_=' ' AND 1=1",
+  "regra": {
+   "modo": "minimo",
+   "min": 1
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 12
+ },
+ {
+  "check_id": "CMP-M01",
+  "processo_prefixo": "CMP",
+  "camada": "movimento",
+  "titulo": "Pedidos de compra nos últimos 120 dias",
+  "pergunta": "O processo de compras foi exercitado no protótipo?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SC7} WHERE D_E_L_E_T_=' ' AND C7_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 13
+ },
+ {
+  "check_id": "CMP-M02",
+  "processo_prefixo": "CMP",
+  "camada": "movimento",
+  "titulo": "Notas de entrada nos últimos 120 dias",
+  "pergunta": "Recebimento/NF de entrada foi exercitado?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SF1} WHERE D_E_L_E_T_=' ' AND F1_DTDIGIT>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 14
+ },
+ {
+  "check_id": "CMP-K01",
+  "processo_prefixo": "CMP",
+  "camada": "contabilizacao",
+  "titulo": "Notas de entrada sem contabilização",
+  "pergunta": "NF de entrada que não gerou lançamento contábil (F1_DTLANC vazio).",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SF1} WHERE D_E_L_E_T_=' ' AND F1_DTDIGIT>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(F1_DTLANC) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SF1} WHERE D_E_L_E_T_=' ' AND F1_DTDIGIT>=TO_CHAR(SYSDATE-120,'YYYYMMDD')) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(F1_DOC) AS K FROM {SF1} WHERE D_E_L_E_T_=' ' AND F1_DTDIGIT>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(F1_DTLANC) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 15
+ },
+ {
+  "check_id": "CMP-F01",
+  "processo_prefixo": "CMP",
+  "camada": "fluxo",
+  "titulo": "Itens de NF de entrada sem pedido de compra",
+  "pergunta": "Compra entrando sem pedido fura alçada e rastreabilidade.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SD1} WHERE D_E_L_E_T_=' ' AND D1_DTDIGIT>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND D1_TIPO='N' AND TRIM(D1_PEDIDO) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SD1} WHERE D_E_L_E_T_=' ' AND D1_DTDIGIT>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND D1_TIPO='N') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(D1_DOC) AS K FROM {SD1} WHERE D_E_L_E_T_=' ' AND D1_DTDIGIT>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND D1_TIPO='N' AND TRIM(D1_PEDIDO) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 16
+ },
+ {
+  "check_id": "EST-C01",
+  "processo_prefixo": "EST",
+  "camada": "cadastro",
+  "titulo": "Estruturas de produto: produção × teste",
+  "pergunta": "As estruturas (SG1) validadas já estão na produção?",
+  "tipo": "monitcad",
+  "sql": null,
+  "regra": {
+   "modo": "paridade",
+   "tabela": "SG1",
+   "verde": 0.9,
+   "amarelo": 0.6
+  },
+  "ambientes": [
+   "producao"
+  ],
+  "ordem": 17
+ },
+ {
+  "check_id": "EST-K01",
+  "processo_prefixo": "EST",
+  "camada": "contabilizacao",
+  "titulo": "Produtos ativos sem conta contábil",
+  "pergunta": "Os LPs de estoque e faturamento leem a conta do produto (B1_CONTA).",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND TRIM(B1_CONTA) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(B1_COD) AS K FROM {SB1} WHERE D_E_L_E_T_=' ' AND B1_MSBLQL<>'1' AND TRIM(B1_CONTA) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 18
+ },
+ {
+  "check_id": "EST-M01",
+  "processo_prefixo": "EST",
+  "camada": "movimento",
+  "titulo": "Saldos de estoque carregados",
+  "pergunta": "Há saldo físico na base (SB2 com quantidade)?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SB2} WHERE D_E_L_E_T_=' ' AND B2_QATU<>0",
+  "regra": {
+   "modo": "minimo",
+   "min": 1
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 19
+ },
+ {
+  "check_id": "EST-M02",
+  "processo_prefixo": "EST",
+  "camada": "movimento",
+  "titulo": "Movimentos internos nos últimos 120 dias",
+  "pergunta": "Requisições/transferências (SD3) foram exercitadas?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SD3} WHERE D_E_L_E_T_=' ' AND D3_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 20
+ },
+ {
+  "check_id": "EST-M03",
+  "processo_prefixo": "EST",
+  "camada": "movimento",
+  "titulo": "Ordens de produção nos últimos 120 dias",
+  "pergunta": "O PCP foi exercitado?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SC2} WHERE D_E_L_E_T_=' ' AND C2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 21
+ },
+ {
+  "check_id": "CTR-M01",
+  "processo_prefixo": "CTR",
+  "camada": "movimento",
+  "titulo": "Contratos vigentes carregados",
+  "pergunta": "Quantos contratos vigentes já estão na base? Meta = nº de contratos da virada (regra.meta).",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(DISTINCT CN9_NUMERO) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {CN9} WHERE D_E_L_E_T_=' ' AND CN9_SITUAC='05'",
+  "regra": {
+   "modo": "info"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 22
+ },
+ {
+  "check_id": "CTR-M02",
+  "processo_prefixo": "CTR",
+  "camada": "movimento",
+  "titulo": "Medições de contrato registradas",
+  "pergunta": "O ciclo contrato → medição foi exercitado?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {CND} WHERE D_E_L_E_T_=' ' AND 1=1",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 23
+ },
+ {
+  "check_id": "CTR-M03",
+  "processo_prefixo": "CTR",
+  "camada": "movimento",
+  "titulo": "Notas de saída nos últimos 120 dias",
+  "pergunta": "Faturamento foi exercitado?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SF2} WHERE D_E_L_E_T_=' ' AND F2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 24
+ },
+ {
+  "check_id": "CTR-K01",
+  "processo_prefixo": "CTR",
+  "camada": "contabilizacao",
+  "titulo": "Notas de saída sem contabilização",
+  "pergunta": "NF de saída que não gerou lançamento (F2_DTLANC vazio).",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SF2} WHERE D_E_L_E_T_=' ' AND F2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(F2_DTLANC) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SF2} WHERE D_E_L_E_T_=' ' AND F2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD')) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(F2_DOC) AS K FROM {SF2} WHERE D_E_L_E_T_=' ' AND F2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(F2_DTLANC) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 25
+ },
+ {
+  "check_id": "CTR-F01",
+  "processo_prefixo": "CTR",
+  "camada": "fluxo",
+  "titulo": "Medições encerradas sem pedido de venda",
+  "pergunta": "Contrato → medição → pedido: alguma medição encerrada parou no meio?",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {CND} M WHERE M.D_E_L_E_T_=' ' AND M.CND_SITUAC='E' AND NOT EXISTS (SELECT 1 FROM {SC5} P WHERE P.D_E_L_E_T_=' ' AND TRIM(P.C5_MDCONTR)=TRIM(M.CND_CONTRA) AND TRIM(P.C5_MDNUMED)=TRIM(M.CND_NUMMED))) AS VALOR, (SELECT COUNT(*) FROM {CND} M WHERE M.D_E_L_E_T_=' ' AND M.CND_SITUAC='E') AS TOTAL, NULL AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 26
+ },
+ {
+  "check_id": "CTR-F02",
+  "processo_prefixo": "CTR",
+  "camada": "fluxo",
+  "titulo": "Pedidos de contrato ainda não faturados",
+  "pergunta": "Pedido gerado pela medição que não virou nota.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SC6} I JOIN {SC5} P ON P.C5_FILIAL=I.C6_FILIAL AND P.C5_NUM=I.C6_NUM AND P.D_E_L_E_T_=' ' WHERE I.D_E_L_E_T_=' ' AND TRIM(P.C5_MDCONTR) IS NOT NULL AND I.C6_QTDENT<I.C6_QTDVEN) AS VALOR, (SELECT COUNT(*) FROM {SC6} I JOIN {SC5} P ON P.C5_FILIAL=I.C6_FILIAL AND P.C5_NUM=I.C6_NUM AND P.D_E_L_E_T_=' ' WHERE I.D_E_L_E_T_=' ' AND TRIM(P.C5_MDCONTR) IS NOT NULL) AS TOTAL, NULL AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 27
+ },
+ {
+  "check_id": "FIN-C01",
+  "processo_prefixo": "FIN",
+  "camada": "cadastro",
+  "titulo": "Clientes e fornecedores ativos sem natureza financeira",
+  "pergunta": "Natureza decide fluxo de caixa, retenções e contabilização do financeiro.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1' AND TRIM(A1_NATUREZ) IS NULL) + (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1' AND TRIM(A2_NATUREZ) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1') + (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1') AS TOTAL, NULL AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 28
+ },
+ {
+  "check_id": "FIN-C02",
+  "processo_prefixo": "FIN",
+  "camada": "cadastro",
+  "titulo": "Naturezas financeiras: produção × teste",
+  "pergunta": "As naturezas definidas no teste foram para a produção?",
+  "tipo": "monitcad",
+  "sql": null,
+  "regra": {
+   "modo": "paridade",
+   "tabela": "SED",
+   "verde": 0.9,
+   "amarelo": 0.5
+  },
+  "ambientes": [
+   "producao"
+  ],
+  "ordem": 29
+ },
+ {
+  "check_id": "FIN-K01",
+  "processo_prefixo": "FIN",
+  "camada": "contabilizacao",
+  "titulo": "Naturezas sem conta contábil",
+  "pergunta": "LPs do financeiro costumam ler a conta da natureza (ED_CONTA).",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SED} WHERE D_E_L_E_T_=' ' AND 1=1 AND TRIM(ED_CONTA) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SED} WHERE D_E_L_E_T_=' ' AND 1=1) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(ED_CODIGO) AS K FROM {SED} WHERE D_E_L_E_T_=' ' AND 1=1 AND TRIM(ED_CONTA) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 30
+ },
+ {
+  "check_id": "FIN-K02",
+  "processo_prefixo": "FIN",
+  "camada": "contabilizacao",
+  "titulo": "Bancos sem conta contábil",
+  "pergunta": "Movimento bancário sem conta do banco não contabiliza.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SA6} WHERE D_E_L_E_T_=' ' AND 1=1 AND TRIM(A6_CONTA) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SA6} WHERE D_E_L_E_T_=' ' AND 1=1) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(A6_COD) AS K FROM {SA6} WHERE D_E_L_E_T_=' ' AND 1=1 AND TRIM(A6_CONTA) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 31
+ },
+ {
+  "check_id": "FIN-K03",
+  "processo_prefixo": "FIN",
+  "camada": "contabilizacao",
+  "titulo": "Clientes/fornecedores ativos sem conta contábil",
+  "pergunta": "Só é problema se os LPs usarem a conta do participante — confirmar com a contabilidade.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1' AND TRIM(A1_CONTA) IS NULL) + (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1' AND TRIM(A2_CONTA) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SA1} WHERE D_E_L_E_T_=' ' AND A1_MSBLQL<>'1') + (SELECT COUNT(*) FROM {SA2} WHERE D_E_L_E_T_=' ' AND A2_MSBLQL<>'1') AS TOTAL, NULL AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 32
+ },
+ {
+  "check_id": "FIN-M01",
+  "processo_prefixo": "FIN",
+  "camada": "movimento",
+  "titulo": "Títulos a pagar em aberto carregados",
+  "pergunta": "Saldo de contas a pagar do legado já está na base?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SE2} WHERE D_E_L_E_T_=' ' AND E2_SALDO>0",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "teste": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 33
+ },
+ {
+  "check_id": "FIN-M02",
+  "processo_prefixo": "FIN",
+  "camada": "movimento",
+  "titulo": "Movimentos bancários nos últimos 120 dias",
+  "pergunta": "Baixas, transferências e tarifas (SE5) foram exercitadas?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SE5} WHERE D_E_L_E_T_=' ' AND E5_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 34
+ },
+ {
+  "check_id": "FIN-K04",
+  "processo_prefixo": "FIN",
+  "camada": "contabilizacao",
+  "titulo": "Títulos a receber sem contabilização",
+  "pergunta": "Títulos emitidos nos últimos 120 dias com E1_LA diferente de 'S'.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SE1} WHERE D_E_L_E_T_=' ' AND E1_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND E1_LA<>'S') AS VALOR, (SELECT COUNT(*) FROM {SE1} WHERE D_E_L_E_T_=' ' AND E1_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD')) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(E1_NUM) AS K FROM {SE1} WHERE D_E_L_E_T_=' ' AND E1_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND E1_LA<>'S' AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 35
+ },
+ {
+  "check_id": "FIN-K05",
+  "processo_prefixo": "FIN",
+  "camada": "contabilizacao",
+  "titulo": "Títulos a pagar sem contabilização",
+  "pergunta": "Títulos emitidos nos últimos 120 dias com E2_LA diferente de 'S'.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SE2} WHERE D_E_L_E_T_=' ' AND E2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND E2_LA<>'S') AS VALOR, (SELECT COUNT(*) FROM {SE2} WHERE D_E_L_E_T_=' ' AND E2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD')) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(E2_NUM) AS K FROM {SE2} WHERE D_E_L_E_T_=' ' AND E2_EMISSAO>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND E2_LA<>'S' AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 36
+ },
+ {
+  "check_id": "FIN-K06",
+  "processo_prefixo": "FIN",
+  "camada": "contabilizacao",
+  "titulo": "Movimentos bancários sem contabilização",
+  "pergunta": "SE5 dos últimos 120 dias, não cancelado, com E5_LA diferente de 'S'.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SE5} WHERE D_E_L_E_T_=' ' AND E5_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND E5_SITUACA<>'C' AND E5_LA<>'S') AS VALOR, (SELECT COUNT(*) FROM {SE5} WHERE D_E_L_E_T_=' ' AND E5_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND E5_SITUACA<>'C') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(E5_NUMERO) AS K FROM {SE5} WHERE D_E_L_E_T_=' ' AND E5_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND E5_SITUACA<>'C' AND E5_LA<>'S' AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 37
+ },
+ {
+  "check_id": "CNB-C01",
+  "processo_prefixo": "CNB",
+  "camada": "cadastro",
+  "titulo": "Parâmetros de comunicação bancária",
+  "pergunta": "Existe configuração CNAB (SEE) para os bancos?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SEE} WHERE D_E_L_E_T_=' ' AND 1=1",
+  "regra": {
+   "modo": "minimo",
+   "min": 1
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 38
+ },
+ {
+  "check_id": "CNB-M01",
+  "processo_prefixo": "CNB",
+  "camada": "movimento",
+  "titulo": "Títulos a receber em aberto com ID CNAB",
+  "pergunta": "Os títulos do legado entraram com o ID CNAB que o banco vai devolver no retorno?",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SE1} WHERE D_E_L_E_T_=' ' AND E1_SALDO>0 AND TRIM(E1_IDCNAB) IS NOT NULL) AS VALOR, (SELECT COUNT(*) FROM {SE1} WHERE D_E_L_E_T_=' ' AND E1_SALDO>0) AS TOTAL, NULL AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "cobertura",
+   "verde": 0.98,
+   "amarelo": 0.5
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 39
+ },
+ {
+  "check_id": "COM-C01",
+  "processo_prefixo": "COM",
+  "camada": "cadastro",
+  "titulo": "Vendedores/representantes ativos",
+  "pergunta": "Cadastro único de vendedor (CLT/PJ/representante) já carregado?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SA3} WHERE D_E_L_E_T_=' ' AND A3_MSBLQL<>'1'",
+  "regra": {
+   "modo": "minimo",
+   "min": 1
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 40
+ },
+ {
+  "check_id": "GFE-C01",
+  "processo_prefixo": "GFE",
+  "camada": "cadastro",
+  "titulo": "Transportadoras cadastradas",
+  "pergunta": "Transportadoras cadastradas (regra.min = quantas a operação usa).",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SA4} WHERE D_E_L_E_T_=' ' AND 1=1",
+  "regra": {
+   "modo": "minimo",
+   "min": 1
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 41
+ },
+ {
+  "check_id": "GFE-C02",
+  "processo_prefixo": "GFE",
+  "camada": "cadastro",
+  "titulo": "Tabelas de frete",
+  "pergunta": "Tabelas de frete cadastradas no GFE?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {GVA} WHERE D_E_L_E_T_=' ' AND 1=1",
+  "regra": {
+   "modo": "minimo",
+   "min": 1
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 42
+ },
+ {
+  "check_id": "GFE-M01",
+  "processo_prefixo": "GFE",
+  "camada": "movimento",
+  "titulo": "Documentos de carga nos últimos 120 dias",
+  "pergunta": "Romaneio/documento de carga foi exercitado?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {GW1} WHERE D_E_L_E_T_=' ' AND GW1_DTEMIS>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 43
+ },
+ {
+  "check_id": "ATF-C01",
+  "processo_prefixo": "ATF",
+  "camada": "cadastro",
+  "titulo": "Grupos de bens",
+  "pergunta": "Grupos de bens (taxa e contas) cadastrados?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SNG} WHERE D_E_L_E_T_=' ' AND 1=1",
+  "regra": {
+   "modo": "minimo",
+   "min": 1
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 44
+ },
+ {
+  "check_id": "ATF-C02",
+  "processo_prefixo": "ATF",
+  "camada": "cadastro",
+  "titulo": "Bens cadastrados",
+  "pergunta": "Os bens do legado já estão na base?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SN1} WHERE D_E_L_E_T_=' ' AND 1=1",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "teste": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 45
+ },
+ {
+  "check_id": "ATF-K01",
+  "processo_prefixo": "ATF",
+  "camada": "contabilizacao",
+  "titulo": "Saldos de bens sem conta contábil",
+  "pergunta": "Bem sem conta (N3_CCONTAB) não deprecia na contabilidade.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {SN3} WHERE D_E_L_E_T_=' ' AND 1=1 AND TRIM(N3_CCONTAB) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {SN3} WHERE D_E_L_E_T_=' ' AND 1=1) AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(N3_CBASE) AS K FROM {SN3} WHERE D_E_L_E_T_=' ' AND 1=1 AND TRIM(N3_CCONTAB) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 46
+ },
+ {
+  "check_id": "ATF-M01",
+  "processo_prefixo": "ATF",
+  "camada": "movimento",
+  "titulo": "Movimentos do ativo nos últimos 120 dias",
+  "pergunta": "Aquisição, depreciação e baixa foram exercitadas?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {SN4} WHERE D_E_L_E_T_=' ' AND N4_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 47
+ },
+ {
+  "check_id": "CTB-C01",
+  "processo_prefixo": "CTB",
+  "camada": "cadastro",
+  "titulo": "Contas analíticas do plano",
+  "pergunta": "Plano de contas carregado?",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, NULL AS TOTAL, NULL AS AMOSTRA FROM {CT1} WHERE D_E_L_E_T_=' ' AND CT1_CLASSE='2'",
+  "regra": {
+   "modo": "info"
+  },
+  "ambientes": [
+   "producao",
+   "teste"
+  ],
+  "ordem": 48
+ },
+ {
+  "check_id": "CTB-C02",
+  "processo_prefixo": "CTB",
+  "camada": "cadastro",
+  "titulo": "Itens contábeis: produção × teste",
+  "pergunta": "Item contábil = código do projeto; a produção já tem os projetos?",
+  "tipo": "monitcad",
+  "sql": null,
+  "regra": {
+   "modo": "paridade",
+   "tabela": "CTD",
+   "verde": 0.9,
+   "amarelo": 0.3
+  },
+  "ambientes": [
+   "producao"
+  ],
+  "ordem": 49
+ },
+ {
+  "check_id": "CTB-K01",
+  "processo_prefixo": "CTB",
+  "camada": "contabilizacao",
+  "titulo": "Contas analíticas sem conta referencial (ECD)",
+  "pergunta": "Toda conta analítica precisa de amarração ao plano referencial para a ECD.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {CT1} C WHERE C.D_E_L_E_T_=' ' AND C.CT1_CLASSE='2' AND NOT EXISTS (SELECT 1 FROM {CVD} R WHERE R.D_E_L_E_T_=' ' AND TRIM(R.CVD_CONTA)=TRIM(C.CT1_CONTA))) AS VALOR, (SELECT COUNT(*) FROM {CT1} C WHERE C.D_E_L_E_T_=' ' AND C.CT1_CLASSE='2') AS TOTAL, NULL AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero",
+   "teto": "amarelo"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 50
+ },
+ {
+  "check_id": "CTB-K02",
+  "processo_prefixo": "CTB",
+  "camada": "contabilizacao",
+  "titulo": "Lançamentos padrão de referência ativos",
+  "pergunta": "Os LPs dos processos contabilizados (CR, CP, bancos, NF entrada/saída, estoque, ativo) estão ativos? AMOSTRA = os que faltam. Lista de referência: conferir com a contabilidade.",
+  "tipo": "sql",
+  "sql": "WITH REF AS (SELECT '500' AS LP FROM DUAL UNION ALL SELECT '505' AS LP FROM DUAL UNION ALL SELECT '510' AS LP FROM DUAL UNION ALL SELECT '515' AS LP FROM DUAL UNION ALL SELECT '520' AS LP FROM DUAL UNION ALL SELECT '527' AS LP FROM DUAL UNION ALL SELECT '530' AS LP FROM DUAL UNION ALL SELECT '531' AS LP FROM DUAL UNION ALL SELECT '560' AS LP FROM DUAL UNION ALL SELECT '562' AS LP FROM DUAL UNION ALL SELECT '563' AS LP FROM DUAL UNION ALL SELECT '610' AS LP FROM DUAL UNION ALL SELECT '620' AS LP FROM DUAL UNION ALL SELECT '630' AS LP FROM DUAL UNION ALL SELECT '650' AS LP FROM DUAL UNION ALL SELECT '655' AS LP FROM DUAL UNION ALL SELECT '660' AS LP FROM DUAL UNION ALL SELECT '665' AS LP FROM DUAL UNION ALL SELECT '666' AS LP FROM DUAL UNION ALL SELECT '668' AS LP FROM DUAL UNION ALL SELECT '801' AS LP FROM DUAL UNION ALL SELECT '810' AS LP FROM DUAL UNION ALL SELECT '820' AS LP FROM DUAL), ATV AS (SELECT DISTINCT TRIM(CT5_LANPAD) AS LP FROM {CT5} WHERE D_E_L_E_T_=' ' AND CT5_STATUS='1') SELECT (SELECT COUNT(*) FROM REF WHERE LP IN (SELECT LP FROM ATV)) AS VALOR, 23 AS TOTAL, (SELECT LISTAGG(LP, ', ') WITHIN GROUP (ORDER BY LP) FROM REF WHERE LP NOT IN (SELECT LP FROM ATV)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "cobertura",
+   "verde": 0.9,
+   "amarelo": 0.6
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 51
+ },
+ {
+  "check_id": "CTB-K03",
+  "processo_prefixo": "CTB",
+  "camada": "contabilizacao",
+  "titulo": "LPs ativos sem conta débito nem crédito",
+  "pergunta": "Lançamento padrão ativo sem conta não gera partida.",
+  "tipo": "sql",
+  "sql": "SELECT (SELECT COUNT(*) FROM {CT5} WHERE D_E_L_E_T_=' ' AND CT5_STATUS='1' AND TRIM(CT5_DEBITO) IS NULL AND TRIM(CT5_CREDIT) IS NULL) AS VALOR, (SELECT COUNT(*) FROM {CT5} WHERE D_E_L_E_T_=' ' AND CT5_STATUS='1') AS TOTAL, (SELECT LISTAGG(K, ', ') WITHIN GROUP (ORDER BY K) FROM (SELECT TRIM(CT5_LANPAD||'/'||CT5_SEQUEN) AS K FROM {CT5} WHERE D_E_L_E_T_=' ' AND CT5_STATUS='1' AND TRIM(CT5_DEBITO) IS NULL AND TRIM(CT5_CREDIT) IS NULL AND ROWNUM<=15)) AS AMOSTRA FROM DUAL",
+  "regra": {
+   "modo": "zero"
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 52
+ },
+ {
+  "check_id": "CTB-M01",
+  "processo_prefixo": "CTB",
+  "camada": "movimento",
+  "titulo": "Lançamentos contábeis nos últimos 120 dias (por LP)",
+  "pergunta": "A contabilização automática rodou no protótipo? AMOSTRA = LPs usados.",
+  "tipo": "sql",
+  "sql": "SELECT COUNT(*) AS VALOR, SUM(CASE WHEN TRIM(CT2_LP) IS NOT NULL THEN 1 ELSE 0 END) AS TOTAL, (SELECT LISTAGG(LP||':'||N, ', ') WITHIN GROUP (ORDER BY N DESC) FROM (SELECT LP, N FROM (SELECT TRIM(CT2_LP) AS LP, COUNT(*) AS N FROM {CT2} WHERE D_E_L_E_T_=' ' AND CT2_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD') AND TRIM(CT2_LP) IS NOT NULL GROUP BY TRIM(CT2_LP) ORDER BY 2 DESC) WHERE ROWNUM<=15)) AS AMOSTRA FROM {CT2} WHERE D_E_L_E_T_=' ' AND CT2_DATA>=TO_CHAR(SYSDATE-120,'YYYYMMDD')",
+  "regra": {
+   "modo": "minimo",
+   "min": 1,
+   "producao": {
+    "modo": "info"
+   }
+  },
+  "ambientes": [
+   "teste",
+   "producao"
+  ],
+  "ordem": 53
+ }
+]

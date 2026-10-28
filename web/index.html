@@ -546,6 +546,7 @@
             <button data-tab="consumo"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
             <button data-tab="radar"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Definições pendentes (interno TOTVS)">Radar</button>
+            <button data-tab="pendencias" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Pendências de definição e retorno — visão do cliente">Pendências</button>
             <button data-tab="gaps"     class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
             <button data-tab="tarefas"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Tarefas</button>
             <button data-tab="cadastros" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
@@ -952,6 +953,8 @@
           </div>
           <div id="rad-kpis" class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 mb-3"></div>
           <div class="flex items-center gap-1 mb-3 border-b border-slate-200">
+            <button data-radv="estrategico" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px" title="O que definir e correr atrás, por marco">Estratégico</button>
+            <button data-radv="diagnostico" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px" title="Cadastros, movimentos, contabilização e fluxos por processo">Diagnóstico</button>
             <button data-radv="propostas" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px">Propostas <span id="rad-pill" class="ml-1 inline-block min-w-[18px] px-1.5 rounded-full bg-totvs-purple text-white text-[11px] text-center">0</span></button>
             <button data-radv="processo" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px">Por processo</button>
             <button data-radv="ligacao" class="rad-v px-3 py-1.5 text-sm border-b-2 -mb-px">Por ligação</button>
@@ -965,6 +968,34 @@
             <label class="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" id="rad-fech"> mostrar concluídos</label>
           </div>
           <div id="rad-conteudo"></div>
+        </div>
+
+        <!-- Aba Pendências e Retornos — a visão do CLIENTE (liberável em Acessos).
+             Fonte: MIT006 espelhada (cockpit.mit006_itens), itens do Radar marcados
+             "visível ao cliente" e a prontidão do Diagnóstico (só cor e número).
+             Rota: /api/pendencias/<cliente>. Spec 2026-10-28-diagnostico-e-pendencias. -->
+        <div id="tab-pendencias" class="p-5 hidden">
+          <div class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="pen-cliente-nome" class="font-medium"></span>
+            <span id="pen-sync" class="text-xs text-slate-400"></span>
+            <span class="flex-1"></span>
+            <button id="pen-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="pen-marcos" class="mb-3"></div>
+          <div id="pen-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3"></div>
+          <div class="flex items-center gap-1 mb-3 border-b border-slate-200">
+            <button data-penv="cliente" class="pen-v px-3 py-1.5 text-sm border-b-2 -mb-px">Aguardando a empresa</button>
+            <button data-penv="totvs" class="pen-v px-3 py-1.5 text-sm border-b-2 -mb-px">Com a TOTVS</button>
+            <button data-penv="prontidao" class="pen-v px-3 py-1.5 text-sm border-b-2 -mb-px">Prontidão por processo</button>
+            <button data-penv="concluidas" class="pen-v px-3 py-1.5 text-sm border-b-2 -mb-px">Concluídas</button>
+          </div>
+          <div id="pen-filtros" class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <input id="pen-q" type="search" placeholder="Buscar ID, módulo, texto, responsável…" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white flex-1 min-w-[200px] max-w-md">
+            <select id="pen-mod" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"><option value="">Todos os módulos</option></select>
+            <label class="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" id="pen-nogo"> só NoGo (impede a virada)</label>
+          </div>
+          <div id="pen-conteudo"></div>
         </div>
       </div>
       </div>
@@ -2355,7 +2386,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2423,6 +2454,7 @@ function setTab(nome) {
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
   if (nome === 'radar') initRadar();
+  if (nome === 'pendencias') initPendencias();
 }
 
 function setSub(nome) {
@@ -5923,7 +5955,7 @@ const tr = { customer: null, atual: null, podeSubir: false };
 //  Itens (definição/atividade) por processo e por ligação, evidências e a fila
 //  de PROPOSTAS da leitura agendada. Tudo via /api/radar (só interno).
 // ============================================================================
-const rad = { customer: null, d: null, view: 'processo', aberto: null, extra: null };
+const rad = { customer: null, d: null, view: 'estrategico', aberto: null, extra: null, diag: null, dsel: null, damb: 'principal' };
 const RAD_ST = { aberta: 'Aberta', em_discussao: 'Em discussão', decidida: 'Decidida', implementada: 'Implementada', cancelada: 'Cancelada' };
 const RAD_ST_CLS = { aberta: 'bg-sky-100 text-sky-800', em_discussao: 'bg-amber-100 text-amber-900', decidida: 'bg-emerald-100 text-emerald-800', implementada: 'bg-slate-200 text-slate-700', cancelada: 'bg-slate-100 text-slate-400 line-through' };
 const RAD_ABERTOS = ['aberta', 'em_discussao'];
@@ -5932,7 +5964,7 @@ const RAD_LADO_CLS = { TOTVS: 'bg-violet-100 text-violet-800', DIGITRO: 'bg-oran
 const RAD_PRIO_CLS = { alta: 'bg-rose-100 text-rose-700', media: 'bg-slate-100 text-slate-600', baixa: 'bg-slate-50 text-slate-400' };
 const RAD_FONTE = { email: '✉️ E-mail', transcricao: '🎙️ Transcrição', drive_doc: '📄 Documento', tasks_status: '🔁 Status Tasks', tasks_ocorrencia: '💬 Ocorrência Tasks', reuniao: '🤝 Reunião', manual: '✍️ Manual' };
 const RAD_ACAO = { criar: 'Novo item', atualizar: 'Atualizar item', mudar_status: 'Mudar status', adicionar_evidencia: 'Nova evidência', vincular_task: 'Vincular task' };
-const RAD_CAMPOS = { titulo: 'Título', contexto: 'Contexto', status: 'Status', dono_lado: 'Dono (lado)', dono_nome: 'Dono', prioridade: 'Prioridade', bloqueia: 'Bloqueia', prazo: 'Prazo', decisao: 'Decisão', task_ids: 'Tasks', processo_id: 'Processo', ligacao_id: 'Ligação', tipo: 'Tipo', mit006_ref: 'MIT006' };
+const RAD_CAMPOS = { titulo: 'Título', contexto: 'Contexto', status: 'Status', dono_lado: 'Dono (lado)', dono_nome: 'Dono', prioridade: 'Prioridade', bloqueia: 'Bloqueia', prazo: 'Prazo', decisao: 'Decisão', task_ids: 'Tasks', processo_id: 'Processo', ligacao_id: 'Ligação', tipo: 'Tipo', mit006_ref: 'MIT006', visivel_cliente: 'Visível ao cliente', texto_cliente: 'Texto p/ cliente', retorno_cliente: 'Retorno do cliente' };
 const RAD_ALERTA_DIAS = 10;
 const radBadge = (txt, cls) => `<span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${cls}">${txt}</span>`;
 const radNorm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
@@ -5965,6 +5997,7 @@ async function carregaRadar(customer) {
   sel.value = cur;
   const ex = rad.d.execucao;
   $('#rad-exec').textContent = ex ? `· última leitura ${fmtDataHora(ex.finalizada_em || ex.iniciada_em)}` : '· sem leitura agendada ainda';
+  rad.diag = null;   // Estratégico/Diagnóstico recarregam junto do Radar
   if (!rad.d.itens.length && rad.d.propostas.length) rad.view = 'propostas';
   desenhaRadar();
 }
@@ -6115,6 +6148,9 @@ function radFormItem(i, attr) {
     ${'status' in i ? L('Ref. MIT006', `<input data-f="mit006_ref" class="${RAD_IN}" value="${v('mit006_ref')}" placeholder="se promovido">`) : ''}
     ${L('Bloqueia', `<input data-f="bloqueia" class="${RAD_IN}" value="${v('bloqueia')}">`, true)}
     ${L('Contexto', `<textarea data-f="contexto" rows="2" class="${RAD_IN}">${v('contexto')}</textarea>`, true)}
+    ${'status' in i ? L('Visível ao cliente (aba Pendências)', `<select data-f="visivel_cliente" class="${RAD_IN}"><option value="false">Não — só interno</option><option value="true" ${i.visivel_cliente ? 'selected' : ''}>Sim</option></select>`) : ''}
+    ${'status' in i ? L('Texto para o cliente', `<input data-f="texto_cliente" class="${RAD_IN}" value="${v('texto_cliente')}" placeholder="vazio = usa o título">`, true) : ''}
+    ${'status' in i ? L('Retorno esperado / recebido do cliente', `<textarea data-f="retorno_cliente" rows="2" class="${RAD_IN}">${v('retorno_cliente')}</textarea>`, true) : ''}
     ${'status' in i ? L('Decisão (o que foi decidido)', `<textarea data-f="decisao" rows="2" class="${RAD_IN}">${v('decisao')}</textarea>`, true) : ''}
   </div>`;
 }
@@ -6171,8 +6207,9 @@ function desenhaRadar() {
     b.classList.toggle('border-totvs-blue', on); b.classList.toggle('font-semibold', on);
     b.classList.toggle('text-totvs-petroleo', on); b.classList.toggle('border-transparent', !on); b.classList.toggle('text-slate-500', !on);
   });
-  $('#rad-filtros').classList.toggle('hidden', rad.view === 'propostas');
+  $('#rad-filtros').classList.toggle('hidden', ['propostas', 'estrategico', 'diagnostico'].includes(rad.view));
   const box = $('#rad-conteudo');
+  if (rad.view === 'estrategico' || rad.view === 'diagnostico') { desenhaDiagViews(box); return; }
   box.innerHTML = rad.view === 'propostas' ? desenhaRadarPropostas() : rad.view === 'ligacao' ? desenhaRadarLigacao() : desenhaRadarProcesso();
   box.querySelectorAll('[data-radi]').forEach(el => el.onclick = () => radAbreItem(+el.dataset.radi));
   box.querySelectorAll('[data-radapr]').forEach(b => b.onclick = async () => {
@@ -6275,6 +6312,400 @@ $$('#tab-radar .rad-v').forEach(b => b.addEventListener('click', () => { rad.vie
   $('#' + id).addEventListener(id === 'rad-q' ? 'input' : 'change', () => { rad.extra = null; desenhaRadar(); }));
 $('#rad-reload').addEventListener('click', () => carregaRadar(state.selected?.cli));
 $('#rad-novo').addEventListener('click', radNovoItem);
+
+// ============================================================================
+//  RADAR → ESTRATÉGICO e DIAGNÓSTICO (interno) · ABA PENDÊNCIAS (cliente)
+//  Spec: docs/specs/2026-10-28-diagnostico-e-pendencias.md
+//  Estratégico = o que definir e correr atrás, por marco (Cassio/Viviani).
+//  Diagnóstico = matriz processo × camada (cadastro, movimento, contabilização,
+//  fluxo) com as verificações na base do cliente, avaliação manual e o perfil da
+//  contabilização do legado. Dados: /api/diag/<cliente> (só interno).
+// ============================================================================
+const DG_CAMADAS = [['cadastro', 'Cadastros'], ['movimento', 'Movimentos'], ['contabilizacao', 'Contabilização'], ['fluxo', 'Fluxos e integrações']];
+const DG_COR = { vermelho: 'bg-rose-500 text-white', amarelo: 'bg-amber-400 text-amber-950', verde: 'bg-emerald-500 text-white', cinza: 'bg-slate-200 text-slate-600', info: 'bg-sky-100 text-sky-800' };
+const DG_ROT = { vermelho: 'Crítico', amarelo: 'Atenção', verde: 'OK', cinza: 'Sem leitura / a avaliar', info: 'Informativo' };
+const DG_PESO = { vermelho: 3, amarelo: 2, cinza: 1, verde: 0, info: -1 };
+const DG_AMB = { producao: 'Produção', teste: 'Teste' };
+const dgChip = (cor, txt) => `<span class="inline-block rounded px-1.5 py-0.5 text-[11px] font-semibold whitespace-nowrap ${DG_COR[cor] || DG_COR.cinza}">${txt ?? DG_ROT[cor] ?? cor}</span>`;
+const dgNum = v => v == null || v === '' ? '—' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+const dgDias = d => d ? Math.round((new Date(d + 'T12:00:00') - new Date(new Date().toISOString().slice(0, 10) + 'T12:00:00')) / 864e5) : null;
+const MIT_FECHADO = s => /conclu|cancel/i.test(s || '');
+const MIT_CLIENTE = a => !!(a || '').trim() && !/totvs|crm/i.test(a);   // atribuição vazia = triagem nossa
+
+/** Cor do check no ambiente escolhido: 'principal' é o primeiro ambiente do
+ *  catálogo (cadastro olha produção; movimento/contábil/fluxo olham o teste). */
+function dgCorCheck(c, amb) {
+  if (amb === 'pior') {
+    const cores = Object.values(c.resultados || {}).map(r => r.status).filter(Boolean);
+    return cores.sort((a, b) => (DG_PESO[b] ?? 0) - (DG_PESO[a] ?? 0))[0] || 'cinza';
+  }
+  const a = amb === 'principal' ? c.principal : amb;
+  if (c.tipo === 'manual') return c.resultados?.producao?.status || 'cinza';
+  return c.resultados?.[a]?.status || (c.ambientes?.includes(a) ? 'cinza' : null);
+}
+
+function dgCelula(checks, amb) {
+  const cores = checks.map(c => dgCorCheck(c, amb)).filter(x => x && x !== 'info');
+  const pior = cores.sort((a, b) => DG_PESO[b] - DG_PESO[a])[0] || (checks.length ? 'info' : null);
+  const n = k => cores.filter(x => x === k).length;
+  return { pior, n, total: checks.length };
+}
+
+/** Marcos com contagem do que trava cada um (usado no interno e no cliente). */
+function dgMarcos(marcos, checks, itens, mit) {
+  if (!marcos?.length) return '';
+  return `<div class="grid grid-cols-2 md:grid-cols-5 gap-2">${marcos.map(m => {
+    const dd = dgDias(m.data);
+    const ver = (checks || []).filter(c => c.marco === m.marco && c.impeditivo && ['vermelho', 'amarelo'].includes(c.status));
+    const its = (itens || []).filter(i => i.prazo && m.data && i.prazo <= m.data && RAD_ABERTOS.includes(i.status));
+    const cor = ver.some(c => c.status === 'vermelho') ? 'border-rose-300 bg-rose-50' : ver.length ? 'border-amber-300 bg-amber-50' : 'border-slate-200 bg-white';
+    return `<div class="rounded-lg border ${cor} px-3 py-2">
+      <div class="text-[11px] uppercase tracking-wider text-slate-500">${m.data ? fmtData(m.data) : 'a definir'}${dd != null ? ` · ${dd >= 0 ? 'D-' + dd : dd * -1 + ' dias atrás'}` : ''}</div>
+      <div class="font-semibold text-sm text-totvs-petroleo leading-tight">${escapeHtml(m.nome)}</div>
+      <div class="text-[11px] text-slate-500 mt-0.5">${ver.length ? `${ver.length} verificação(ões) travando` : 'nada travando no diagnóstico'}${its.length ? ` · ${its.length} item(ns) com prazo até lá` : ''}</div></div>`;
+  }).join('')}</div>`;
+}
+
+async function carregaDiag() {
+  rad.diag = await api(`/api/diag/${encodeURIComponent(rad.customer)}`);
+  return rad.diag;
+}
+
+function desenhaDiagViews(box) {
+  if (!rad.diag) {
+    box.innerHTML = '<p class="text-sm text-slate-400 p-6 text-center">Carregando diagnóstico…</p>';
+    carregaDiag().then(() => desenhaRadar()).catch(e => {
+      box.innerHTML = blocoErro('Não foi possível carregar o diagnóstico', e, () => { rad.diag = null; desenhaRadar(); });
+    });
+    return;
+  }
+  box.innerHTML = rad.view === 'estrategico' ? desenhaEstrategico() : desenhaDiagnostico();
+  ligaDiag(box);
+}
+
+// ── Estratégico ──────────────────────────────────────────────────────────────
+function dgLinhaCobrar(o) {
+  return `<div class="px-3 py-2 border-t border-slate-100 text-sm ${o.click ? 'cursor-pointer hover:bg-cyan-50/40' : ''}" ${o.click || ''}>
+    <div class="flex items-start gap-2"><span class="font-mono text-[11px] font-bold text-totvs-purple pt-0.5 shrink-0">${escapeHtml(o.id)}</span>
+      <span class="flex-1 min-w-0 text-totvs-petroleo">${escapeHtml(o.titulo)}</span></div>
+    <div class="flex flex-wrap gap-1 mt-1 items-center text-[11px] text-slate-500">${o.tags.join(' ')}</div></div>`;
+}
+
+function dgListas() {
+  const D = rad.diag, it = (rad.d?.itens || []).filter(i => RAD_ABERTOS.includes(i.status));
+  const mitAb = (D.mit006 || []).filter(m => !MIT_FECHADO(m.status));
+  const tk = (D.tickets || []).filter(t => /cliente/i.test(t.status_tasks || ''));
+  const pr = { alta: 0, media: 1, baixa: 2 };
+  const ordem = (a, b) => (pr[a.prioridade] ?? 1) - (pr[b.prioridade] ?? 1) || String(a.prazo || '9').localeCompare(String(b.prazo || '9'));
+  const radTag = i => [radBadge(i.prioridade, RAD_PRIO_CLS[i.prioridade]), i.bloqueia ? radBadge('⛔ ' + escapeHtml(i.bloqueia), 'bg-yellow-100 text-yellow-900') : '',
+    i.prazo ? `<span>prazo ${fmtData(i.prazo)}</span>` : '', i.dono_nome ? `<span>${escapeHtml(i.dono_nome)}</span>` : '',
+    `<span class="${(i.dias_sem_evidencia || 0) > RAD_ALERTA_DIAS ? 'text-rose-600 font-bold' : ''}">${i.dias_sem_evidencia || 0}d sem evidência</span>`];
+  const mitTag = m => [m.go_nogo === 'NoGo' ? radBadge('NoGo', 'bg-rose-100 text-rose-700') : (m.go_nogo ? radBadge(escapeHtml(m.go_nogo), 'bg-slate-100 text-slate-600') : ''),
+    m.criticidade ? `<span>${escapeHtml(m.criticidade)}</span>` : '', `<span>${escapeHtml(m.status || 'sem status')}</span>`,
+    m.resp_cliente ? `<span>cliente: ${escapeHtml(m.resp_cliente)}</span>` : '', m.resp_totvs ? `<span>TOTVS: ${escapeHtml(m.resp_totvs)}</span>` : ''];
+  const fromRad = i => ({ id: i.codigo, titulo: i.titulo, tags: radTag(i), click: `data-radi="${i.id}"`, texto: `${i.codigo} — ${i.titulo}${i.prazo ? ' (prazo ' + fmtData(i.prazo) + ')' : ''}` });
+  const fromMit = m => ({ id: 'MIT ' + m.mit_id, titulo: `${m.modulo ? m.modulo + ' · ' : ''}${(m.pendencia || '').split('\n')[0]}`, tags: mitTag(m),
+    texto: `MIT006 #${m.mit_id} — ${m.modulo || ''}: ${(m.pendencia || '').split('\n')[0]}${m.historico ? ' | último: ' + m.historico.trim().split('\n').pop() : ''}` });
+  const fromTk = t => ({ id: '#' + t.id, titulo: t.titulo, tags: [radBadge(escapeHtml(t.status_tasks), 'bg-orange-100 text-orange-800'), `<span>${t.aging_dias ?? '?'}d de aging</span>`,
+    t.ult_ocorr_at ? `<span>última ocorrência ${fmtDataHora(t.ult_ocorr_at)}</span>` : ''], texto: `Task ${t.id} — ${t.titulo} (${t.status_tasks}, ${t.aging_dias ?? '?'} dias)` });
+  const fromChk = c => ({ id: c.check_id, titulo: c.titulo, tags: [dgChip(c.status), c.marco ? `<span>${escapeHtml(c.marco)}</span>` : '',
+    c.nota ? `<span>${escapeHtml(c.nota)}</span>` : ''], texto: `${c.check_id} — ${c.titulo}${c.nota ? ' (' + c.nota + ')' : ''}` });
+  const chkV = (D.checks || []).filter(c => c.impeditivo && c.status === 'vermelho');
+  return {
+    cliente: [...it.filter(i => i.dono_lado !== 'TOTVS').sort(ordem).map(fromRad),
+              ...mitAb.filter(m => MIT_CLIENTE(m.atribuicao) && m.go_nogo === 'NoGo').map(fromMit),
+              ...chkV.filter(c => c.responsavel_lado === 'DIGITRO').map(fromChk),
+              ...tk.map(fromTk)],
+    totvs: [...it.filter(i => i.dono_lado === 'TOTVS').sort(ordem).map(fromRad),
+            ...mitAb.filter(m => !MIT_CLIENTE(m.atribuicao) && m.go_nogo === 'NoGo').map(fromMit),
+            ...chkV.filter(c => c.responsavel_lado !== 'DIGITRO').map(fromChk)],
+    decidir: [...it.filter(i => i.tipo === 'definicao').sort(ordem).map(fromRad),
+              ...(D.checks || []).filter(c => c.tipo === 'manual' && c.impeditivo && c.status !== 'verde').map(fromChk)],
+  };
+}
+
+function desenhaEstrategico() {
+  const D = rad.diag, it = (rad.d?.itens || []).filter(i => RAD_ABERTOS.includes(i.status));
+  const mitAb = (D.mit006 || []).filter(m => !MIT_FECHADO(m.status));
+  const cel = [];
+  const procs = D.processos || [];
+  procs.forEach(p => DG_CAMADAS.forEach(([k]) => {
+    const cs = (D.checks || []).filter(c => c.processo_prefixo === p.prefixo && c.camada === k);
+    if (cs.length) cel.push(dgCelula(cs, 'principal').pior);
+  }));
+  const L = dgListas();
+  const k = [
+    ['Células críticas no diagnóstico', cel.filter(c => c === 'vermelho').length, 'diagnostico'],
+    ['Definições em aberto', it.filter(i => i.tipo === 'definicao').length, 'processo'],
+    ['Aguardando o cliente', L.cliente.length, null],
+    ['Na fila da TOTVS', L.totvs.length, null],
+    ['MIT006 NoGo em aberto', mitAb.filter(m => m.go_nogo === 'NoGo').length, null],
+    [`Parados +${RAD_ALERTA_DIAS} dias`, it.filter(i => (i.dias_sem_evidencia || 0) > RAD_ALERTA_DIAS).length, 'processo'],
+  ];
+  const bloco = (titulo, sub, lista, chave) => `<div class="bg-white border border-slate-200 rounded-lg overflow-hidden flex flex-col">
+    <div class="px-3 py-2 flex items-center gap-2"><span class="font-semibold text-totvs-petroleo">${titulo}</span><span class="text-xs text-slate-500">${lista.length}</span>
+      <span class="flex-1"></span><button data-dgcopia="${chave}" class="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50">Copiar pauta</button></div>
+    <p class="px-3 pb-1 text-[11px] text-slate-400">${sub}</p>
+    <div class="max-h-[460px] overflow-auto">${lista.map(dgLinhaCobrar).join('') || '<p class="px-3 py-2 text-xs text-slate-400 border-t border-slate-100">Nada aqui.</p>'}</div></div>`;
+  const sem = (D.mit006 || []).length ? '' : `<p class="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">A MIT006 ainda não foi espelhada (a leitura agendada sincroniza a planilha a cada 2 horas).</p>`;
+  return `${dgMarcos(D.marcos, D.checks, it, D.mit006)}
+    <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 my-3">${k.map((x, ix) => `<button data-dgk="${ix}" class="text-left rounded-lg px-3 py-2 ${x[1] ? 'bg-totvs-petroleo text-white' : 'bg-slate-50 text-totvs-petroleo border border-slate-200'} hover:ring-2 hover:ring-totvs-blue" ${x[2] ? `data-dgir="${x[2]}"` : ''}>
+      <div class="text-xl font-bold leading-tight ${x[1] ? 'text-totvs-blue' : ''}">${x[1]}</div><div class="text-[11px] opacity-80">${escapeHtml(x[0])}</div></button>`).join('')}</div>
+    ${sem}
+    <div class="grid grid-cols-1 xl:grid-cols-3 gap-3">
+      ${bloco('Cobrar do cliente', 'Radar com dono cliente/ambos, MIT006 NoGo atribuída ao cliente, verificações críticas do lado deles e Tasks paradas com o cliente.', L.cliente, 'cliente')}
+      ${bloco('Nossa fila (TOTVS)', 'Radar com dono TOTVS, MIT006 NoGo da TOTVS/CRM e verificações críticas do nosso lado.', L.totvs, 'totvs')}
+      ${bloco('Decisões que travam marcos', 'Definições em aberto e avaliações manuais impeditivas ainda não verdes.', L.decidir, 'decidir')}
+    </div>`;
+}
+
+// ── Diagnóstico ─────────────────────────────────────────────────────────────
+function desenhaDiagnostico() {
+  const D = rad.diag, amb = rad.damb;
+  const ex = (D.execucoes || []).map(e => `${DG_AMB[e.ambiente] || e.ambiente}: ${fmtDataHora(e.finalizada_em || e.iniciada_em)} (${e.ok} ok${e.falhas ? ', ' + e.falhas + ' com erro' : ''})`).join(' · ') || 'nenhuma coleta ainda';
+  const procs = (D.processos || []).filter(p => (D.checks || []).some(c => c.processo_prefixo === p.prefixo) ||
+    (rad.d?.itens || []).some(i => i.processo_prefixo === p.prefixo && RAD_ABERTOS.includes(i.status)));
+  const abertosRad = p => (rad.d?.itens || []).filter(i => i.processo_prefixo === p && RAD_ABERTOS.includes(i.status)).length;
+  const abertosMit = p => (D.mit006 || []).filter(m => m.processo_prefixo === p && !MIT_FECHADO(m.status)).length;
+  const head = `<div class="flex items-center gap-2 flex-wrap mb-3 text-sm">
+      <span class="text-xs text-slate-500">Ler a cor pela base</span>
+      <select id="dg-amb" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white text-sm">
+        ${[['principal', 'Principal de cada verificação'], ['producao', 'Produção'], ['teste', 'Teste'], ['pior', 'Pior das duas']].map(([v, t]) => `<option value="${v}" ${amb === v ? 'selected' : ''}>${t}</option>`).join('')}
+      </select>
+      <button data-dgcol="producao" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⟳ Coletar Produção</button>
+      <button data-dgcol="teste" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">⟳ Coletar Teste</button>
+      ${D.admin ? '<button id="dg-cat" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50" title="Relê docs/diagnostico/catalogo_padrao.json do repositório">Atualizar catálogo</button>' : ''}
+      <span class="text-xs text-slate-400">Última coleta — ${escapeHtml(ex)}</span></div>`;
+  const leg = `<div class="flex flex-wrap gap-3 text-[11px] text-slate-500 mb-2">${['vermelho', 'amarelo', 'verde', 'cinza'].map(c => `${dgChip(c, '&nbsp;')} ${DG_ROT[c]}`).join('')}
+      <span>· célula = pior cor das verificações · número = verificações por cor</span></div>`;
+  const linhas = procs.map(p => {
+    const tds = DG_CAMADAS.map(([k]) => {
+      const cs = (D.checks || []).filter(c => c.processo_prefixo === p.prefixo && c.camada === k);
+      if (!cs.length) return '<td class="px-2 py-2 text-center text-slate-300">—</td>';
+      const r = dgCelula(cs, amb), sel = rad.dsel === p.prefixo + '|' + k;
+      const cont = ['vermelho', 'amarelo', 'verde', 'cinza'].filter(c => r.n(c)).map(c => `<span class="opacity-90">${r.n(c)}${c[0].toUpperCase()}</span>`).join(' ');
+      return `<td class="px-1.5 py-1.5"><button data-dgcel="${p.prefixo}|${k}" class="w-full rounded-md px-2 py-2 text-xs font-semibold ${DG_COR[r.pior] || DG_COR.cinza} ${sel ? 'ring-2 ring-offset-1 ring-totvs-petroleo' : ''}">${DG_ROT[r.pior] || '—'}<div class="font-normal text-[10px]">${cont || r.total + ' info'}</div></button></td>`;
+    }).join('');
+    const ar = abertosRad(p.prefixo), am = abertosMit(p.prefixo);
+    return `<tr class="border-t border-slate-100"><td class="px-3 py-2 text-sm font-medium text-totvs-petroleo whitespace-nowrap">${escapeHtml(p.nome)}<span class="block text-[10px] text-slate-400 font-normal">${p.prefixo}</span></td>${tds}
+      <td class="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">${ar ? `<b>${ar}</b> no Radar` : ''}${ar && am ? ' · ' : ''}${am ? `<b>${am}</b> na MIT006` : ''}${!ar && !am ? '<span class="text-slate-300">—</span>' : ''}</td></tr>`;
+  }).join('');
+  const mat = `<div class="overflow-x-auto bg-white border border-slate-200 rounded-lg"><table class="w-full min-w-[760px]">
+      <thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 text-left"><th class="px-3 py-2">Processo</th>${DG_CAMADAS.map(([, t]) => `<th class="px-2 py-2 text-center">${t}</th>`).join('')}<th class="px-3 py-2">Definições abertas</th></tr></thead>
+      <tbody>${linhas}</tbody></table></div>`;
+  return head + leg + mat + `<div id="dg-detalhe" class="mt-3">${dgDetalhe()}</div>` + dgLegado();
+}
+
+function dgDetalhe() {
+  if (!rad.dsel) return '<p class="text-xs text-slate-400">Clique numa célula para ver as verificações.</p>';
+  const [pf, cam] = rad.dsel.split('|');
+  const D = rad.diag, p = (D.processos || []).find(x => x.prefixo === pf);
+  const cs = (D.checks || []).filter(c => c.processo_prefixo === pf && c.camada === cam);
+  return `<div class="bg-white border border-slate-200 rounded-lg">
+    <div class="px-4 py-2.5 border-b border-slate-100 font-semibold text-totvs-petroleo">${escapeHtml(p?.nome || pf)} · ${DG_CAMADAS.find(x => x[0] === cam)?.[1] || cam}</div>
+    ${cs.map(c => {
+      const res = ['producao', 'teste'].map(a => {
+        const r = c.resultados?.[a];
+        if (!r || (c.tipo !== 'manual' && !c.ambientes.includes(a))) return '';
+        if (c.tipo === 'manual') return `<div class="text-xs">${dgChip(r.status)} avaliado ${r.coletado_em ? fmtDataHora(r.coletado_em) : '—'}${c.avaliado_por ? ' por ' + escapeHtml(c.avaliado_por) : ''}</div>`;
+        return `<div class="text-xs mt-0.5"><span class="inline-block w-16 text-slate-500">${DG_AMB[a]}</span>${dgChip(r.status)}
+          <b class="ml-1">${dgNum(r.valor)}</b>${r.total != null ? ` de ${dgNum(r.total)}` : ''} <span class="text-slate-400">· ${fmtDataHora(r.coletado_em)}${r.ms ? ' · ' + r.ms + 'ms' : ''}</span>
+          ${r.amostra ? `<div class="text-slate-500 ml-16 break-all">ex.: ${escapeHtml(r.amostra)}</div>` : ''}
+          ${r.erro ? `<div class="text-rose-600 ml-16 break-all">${escapeHtml(r.erro)}</div>` : ''}</div>`;
+      }).join('') || '<div class="text-xs text-slate-400">Ainda não coletado — use ⟳ Coletar.</div>';
+      const refs = [...(c.radar_codigos || []).map(x => radBadge('Radar ' + escapeHtml(x), 'bg-violet-50 text-violet-700')),
+                    ...(c.mit006_ids || []).map(x => radBadge('MIT006 #' + escapeHtml(x), 'bg-slate-100 text-slate-600'))].join(' ');
+      return `<div class="px-4 py-3 border-t border-slate-100" data-dgchk="${escapeHtml(c.check_id)}">
+        <div class="flex items-center gap-2 flex-wrap"><span class="font-mono text-xs font-bold text-totvs-purple">${escapeHtml(c.check_id)}</span>
+          <span class="font-medium text-sm text-totvs-petroleo">${escapeHtml(c.titulo)}</span>
+          ${c.impeditivo ? radBadge('impeditivo' + (c.marco ? ' · ' + escapeHtml(c.marco) : ''), 'bg-yellow-100 text-yellow-900') : ''}
+          ${c.responsavel_lado ? radBadge(RAD_LADO[c.responsavel_lado] || c.responsavel_lado, RAD_LADO_CLS[c.responsavel_lado] || '') : ''}
+          ${c.visivel_cliente ? '' : radBadge('interno', 'bg-slate-100 text-slate-500')} ${refs}</div>
+        ${c.pergunta ? `<p class="text-xs text-slate-500 mt-0.5">${escapeHtml(c.pergunta)}</p>` : ''}
+        <div class="mt-1">${res}</div>
+        ${c.nota ? `<p class="text-xs text-slate-600 mt-1">📝 ${escapeHtml(c.nota)}</p>` : ''}
+        <details class="mt-1"><summary class="text-[11px] text-cyan-700 cursor-pointer">avaliar${c.sql ? ' / ver SQL' : ''}</summary>
+          <div class="flex items-center gap-2 flex-wrap mt-1.5">
+            <select data-dgst class="px-2 py-1 border border-slate-300 rounded-md text-xs"><option value="">${c.tipo === 'manual' ? '— sem avaliação —' : '— usar a coleta —'}</option>
+              ${['verde', 'amarelo', 'vermelho', 'cinza'].map(x => `<option value="${x}" ${c.status_manual === x ? 'selected' : ''}>${DG_ROT[x]}</option>`).join('')}</select>
+            <input data-dgnota class="px-2 py-1 border border-slate-300 rounded-md text-xs flex-1 min-w-[220px]" value="${escapeHtml(c.nota || '')}" placeholder="nota (o porquê da cor, quem, quando)">
+            <button data-dgsalva class="px-2.5 py-1 rounded-md bg-totvs-blue text-totvs-petroleo text-xs font-semibold hover:bg-totvs-verde">Salvar</button></div>
+          ${c.sql ? `<pre class="mt-1.5 text-[10px] bg-slate-50 border border-slate-200 rounded p-2 whitespace-pre-wrap break-all">${escapeHtml(c.sql)}</pre>` : ''}</details>
+      </div>`;
+    }).join('')}</div>`;
+}
+
+function dgLegado() {
+  const L = rad.diag.legado || [];
+  if (!L.length) return '';
+  const fmtR = v => v == null ? '—' : 'R$ ' + (Number(v) / 1e6).toLocaleString('pt-BR', { maximumFractionDigits: 1 }) + ' mi';
+  return `<details class="mt-4 bg-white border border-slate-200 rounded-lg" open>
+    <summary class="px-4 py-2.5 cursor-pointer font-semibold text-totvs-petroleo">Contabilização do legado (ECD 2025) — o que precisa nascer no Protheus
+      <span class="text-xs font-normal text-slate-500">${L.reduce((s, x) => s + (x.partidas || 0), 0).toLocaleString('pt-BR')} partidas no ano</span></summary>
+    <div class="overflow-x-auto"><table class="w-full text-xs min-w-[900px]"><thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 text-left">
+      <th class="px-3 py-2">Família</th><th class="px-2 py-2 text-right">Partidas</th><th class="px-2 py-2 text-right">Lançam.</th><th class="px-2 py-2 text-right">Débitos</th>
+      <th class="px-2 py-2">Processo</th><th class="px-2 py-2">Como nasce no Protheus</th><th class="px-2 py-2">O que falta decidir</th></tr></thead>
+      <tbody>${L.map(x => `<tr class="border-t border-slate-100 align-top"><td class="px-3 py-2 font-medium text-totvs-petroleo">${escapeHtml(x.nome)}
+        <div class="text-[10px] text-slate-400 font-normal">${(x.top_contas || []).slice(0, 3).map(c => escapeHtml(c[0] + ' ' + c[1])).join(' · ')}</div></td>
+        <td class="px-2 py-2 text-right">${(x.partidas || 0).toLocaleString('pt-BR')}</td><td class="px-2 py-2 text-right">${x.lancamentos ?? '—'}</td>
+        <td class="px-2 py-2 text-right whitespace-nowrap">${fmtR(x.debitos)}</td><td class="px-2 py-2">${escapeHtml(x.processo_prefixo || '')}</td>
+        <td class="px-2 py-2 text-slate-600">${escapeHtml(x.protheus || '')}</td><td class="px-2 py-2 text-slate-600">${escapeHtml(x.decisao || '')}</td></tr>`).join('')}</tbody></table></div>
+    <p class="px-4 py-2 text-[11px] text-slate-400">${escapeHtml(L[0].fonte || '')}</p></details>`;
+}
+
+function ligaDiag(box) {
+  box.querySelectorAll('[data-radi]').forEach(el => el.onclick = () => radAbreItem(+el.dataset.radi));
+  box.querySelectorAll('[data-dgir]').forEach(b => b.onclick = () => { rad.view = b.dataset.dgir; desenhaRadar(); });
+  box.querySelectorAll('[data-dgcopia]').forEach(b => b.onclick = () => {
+    const L = dgListas()[b.dataset.dgcopia] || [];
+    const tit = { cliente: 'Pendências aguardando o cliente', totvs: 'Fila da TOTVS', decidir: 'Decisões que travam marcos' }[b.dataset.dgcopia];
+    const txt = `${tit} — ${new Date().toLocaleDateString('pt-BR')}\n` + L.map((x, ix) => `${ix + 1}. ${x.texto}`).join('\n');
+    navigator.clipboard?.writeText(txt).then(() => { b.textContent = 'Copiado ✓'; }, () => alert(txt));
+  });
+  const sa = $('#dg-amb'); if (sa) sa.onchange = () => { rad.damb = sa.value; desenhaRadar(); };
+  box.querySelectorAll('[data-dgcel]').forEach(b => b.onclick = () => { rad.dsel = rad.dsel === b.dataset.dgcel ? null : b.dataset.dgcel; desenhaRadar(); });
+  box.querySelectorAll('[data-dgcol]').forEach(b => b.onclick = async () => {
+    const amb = b.dataset.dgcol; b.disabled = true; b.textContent = `Coletando ${DG_AMB[amb]}…`;
+    try {
+      const r = await api(`/api/diag/${encodeURIComponent(rad.customer)}/coletar?ambiente=${amb}`, { method: 'POST' });
+      if (r.erro || r.falhas) alert(`${DG_AMB[amb]}: ${r.verificacoes} verificação(ões), ${r.falhas} com erro.${r.erro ? '\n' + r.erro : ''}`);
+      await carregaDiag(); desenhaRadar();
+    } catch (e) { alert(e.message); b.disabled = false; b.textContent = `⟳ Coletar ${DG_AMB[amb]}`; }
+  });
+  const cat = $('#dg-cat'); if (cat) cat.onclick = async () => {
+    cat.disabled = true;
+    try { const r = await api(`/api/diag/${encodeURIComponent(rad.customer)}/catalogo`, { method: 'POST' }); alert(`${r.verificacoes} verificações atualizadas.`); await carregaDiag(); desenhaRadar(); }
+    catch (e) { alert(e.message); cat.disabled = false; }
+  };
+  box.querySelectorAll('[data-dgchk]').forEach(el => {
+    const bt = el.querySelector('[data-dgsalva]'); if (!bt) return;
+    bt.onclick = async () => {
+      bt.disabled = true;
+      try {
+        await api(`/api/diag/${encodeURIComponent(rad.customer)}/check/${encodeURIComponent(el.dataset.dgchk)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status_manual: el.querySelector('[data-dgst]').value, nota: el.querySelector('[data-dgnota]').value }) });
+        await carregaDiag(); desenhaRadar();
+      } catch (e) { alert(e.message); bt.disabled = false; }
+    };
+  });
+}
+
+// ── Aba Pendências e Retornos (cliente) ─────────────────────────────────────
+const pen = { customer: null, d: null, view: 'cliente' };
+
+async function initPendencias() {
+  const cli = state.selected?.cli;
+  $('#pen-cliente-nome').textContent = (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (pen.customer === cli && pen.d) { desenhaPendencias(); return; }
+  await carregaPendencias(cli);
+}
+
+async function carregaPendencias(customer) {
+  pen.customer = customer || null;
+  const box = $('#pen-conteudo');
+  if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver as pendências.'); return; }
+  box.innerHTML = '<p class="text-sm text-slate-400 p-6 text-center">Carregando pendências…</p>';
+  try { pen.d = await api(`/api/pendencias/${encodeURIComponent(customer)}`); }
+  catch (e) { pen.d = null; box.innerHTML = blocoErro('Não foi possível carregar as pendências', e, () => carregaPendencias(customer)); return; }
+  const mods = [...new Set((pen.d.mit006 || []).map(m => m.modulo).filter(Boolean).concat((pen.d.itens || []).map(i => i.processo_nome)))].sort();
+  const sel = $('#pen-mod'), cur = sel.value;
+  sel.innerHTML = '<option value="">Todos os módulos</option>' + mods.map(m => `<option>${escapeHtml(m)}</option>`).join('');
+  sel.value = cur;
+  const s = (pen.d.mit006 || [])[0]?.sincronizado_em;
+  $('#pen-sync').textContent = s ? `· MIT006 sincronizada ${fmtDataHora(s)}` : '';
+  desenhaPendencias();
+}
+
+function penLinhas() {
+  const D = pen.d, q = radNorm($('#pen-q').value.trim()), mod = $('#pen-mod').value, nogo = $('#pen-nogo').checked;
+  const L = [];
+  (D.mit006 || []).forEach(m => L.push({ fonte: 'mit', id: '#' + m.mit_id, modulo: m.modulo || '', titulo: (m.pendencia || '').split('\n')[0],
+    detalhe: (m.pendencia || '').split('\n').slice(1).join('\n').trim(), historico: (m.historico || '').trim(), nogo: m.go_nogo === 'NoGo', go: m.go_nogo,
+    crit: m.criticidade, lado: MIT_CLIENTE(m.atribuicao) ? 'cliente' : 'totvs', status: m.status || 'Pendente', fechado: MIT_FECHADO(m.status),
+    resp: [m.resp_cliente && 'Cliente: ' + m.resp_cliente, m.resp_totvs && 'TOTVS: ' + m.resp_totvs].filter(Boolean).join(' · '),
+    tasks: m.tasks || [], documentos: m.documentos, prazo: null, retorno: null }));
+  (D.itens || []).forEach(i => L.push({ fonte: 'radar', id: i.codigo, modulo: i.processo_nome || '', titulo: i.titulo, detalhe: '',
+    historico: i.decisao ? 'Decidido: ' + i.decisao : '', nogo: !!i.bloqueia, go: i.bloqueia ? 'Trava: ' + i.bloqueia : '', crit: i.prioridade === 'alta' ? 'Alta' : '',
+    lado: i.dono_lado === 'TOTVS' ? 'totvs' : 'cliente', status: RAD_ST[i.status] || i.status, fechado: !RAD_ABERTOS.includes(i.status),
+    resp: i.dono_nome || '', tasks: i.task_ids || [], prazo: i.prazo, retorno: i.retorno_cliente, tipo: i.tipo }));
+  return L.filter(x => (!mod || x.modulo === mod) && (!nogo || x.nogo) &&
+    (!q || radNorm([x.id, x.modulo, x.titulo, x.detalhe, x.historico, x.resp, x.status].join(' ')).includes(q)));
+}
+
+function penCard(x) {
+  const ult = x.historico ? x.historico.split('\n').filter(Boolean).pop() : '';
+  return `<div class="px-4 py-3 border-t border-slate-100">
+    <div class="flex items-start gap-3"><span class="font-mono text-xs font-bold text-totvs-purple pt-0.5 w-16 shrink-0">${escapeHtml(x.id)}</span>
+      <div class="flex-1 min-w-0"><div class="font-medium text-sm text-totvs-petroleo">${escapeHtml(x.titulo)}</div>
+        <div class="flex flex-wrap gap-1 mt-1 items-center text-xs text-slate-500">
+          ${x.modulo ? radBadge(escapeHtml(x.modulo), 'bg-slate-100 text-slate-700') : ''}
+          ${x.tipo === 'definicao' ? radBadge('Definição', 'bg-fuchsia-50 text-fuchsia-700') : ''}
+          ${x.nogo ? radBadge(x.fonte === 'mit' ? 'NoGo' : escapeHtml(x.go), 'bg-rose-100 text-rose-700') : (x.go ? radBadge(escapeHtml(x.go), 'bg-emerald-50 text-emerald-700') : '')}
+          ${x.crit ? `<span>${escapeHtml(x.crit)}</span>` : ''}<span>· ${escapeHtml(x.status)}</span>
+          ${x.prazo ? `<span>· prazo ${fmtData(x.prazo)}</span>` : ''}${x.resp ? `<span>· ${escapeHtml(x.resp)}</span>` : ''}
+          ${x.tasks.length ? `<span>· tasks ${escapeHtml(x.tasks.join(', '))}</span>` : ''}</div>
+        ${x.retorno ? `<p class="text-xs mt-1 text-orange-800 bg-orange-50 rounded px-2 py-1">↩ ${escapeHtml(x.retorno)}</p>` : ''}
+        ${ult ? `<p class="text-xs mt-1 text-slate-600">Último registro: ${escapeHtml(ult)}</p>` : ''}
+        ${x.detalhe || x.historico ? `<details class="mt-1"><summary class="text-[11px] text-cyan-700 cursor-pointer">detalhe</summary>
+          <pre class="text-xs whitespace-pre-wrap font-sans text-slate-600 mt-1">${escapeHtml([x.detalhe, x.historico].filter(Boolean).join('\n\n'))}</pre>
+          ${x.documentos ? `<pre class="text-[11px] whitespace-pre-wrap font-sans text-slate-500 mt-1">${escapeHtml(x.documentos)}</pre>` : ''}</details>` : ''}
+      </div></div></div>`;
+}
+
+function penProntidao() {
+  const D = pen.d, procs = (D.processos || []).filter(p => (D.checks || []).some(c => c.processo_prefixo === p.prefixo));
+  if (!procs.length) return blocoVazioCad('O diagnóstico ainda não tem leitura para este cliente.');
+  const linhas = procs.map(p => `<tr class="border-t border-slate-100"><td class="px-3 py-2 text-sm font-medium text-totvs-petroleo">${escapeHtml(p.nome)}</td>${DG_CAMADAS.map(([k]) => {
+    const cs = (D.checks || []).filter(c => c.processo_prefixo === p.prefixo && c.camada === k);
+    if (!cs.length) return '<td class="px-2 py-2 text-center text-slate-300">—</td>';
+    const r = dgCelula(cs, 'principal');
+    return `<td class="px-1.5 py-1.5"><div class="rounded-md px-2 py-2 text-xs font-semibold text-center ${DG_COR[r.pior] || DG_COR.cinza}" title="${escapeHtml(cs.map(c => `${c.titulo}: ${DG_ROT[dgCorCheck(c, 'principal')] || '—'}`).join('\n'))}">${DG_ROT[r.pior] || '—'}</div></td>`;
+  }).join('')}</tr>`).join('');
+  const crit = (D.checks || []).filter(c => ['vermelho', 'amarelo'].includes(c.status));
+  return `<div class="overflow-x-auto bg-white border border-slate-200 rounded-lg"><table class="w-full min-w-[640px]">
+    <thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 text-left"><th class="px-3 py-2">Processo</th>${DG_CAMADAS.map(([, t]) => `<th class="px-2 py-2 text-center">${t}</th>`).join('')}</tr></thead>
+    <tbody>${linhas}</tbody></table></div>
+    <p class="text-[11px] uppercase tracking-wider text-slate-400 mt-4 mb-1">Pontos de atenção (${crit.length})</p>
+    <div class="bg-white border border-slate-200 rounded-lg">${crit.map(c => {
+      const r = c.resultados?.[c.principal] || {};
+      return `<div class="px-4 py-2 border-t border-slate-100 text-sm flex items-start gap-2">${dgChip(c.status)}<div class="flex-1"><span class="text-totvs-petroleo">${escapeHtml(c.titulo)}</span>
+        ${r.valor != null ? `<span class="text-xs text-slate-500"> · ${dgNum(r.valor)}${r.total != null ? ' de ' + dgNum(r.total) : ''} (${DG_AMB[c.principal] || ''})</span>` : ''}
+        ${c.pergunta ? `<div class="text-xs text-slate-500">${escapeHtml(c.pergunta)}</div>` : ''}</div></div>`;
+    }).join('') || '<p class="px-4 py-2 text-xs text-slate-400">Nenhum ponto de atenção.</p>'}</div>`;
+}
+
+function desenhaPendencias() {
+  const D = pen.d; if (!D) return;
+  const L = penLinhas(), ab = L.filter(x => !x.fechado);
+  $('#pen-marcos').innerHTML = dgMarcos(D.marcos, D.checks, D.itens, D.mit006);
+  const k = [['Aguardando a empresa', ab.filter(x => x.lado === 'cliente').length, 'cliente'], ['Com a TOTVS', ab.filter(x => x.lado === 'totvs').length, 'totvs'],
+             ['Impedem a virada (NoGo)', ab.filter(x => x.nogo).length, null], ['Concluídas', L.filter(x => x.fechado).length, 'concluidas']];
+  $('#pen-kpis').innerHTML = k.map(x => `<button ${x[2] ? `data-penk="${x[2]}"` : 'data-penk-nogo'} class="text-left rounded-lg px-3 py-2 bg-slate-50 text-totvs-petroleo border border-slate-200 hover:ring-2 hover:ring-totvs-blue">
+    <div class="text-xl font-bold leading-tight">${x[1]}</div><div class="text-[11px] opacity-80">${x[0]}</div></button>`).join('');
+  $$('#pen-kpis [data-penk]').forEach(b => b.onclick = () => { pen.view = b.dataset.penk; desenhaPendencias(); });
+  const ng = $('#pen-kpis [data-penk-nogo]'); if (ng) ng.onclick = () => { $('#pen-nogo').checked = true; if (pen.view === 'prontidao' || pen.view === 'concluidas') pen.view = 'cliente'; desenhaPendencias(); };
+  $$('#tab-pendencias .pen-v').forEach(b => {
+    const on = b.dataset.penv === pen.view;
+    b.classList.toggle('border-totvs-blue', on); b.classList.toggle('font-semibold', on);
+    b.classList.toggle('text-totvs-petroleo', on); b.classList.toggle('border-transparent', !on); b.classList.toggle('text-slate-500', !on);
+  });
+  $('#pen-filtros').classList.toggle('hidden', pen.view === 'prontidao');
+  const box = $('#pen-conteudo');
+  if (pen.view === 'prontidao') { box.innerHTML = penProntidao(); return; }
+  const lista = pen.view === 'concluidas' ? L.filter(x => x.fechado) : ab.filter(x => x.lado === pen.view);
+  const crit = x => (x.nogo ? 0 : 1) * 10 + (parseInt(x.crit) || (x.crit === 'Alta' ? 2 : 5));
+  lista.sort((a, b) => crit(a) - crit(b));
+  const grupos = {};
+  lista.forEach(x => (grupos[x.modulo || 'Geral'] = grupos[x.modulo || 'Geral'] || []).push(x));
+  const nota = acesso.modo === 'interno' ? `<p class="mb-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">Esta é a visão do cliente. Do Radar só aparecem os itens marcados <b>visível ao cliente</b> (com o texto para o cliente); a MIT006 vem da planilha oficial; a prontidão não mostra SQL, amostra nem notas internas.</p>` : '';
+  box.innerHTML = nota + (Object.keys(grupos).sort().map(g => `<details class="bg-white border border-slate-200 rounded-lg mb-2 overflow-hidden" open>
+      <summary class="flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none"><span class="font-semibold text-totvs-petroleo">${escapeHtml(g)}</span>
+      <span class="text-xs text-slate-500">${grupos[g].length}</span></summary>${grupos[g].map(penCard).join('')}</details>`).join('') || blocoVazioCad('Nada nesta lista. 🎉'));
+}
+
+$$('#tab-pendencias .pen-v').forEach(b => b.addEventListener('click', () => { pen.view = b.dataset.penv; desenhaPendencias(); }));
+['pen-q', 'pen-mod', 'pen-nogo'].forEach(id => $('#' + id).addEventListener(id === 'pen-q' ? 'input' : 'change', desenhaPendencias));
+$('#pen-reload').addEventListener('click', () => carregaPendencias(state.selected?.cli));
 
 async function initTransicao() {
   const cli = state.selected?.cli;
@@ -6702,6 +7133,7 @@ const RELATORIOS = {
   prototipo: { titulo: 'Protótipo',               alvo: '#tab-prototipo' },
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
   radar:     { titulo: 'Radar de Definições',     alvo: '#rad-conteudo' },
+  pendencias: { titulo: 'Pendências e Retornos', alvo: '#tab-pendencias' },
 };
 
 /** Cabeçalho/rodapé comuns — o que identifica de QUEM e de QUANDO é o número.

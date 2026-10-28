@@ -312,6 +312,10 @@ ABAS = [
     # alimentado pela leitura agendada (e-mails, transcrições, Drive, Tasks).
     # INTERNO por natureza — "cliente": False impede liberar na tela de Acessos.
     {"id": "radar",     "label": "Radar de Definições",  "cliente": False, "sensivel": True},
+    # Pendências e Retornos (28/10/2026): a visão do CLIENTE — MIT006 espelhada,
+    # itens do Radar marcados "visível ao cliente" e a prontidão por processo
+    # do Diagnóstico (sem SQL, amostra nem nota interna).
+    {"id": "pendencias", "label": "Pendências e Retornos", "cliente": True},
 ]
 ABAS_IDS = [a["id"] for a in ABAS]
 # 23/10/2026: TODAS as abas passaram a ser liberáveis para o perfil cliente
@@ -9376,7 +9380,10 @@ RADAR_TIPOS = ("definicao", "atividade")
 # Campos que a tela pode gravar num item (o resto é do banco: código, datas, autor)
 RADAR_CAMPOS = ("titulo", "contexto", "status", "tipo", "prioridade", "processo_id",
                 "ligacao_id", "dono_lado", "dono_nome", "prazo", "bloqueia",
-                "decisao", "task_ids", "mit006_ref")
+                "decisao", "task_ids", "mit006_ref",
+                # 28/10/2026 — visão do cliente (aba Pendências): só sai o que
+                # foi marcado, com o texto pensado para ele, nunca o contexto.
+                "visivel_cliente", "texto_cliente", "retorno_cliente")
 
 
 def _radar_gate(customer):
@@ -9396,7 +9403,11 @@ def _radar_campos(b, novo=False):
             v = v.strip() or None
         if v is None and k in ("status", "dono_lado", "prioridade", "tipo", "processo_id"):
             continue          # colunas NOT NULL: vazio na tela = "não mexer"
-        if k == "task_ids":
+        if k == "visivel_cliente":
+            if v is None:
+                continue          # NOT NULL: vazio = não mexer
+            v = v if isinstance(v, bool) else str(v).strip().lower() in ("1", "true", "sim", "s", "on")
+        elif k == "task_ids":
             if isinstance(v, str):
                 v = re.split(r"[,;\s]+", v)
             v = [str(x).strip() for x in (v or []) if str(x).strip()]
@@ -9555,6 +9566,356 @@ def api_radar_rejeitar(customer, pid):
     mot = ((request.get_json(silent=True) or {}).get("motivo") or "").strip() or None
     q("select cockpit.radar_rejeitar_proposta(%s, %s, %s)", (pid, current_user(), mot), one=True)
     return _json({"ok": True})
+
+
+# ── DIAGNÓSTICO DE SOBREVIVÊNCIA + PENDÊNCIAS DO CLIENTE ────────────────────
+# Spec: docs/specs/2026-10-28-diagnostico-e-pendencias.md
+# SQL:  docs/sql/2026-10-28-diagnostico-pendencias.sql
+#
+# Matriz PROCESSO × CAMADA (cadastro, movimento, contabilização, fluxo). Cada
+# célula é a pior cor das verificações dela. Verificação = uma consulta Oracle
+# na base do cliente (TSCMONITREST /query), uma comparação produção × teste
+# das medições de Cadastros (monitcad) ou uma avaliação manual do consultor.
+# Uma consulta POR verificação, em paralelo: campo ausente derruba só aquela.
+DIAG_CAMADAS = ("cadastro", "movimento", "contabilizacao", "fluxo")
+DIAG_CORES = ("verde", "amarelo", "vermelho", "cinza")
+DIAG_TEMPO_MIN = 4
+DIAG_PARALELO = 6
+DIAG_CATALOGO_URL = os.environ.get(
+    "DIAG_CATALOGO_URL",
+    "https://raw.githubusercontent.com/regeswerlang-oss/ProjetosTotvsSC/main/docs/diagnostico/catalogo_padrao.json")
+_RE_DIAG_TAB = re.compile(r"\{([A-Z][A-Z0-9]{2})\}")
+
+
+def _diag_num(v):
+    if v is None:
+        return None
+    s = str(v).strip().replace(",", ".")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def _diag_status(regra, amb, valor, total):
+    """Cor de UMA verificação. Função pura (testada em docs/testes/diag-back.py).
+
+    modo zero      VALOR = registros com problema; 0 = verde; até `amarelo`
+                   (fração do TOTAL, padrão 10%) = amarelo; acima = vermelho.
+                   `teto: amarelo` = nunca passa de amarelo. TOTAL 0 = cinza.
+    modo minimo    VALOR >= min = verde; >0 = amarelo; 0 = vermelho.
+    modo cobertura VALOR/TOTAL (ou /meta) >= verde = verde; >= amarelo = amarelo.
+    modo paridade  igual a cobertura (produção ÷ teste).
+    modo info      só mostra o número.
+    A regra pode ter um bloco por ambiente ({"producao": {"modo": "info"}})."""
+    r = dict(regra or {})
+    r.update((regra or {}).get(amb) or {})
+    modo = r.get("modo", "zero")
+    if modo == "info":
+        return "info"
+    if valor is None:
+        return "cinza"
+    if modo == "minimo":
+        m = float(r.get("min", 1))
+        return "verde" if valor >= m else ("amarelo" if valor > 0 else "vermelho")
+    if modo in ("cobertura", "paridade"):
+        base = r.get("meta") or total
+        if not base:
+            return "cinza"
+        pct = valor / float(base)
+        return "verde" if pct >= float(r.get("verde", 1)) else (
+            "amarelo" if pct >= float(r.get("amarelo", 0.5)) else "vermelho")
+    # zero
+    if not total:
+        return "verde" if valor == 0 and total is None else "cinza"
+    if valor == 0:
+        return "verde"
+    cor = "amarelo" if valor / float(total) <= float(r.get("amarelo", 0.1)) else "vermelho"
+    if r.get("teto") == "amarelo":
+        cor = "amarelo"
+    return cor
+
+
+def _diag_sql(sql, sufixo):
+    """{SB1} → SB1010. Só troca códigos de 3 caracteres em maiúsculas."""
+    return _RE_DIAG_TAB.sub(lambda m: m.group(1) + (sufixo or ""), sql or "")
+
+
+def _diag_monitcad(customer, tabela):
+    """(produção, teste) da última medição de Cadastros de cada base."""
+    rows = q("""select distinct on (m.ambiente) m.ambiente, t.realizado, m.data_medicao
+                  from cockpit.monitcad_medicoes m
+                  join cockpit.monitcad_tabelas t on t.medicao_id = m.id and t.tabela = %s
+                 where m.customer = %s
+                 order by m.ambiente, m.data_medicao desc""", (tabela, customer))
+    d = {r["ambiente"]: r for r in rows}
+    p, t = d.get("producao"), d.get("teste")
+    return (_diag_num(p["realizado"]) if p else None, _diag_num(t["realizado"]) if t else None,
+            f"produção {p['data_medicao'] if p else '—'} · teste {t['data_medicao'] if t else '—'}")
+
+
+def _diag_coletar(customer, amb, disparado_por):
+    """Roda as verificações de um ambiente e grava cockpit.diag_resultados.
+    Devolve (payload, erro_http)."""
+    from concurrent.futures import ThreadPoolExecutor
+    cfg = _cfg_ambiente(customer, amb)
+    checks = q("""select check_id, tipo, sql, regra from cockpit.diag_checks
+                   where customer=%s and ativo and tipo in ('sql','monitcad') and %s = any(ambientes)
+                   order by ordem""", (customer, amb))
+    if not checks:
+        return None, _err(409, f"Nenhuma verificação ativa para {customer} em {amb}.")
+    ex = q("insert into cockpit.diag_execucoes (customer, ambiente, disparado_por) values (%s,%s,%s) "
+           "returning id", (customer, amb, disparado_por), one=True)["id"]
+    ini = time.time()
+    res = []
+
+    def grava(c, valor, total, amostra=None, erro=None, ms=None):
+        st = "cinza" if erro else _diag_status(c["regra"], amb, valor, total)
+        res.append((ex, customer, c["check_id"], amb, valor, total, st,
+                    (amostra or None) and str(amostra)[:2000], (erro or None) and str(erro)[:1000], ms))
+
+    for c in [c for c in checks if c["tipo"] == "monitcad"]:
+        tab = (c["regra"] or {}).get("tabela")
+        p, t, quando = _diag_monitcad(customer, tab)
+        if p is None or t is None:
+            grava(c, p, t, quando, "Sem medição de Cadastros nas duas bases para comparar.")
+        else:
+            grava(c, p, t, quando)
+
+    sqls = [c for c in checks if c["tipo"] == "sql"]
+    erro_geral = None
+    if sqls:
+        if not cfg or not cfg.get("ativo"):
+            erro_geral = f"Ambiente {amb} não cadastrado ou inativo (⚙ Ambiente, aba Cadastros)."
+        else:
+            try:
+                heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+            except RuntimeError as e:
+                heads = tok = None
+                erro_geral = str(e)
+            if not erro_geral and not tok:
+                erro_geral = "Sem token cadastrado para este ambiente (X-TSC-Token)."
+        if erro_geral:
+            for c in sqls:
+                grava(c, None, None, None, erro_geral)
+        else:
+            prazo = ini + tmo
+            suf = (cfg.get("sufixo") or "").strip()
+            params = {"empresa": cfg.get("empresa") or "01", "filial": cfg.get("filial") or "01"}
+
+            def roda(c):
+                t0 = time.time()
+                resta = prazo - t0
+                if resta < DIAG_TEMPO_MIN:
+                    return c, None, None, None, "Não lido: o tempo da coleta acabou.", 0
+                try:
+                    r = requests.post(f"{cfg['url_rest']}/query",
+                                      json={"token": tok, "tipo": "diagnostico",
+                                            "sql": _sql_execucao(_diag_sql(c["sql"], suf)), "limite": 5},
+                                      headers=heads, auth=auth, params=params,
+                                      timeout=max(5, int(resta)), verify=_verifica_tls(cfg))
+                    dados = _json_da_resposta(r)
+                except requests.RequestException as e:
+                    return c, None, None, None, _motivo_rede(e), int((time.time() - t0) * 1000)
+                ms = int((time.time() - t0) * 1000)
+                if r.status_code >= 400 or not dados.get("ok"):
+                    return c, None, None, None, dados.get("erro") or f"HTTP {r.status_code}: {_trecho(r)}", ms
+                linhas = _integ_csv(dados.get("csv") or "")
+                if not linhas:
+                    return c, None, None, None, "A consulta não devolveu linha.", ms
+                l0 = linhas[0]
+                return c, _diag_num(l0.get("VALOR")), _diag_num(l0.get("TOTAL")), l0.get("AMOSTRA"), None, ms
+
+            with ThreadPoolExecutor(max_workers=DIAG_PARALELO) as pool:
+                for c, v, t, a, e, ms in pool.map(roda, sqls):
+                    grava(c, v, t, a, e, ms)
+
+    if res:
+        with db() as cn, cn.cursor() as cur:
+            execute_values(cur, """insert into cockpit.diag_resultados
+                (execucao_id, customer, check_id, ambiente, valor, total, status, amostra, erro, ms) values %s""", res)
+    falhas = sum(1 for x in res if x[8])
+    execute("update cockpit.diag_execucoes set finalizada_em=now(), ok=%s, falhas=%s, erro=%s where id=%s",
+            (len(res) - falhas, falhas, erro_geral, ex))
+    _log_coleta(customer, amb, "diagnostico", ini, falhas < len(res), itens=len(res),
+                erro=erro_geral or (f"{falhas} verificação(ões) com erro" if falhas else None))
+    return {"ok": True, "execucao_id": ex, "ambiente": amb, "verificacoes": len(res), "falhas": falhas,
+            "erro": erro_geral, "duracao_ms": int((time.time() - ini) * 1000)}, None
+
+
+def _diag_payload(customer, completo=True):
+    """Catálogo + último resultado por ambiente. `completo=False` é o recorte do
+    cliente: sem SQL, amostra, nota, erro e só o que é visível ao cliente."""
+    checks = q("select * from cockpit.diag_checks where customer=%s and ativo order by ordem", (customer,))
+    ult = q("select check_id, ambiente, valor, total, status, amostra, erro, coletado_em, ms "
+            "from cockpit.vw_diag_ultimo where customer=%s", (customer,))
+    por = {}
+    for u in ult:
+        por.setdefault(u["check_id"], {})[u["ambiente"]] = u
+    out = []
+    for c in checks:
+        r = por.get(c["check_id"], {})
+        if c["tipo"] == "manual":
+            r = {"producao": {"status": c["status_manual"] or "cinza", "coletado_em": c["avaliado_em"]}}
+        principal = (c["ambientes"] or ["producao"])[0]
+        item = {k: c[k] for k in ("check_id", "processo_prefixo", "camada", "titulo", "pergunta", "tipo",
+                                  "impeditivo", "marco", "responsavel_lado", "ambientes")}
+        item["principal"] = principal
+        item["resultados"] = r
+        item["status"] = (r.get(principal) or {}).get("status") or "cinza"
+        if completo:
+            item.update({k: c[k] for k in ("sql", "regra", "radar_codigos", "mit006_ids", "visivel_cliente",
+                                           "status_manual", "nota", "avaliado_por", "avaliado_em", "ordem")})
+        else:
+            if not c["visivel_cliente"]:
+                continue
+            item["resultados"] = {a: {k: v.get(k) for k in ("valor", "total", "status", "coletado_em")}
+                                  for a, v in r.items()}
+        out.append(item)
+    return out
+
+
+def _diag_gate(customer):
+    if (d := require_interno()):
+        return d
+    return deny_customer(customer)
+
+
+@app.get("/api/diag/<customer>")
+def api_diag(customer):
+    """Tudo das visões Estratégico e Diagnóstico (aba Radar) numa ida só."""
+    if (d := _diag_gate(customer)):
+        return d
+    procs = q("select id, nome, prefixo, grupo, ordem from cockpit.radar_processos "
+              "where customer=%s and ativo and tipo='processo' order by ordem", (customer,))
+    execs = q("""select distinct on (ambiente) * from cockpit.diag_execucoes where customer=%s
+                 order by ambiente, iniciada_em desc""", (customer,))
+    tickets = q("""select raw->>'id' as id, titulo, status_tasks, etapa_gap, aging_dias, ult_ocorr_at,
+                          ult_ocorr_autor, left(ult_ocorr_texto, 300) as ult_ocorr_texto
+                     from cockpit.tickets
+                    where left(customer,6)=left(%s,6)
+                      and status_tasks not in ('Resolvido','Cancelado','Fechado')
+                    order by aging_dias desc nulls last""", (customer,))
+    return _json({"ok": True, "processos": procs,
+                  "marcos": q("select * from cockpit.diag_marcos where customer=%s order by ordem", (customer,)),
+                  "checks": _diag_payload(customer),
+                  "execucoes": execs,
+                  "legado": q("select * from cockpit.diag_legado where customer=%s order by partidas desc", (customer,)),
+                  "mit006": q("select * from cockpit.mit006_itens where customer=%s and ativo "
+                              "order by nullif(regexp_replace(mit_id,'\\D','','g'),'')::int nulls last", (customer,)),
+                  "tickets": tickets, "admin": is_admin(current_user())})
+
+
+@app.post("/api/diag/<customer>/coletar")
+def api_diag_coletar(customer):
+    """POST /api/diag/000348D0/coletar?ambiente=teste — roda as consultas agora."""
+    erro, amb = _guarda_ambiente(customer, request.args.get("ambiente") or "teste", escrita=True)
+    if erro:
+        return erro
+    res, err = _diag_coletar(customer, amb, current_user())
+    return err or _json(res)
+
+
+@app.post("/api/diag/<customer>/check/<check_id>")
+def api_diag_check(customer, check_id):
+    """Avaliação manual (status + nota) — qualquer interno. SQL, regra e
+    ativo só o admin: SQL mexe no que a base do cliente executa."""
+    if (d := _diag_gate(customer)):
+        return d
+    b = request.get_json(silent=True) or {}
+    sets, vals = [], []
+    if "status_manual" in b:
+        st = (b.get("status_manual") or "").strip() or None
+        if st and st not in DIAG_CORES:
+            return _err(400, "Status inválido.")
+        sets += ["status_manual=%s", "avaliado_por=%s", "avaliado_em=now()"]
+        vals += [st, current_user()]
+    if "nota" in b:
+        sets.append("nota=%s")
+        vals.append((b.get("nota") or "").strip() or None)
+    adm = {k: b[k] for k in ("sql", "regra", "ativo", "impeditivo", "visivel_cliente") if k in b}
+    if adm and not is_admin(current_user()):
+        return _err(403, "Só o admin altera SQL, regra ou visibilidade de uma verificação.")
+    for k, v in adm.items():
+        sets.append(f"{k}=%s")
+        vals.append(json.dumps(v) if k == "regra" else v)
+    if not sets:
+        return _err(400, "Nada para gravar.")
+    r = q(f"update cockpit.diag_checks set {', '.join(sets)}, updated_at=now() "
+          "where customer=%s and check_id=%s returning check_id", (*vals, customer, check_id), one=True)
+    return _json({"ok": True}) if r else _err(404, "Verificação não encontrada.")
+
+
+@app.post("/api/diag/<customer>/catalogo")
+def api_diag_catalogo(customer):
+    """Atualiza as verificações SQL a partir do catálogo padrão do repositório
+    (docs/diagnostico/catalogo_padrao.json). Não mexe no que é do cliente:
+    impeditivo, marco, vínculos, avaliação manual e regra já personalizada."""
+    if (d := _diag_gate(customer)):
+        return d
+    if not is_admin(current_user()):
+        return _err(403, "Só o admin atualiza o catálogo.")
+    try:
+        cat = requests.get(DIAG_CATALOGO_URL, timeout=20).json()
+    except Exception as e:
+        return _err(502, f"Não consegui ler o catálogo: {e}")
+    n = 0
+    for c in cat:
+        q("""insert into cockpit.diag_checks (customer, check_id, processo_prefixo, camada, titulo, pergunta,
+                                              tipo, sql, regra, ambientes, ordem)
+             values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+             on conflict (customer, check_id) do update set sql=excluded.sql, camada=excluded.camada,
+                    processo_prefixo=excluded.processo_prefixo, tipo=excluded.tipo, updated_at=now()
+             returning check_id""",
+          (customer, c["check_id"], c["processo_prefixo"], c["camada"], c["titulo"], c.get("pergunta"),
+           c.get("tipo", "sql"), c.get("sql"), json.dumps(c.get("regra") or {"modo": "zero"}),
+           c.get("ambientes") or ["producao", "teste"], c.get("ordem") or 0), one=True)
+        n += 1
+    return _json({"ok": True, "verificacoes": n})
+
+
+@app.route("/api/cron/diagnostico", methods=["GET", "POST"])
+def api_cron_diagnostico():
+    """Para agendamento futuro (pg_cron/pg_net com o Bearer do CRON_SECRET):
+    GET /api/cron/diagnostico?customer=000348D0&ambiente=teste"""
+    if not _cron_autorizado():
+        return _err(401, "CRON_SECRET inválido ou ausente.")
+    customer = (request.args.get("customer") or "").strip()
+    amb = _amb_path(request.args.get("ambiente"))
+    if not customer or not amb:
+        return _err(400, "Informe customer e ambiente (producao|teste).")
+    res, err = _diag_coletar(customer, amb, "cron")
+    return err or _json(res)
+
+
+@app.get("/api/pendencias/<customer>")
+def api_pendencias(customer):
+    """Aba Pendências e Retornos — a visão do CLIENTE (liberável em Acessos).
+    Só sai o que foi pensado para ele: MIT006 (já é documento do cliente), itens
+    do Radar com visivel_cliente e a prontidão do Diagnóstico sem SQL/amostra."""
+    if (d := require_auth()):
+        return d
+    if (d := deny_aba(customer, "pendencias")):
+        return d
+    itens = q("""select codigo, tipo, coalesce(nullif(texto_cliente,''), titulo) as titulo, processo_nome,
+                        processo_prefixo, dono_lado, dono_nome, status, prioridade, bloqueia, prazo,
+                        retorno_cliente, decisao, decidida_em, aberta_em, dias_aberta, mit006_ref, task_ids
+                   from cockpit.vw_radar_itens
+                  where customer=%s and visivel_cliente and status <> 'cancelada'
+                  order by processo_ordem, codigo""", (customer,))
+    mit = q("""select mit_id, agrupador, modulo, pendencia, historico, go_nogo, criticidade, atribuicao,
+                      status, resp_totvs, resp_cliente, data_abertura, documentos, tasks, processo_prefixo,
+                      sincronizado_em
+                 from cockpit.mit006_itens where customer=%s and ativo
+                order by nullif(regexp_replace(mit_id,'\\D','','g'),'')::int nulls last""", (customer,))
+    procs = q("select nome, prefixo, grupo, ordem from cockpit.radar_processos "
+              "where customer=%s and ativo and tipo='processo' order by ordem", (customer,))
+    return _json({"ok": True, "marcos": q("select marco, nome, data, descricao from cockpit.diag_marcos "
+                                          "where customer=%s order by ordem", (customer,)),
+                  "processos": procs, "itens": itens, "mit006": mit,
+                  "checks": _diag_payload(customer, completo=False)})
 
 
 # ── PLANO DE TRABALHO (aba "plano") ─────────────────────────────────────────
