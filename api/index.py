@@ -8133,7 +8133,7 @@ INTEG_TEMPO_MIN = 4                # s mínimos para valer a pena abrir mais um 
 # Grupos que uma base pode monitorar (protheus_ambientes.integ_grupos). Nulo =
 # só RH, que é como a aba nasceu: base de RH não paga consulta de Compras e
 # base de Compras (Rio Deserto) não vê 8 cartões cinza de Quírons/Ahgora.
-INTEG_GRUPOS_BASE = ("rh", "transmite", "crm")
+INTEG_GRUPOS_BASE = ("rh", "transmite", "crm", "eai")
 INTEG_GRUPOS_PADRAO = ("rh",)
 
 # ── TOTVS Transmite (16/10/2026) ──────────────────────────────────────────
@@ -8221,6 +8221,8 @@ def _integ_scripts(sufixo, hoje, desde=None, banco=None, grupos=None, agora=None
         lista += _tra_scripts(sufixo, hoje, desde, agora)
     if "crm" in grupos:
         lista += _crm_scripts(sufixo, hoje, desde, banco)
+    if "eai" in grupos:
+        lista += _eai_scripts(sufixo, hoje, desde, banco)
     for b in lista:
         if "sqls" in b:
             b["sql"] = b["sqls"][0]
@@ -8567,6 +8569,8 @@ def _integ_indicadores(blocos, health, hoje, grupos=None, agora=None):
         out += _tra_indicadores(blocos, hoje)
     if "crm" in grupos:
         out += _crm_indicadores(blocos, hoje, agora)
+    if "eai" in grupos:
+        out += _eai_indicadores(blocos, hoje, agora)
     return out
 
 
@@ -9361,10 +9365,10 @@ def _crm_indicadores(blocos, hoje, agora=None):
             nivel = ("vermelho" if maior >= CRM_PARADA_HORAS * 60 else
                      "amarelo" if maior >= CRM_PARADA_MIN else "verde")
             e1 = sum(_integ_int(x.get("QTD")) for x in ls if x.get("STG1") in ("R", "P"))
-            txt = (f"{n - e1} aguardando o job U_CRMPROJT (Etapa 2) · {e1} presa(s) no recebimento "
+            txt = (f"{n - e1} aguardando a Etapa 2 (Sincronizar ou job U_CRMPROJT) · {e1} presa(s) no recebimento "
                    f"(Etapa 1). A mais antiga está parada há "
                    f"{maior // 1440} d {(maior % 1440) // 60} h. "
-                   + ("Job parado? Confira o Schedule ou use Sincronizar Todos." if nivel != "verde" else ""))
+                   + ("Use Sincronizar no Painel de Projetos (DIG00A05); o job só roda se estiver agendado." if nivel != "verde" else ""))
         out.append(_integ_ind("crm_fila", G, rot, n, nivel, txt.strip()))
 
     # 4. Sucesso sem contrato / projeto (a transação diz S e o resultado não está lá)
@@ -9495,6 +9499,445 @@ def _crm_indicadores(blocos, hoje, agora=None):
         txt = ("; ".join(avisos) + ".") if avisos else \
               f"MV_ZCRMMOD = {modo or '(padrão 2)'} · e-mails para {par.get('MV_ZMAILPP')}."
         out.append(_integ_ind("crm_params", G, rot, f"{len(par)}/{len(CRM_PARAMS)}", nivel, txt))
+    return out
+
+
+# ── EAI Protheus × Schedule (30/10/2026 — Dígitro) ─────────────────────────
+# Caminho de um cadastro que sobe para outro sistema pela Mensagem Única:
+# evento no cadastro → adapter da XX4 → fila XX3 → envio pelo canal do adapter
+# (3 = iPaaS/PAD.APP, 1 = ESB) → o destino devolve a ResponseMessage → ela
+# entra na XX3 e o FWEAIRECE (Schedule) processa → grava o de-para na XXF e a
+# mensagem vira Finalizada. Sem o FWEAIRECE rodando a mensagem fica para
+# sempre "Entregue" e a XXF fica vazia — foi o diagnóstico da Produção da
+# Dígitro em 30/10 (969 entregues, 0 finalizadas, XXF vazia).
+# Spec: docs/specs/2026-10-30-integracoes-eai-schedule.md
+#
+# Tabelas: XX3/XX4/XXE têm o sufixo da empresa (XX3010); XX0, XX1, XX2, XXD,
+# XXF e SCHDTSK são do framework e ficam SEM sufixo (TDN: migração das tabelas
+# do Schedule e do EAI para o banco). O FWEAICLEAR apaga FISICAMENTE as
+# finalizadas — por isso o painel mede o que ficou ABERTO (idade da entregue
+# sem retorno, falhas) e o de-para gravado, nunca "% finalizadas".
+EAI_PARAMS = ("MV_EAIURL", "MV_EAIURL2", "MV_EAIPORT", "MV_EAIWS", "MV_EAIMETH",
+              "MV_EAIUSER", "MV_EAIPASS", "MV_EAICOMP", "MV_EAIXSD", "MV_EAIFLDS",
+              "MV_EAISBZ", "MV_EAIESBC", "MV_EAIGPR")
+EAI_MASCARA = ("MV_EAIPASS",)                  # senha do ESB: só "(preenchido)"
+# XX3_STATUS: a TDN lista as legendas sem o código. A ordem da legenda (0 a 7)
+# casa com os dados da Dígitro: 7 com URL e sem tentativa = Entregue; 5 com 4
+# tentativas = Não entregue. O código vai sempre junto do rótulo na tela.
+EAI_STATUS = {"0": "Aguardando execução", "1": "Executando", "2": "Finalizada", "3": "Falhou",
+              "4": "Bloqueado", "5": "Não entregue", "6": "Recusada", "7": "Entregue"}
+EAI_ST_FINAL = "2"
+EAI_ST_AGUARDA = ("0", "1")
+EAI_ST_FALHA = ("3", "5", "6")                 # reenviáveis pelo "tentar novamente"
+EAI_ST_ENTREGUE = "7"                          # saiu e espera a ResponseMessage
+EAI_CANAL = {"1": "ESB (TOTVS ESB)", "2": "EAI (Web Service)", "3": "EAI · PAD.APP (iPaaS / REST)"}
+EAI_METODO = {"1": "Síncrono", "2": "Assíncrono"}
+EAI_TENTATIVAS = 4                             # TDN: a partir de 4 só com intervenção
+EAI_RET_MIN = 30                               # min sem ResponseMessage = atenção
+EAI_RET_HORAS = 24                             # h sem ResponseMessage = crítico
+EAI_AGUARDA_MIN, EAI_AGUARDA_HORAS = 15, 2     # parada antes do envio (FWEAISEND)
+EAI_SCHED_MIN, EAI_SCHED_HORAS = 15, 2         # FWEAIRECE/SEND sem rodar
+EAI_LIMPEZA_DIAS = 2                           # FWEAICLEAR (diário) sem rodar
+EAI_ROTINAS = ("FWEAISEND", "FWEAIRECE", "FWEAICLEAR")
+# Mensagem única → alias do cadastro (de-para na XXF e contagem do cadastro).
+EAI_ALIAS = {"CUSTOMERVENDOR": "SA1", "ITEM": "SB1", "SELLER": "SA3",
+             "PAYMENTCONDITION": "SE4", "UNITOFMEASURE": "SAH", "CARRIER": "SA4",
+             "STOCKGROUP": "SBM", "PRICELISTHEADERITEM": "DA0", "PRICELIST": "DA0"}
+EAI_CADASTROS = ("SA1", "SA2", "SB1", "SA3", "SE4", "SAH", "SA4", "SBM", "DA0", "DA1")
+EAI_JANELA = 30                                # dias da fila aberta lidos por dia
+
+
+def _eai_texto_exprs(col, banco, n=300):
+    """Primeiros `n` caracteres de um campo CLOB/texto (XX3_RETURN, XX1_RECORR).
+    Diferente do memo do DBAccess (BLOB, _integ_memo_exprs): aqui o Oracle
+    guarda CLOB. A última opção é sempre sem o campo."""
+    b = (banco or "oracle").lower()
+    if b == "mssql":
+        return [f"CONVERT(VARCHAR({n}), {col})", None]
+    if b == "postgres":
+        return [f"SUBSTRING({col}, 1, {n})", None]
+    return [f"DBMS_LOB.SUBSTR({col}, {n}, 1)", f"SUBSTR({col}, 1, {n})", None]
+
+
+def _eai_scripts(sufixo, hoje, desde=None, banco=None):
+    """Blocos do grupo EAI × Schedule. Só SELECT, sem ';', datas como literal,
+    vazio robusto. Sem concatenar campo (|| no Oracle, + no SQL Server): a
+    idade sai do par (dia, menor hora) calculada no Python."""
+    s = (sufixo or "010").strip()
+    lim = hoje - timedelta(days=EAI_JANELA)
+    ini = max(lim, desde) if desde else lim
+    jan = f" AND XX3_TRDATA >= '{ini.strftime('%Y%m%d')}'"
+    corte = f" AND XX3_TRDATA >= '{desde.strftime('%Y%m%d')}'" if desde else ""
+    params = ", ".join(f"'{p}'" for p in EAI_PARAMS)
+    masc = ", ".join(f"'{p}'" for p in EAI_MASCARA)
+    rotinas = " OR ".join(f"UPPER(X.XX1_ROTINA) LIKE '{r}%'" for r in EAI_ROTINAS)
+    aberta = f"XX3_STATUS <> '{EAI_ST_FINAL}'"
+    cad = " UNION ALL ".join(
+        f"SELECT '{a}' AS ALIAS, COUNT(*) AS QTD FROM {a}{s} WHERE D_E_L_E_T_ = ' '"
+        for a in EAI_CADASTROS)
+    agend = lambda expr: (
+        f"SELECT X.XX1_CODIGO AS CODIGO, RTRIM(X.XX1_ROTINA) AS ROTINA, X.XX1_STATUS AS STATUS, "
+        f"RTRIM(X.XX1_ENV) AS AMBIENTE, X.XX1_DATA AS INICIO, RTRIM(X.XX1_HORA) AS HORA, "
+        f"X.XX1_ULTDIA AS ULTDIA, RTRIM(X.XX1_ULTHOR) AS ULTHOR, X.XX1_MODULO AS MODULO, "
+        f"CASE WHEN {rotinas} THEN 'S' ELSE 'N' END AS EAI"
+        + (f", {expr} AS RECORR" if expr else "")
+        + " FROM XX1 X WHERE X.D_E_L_E_T_ = ' ' ORDER BY X.XX1_CODIGO")
+    pend = lambda expr: (
+        f"SELECT RTRIM(XX3_FUNCOD) AS MENSAGEM, XX3_STATUS AS STATUS, XX3_CHANEL AS CANAL, "
+        f"XX3_TPTRAN AS TPTRAN, XX3_TENTAT AS TENTATIVAS, XX3_TRDATA AS DIA, RTRIM(XX3_TRHORA) AS HORA, "
+        f"XX3_TNDATA AS ULT_TENTATIVA, RTRIM(XX3_TNHORA) AS ULT_TENT_HORA, RTRIM(XX3_EVENT) AS EVENTO, "
+        f"RTRIM(XX3_WBSER) AS WEBSERVICE, RTRIM(XX3_UUID) AS UUID, "
+        f"CASE WHEN {_integ_preenchido('XX3_URL')} THEN 'S' ELSE 'N' END AS COM_DESTINO"
+        + (f", {expr} AS RETORNO" if expr else "")
+        + f" FROM XX3{s} WHERE D_E_L_E_T_ = ' ' AND {aberta}{corte} "
+        f"ORDER BY XX3_TRDATA, XX3_TRHORA")
+    return [
+        {"id": "eai_config", "rotulo": "EAI — parâmetros (SX6 MV_EAI*)",
+         "tabela": f"SX6{s}", "limite": 200,
+         "sql": (f"SELECT RTRIM(X6_VAR) AS PARAMETRO, RTRIM(X6_FIL) AS FILIAL, "
+                 f"CASE WHEN RTRIM(X6_VAR) IN ({masc}) THEN CASE WHEN "
+                 f"{_integ_preenchido('X6_CONTEUD')} THEN '(preenchido)' ELSE '' END "
+                 f"ELSE RTRIM(X6_CONTEUD) END AS CONTEUDO FROM SX6{s} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND RTRIM(X6_VAR) IN ({params}) "
+                 f"ORDER BY X6_VAR, X6_FIL")},
+        {"id": "eai_adapters", "rotulo": "EAI — adapters cadastrados (XX4)",
+         "tabela": f"XX4{s}", "limite": 300,
+         "sql": (f"SELECT RTRIM(XX4_ROTINA) AS ROTINA, RTRIM(XX4_MODEL) AS MENSAGEM, "
+                 f"RTRIM(XX4_DESCRI) AS DESCRICAO, XX4_SENDER AS ENVIA, XX4_RECEIV AS RECEBE, "
+                 f"XX4_METODO AS METODO, XX4_CHANEL AS CANAL, XX4_UNMESS AS UNICA, "
+                 f"RTRIM(XX4_SNDVER) AS VERSAO, RTRIM(XX4_FORMAT) AS FORMATO, "
+                 f"RTRIM(XX4_EXPSQL) AS CONDICAO FROM XX4{s} WHERE D_E_L_E_T_ = ' ' "
+                 f"ORDER BY XX4_MODEL, XX4_ROTINA")},
+        # Retrato da fila inteira por mensagem × status × canal (sem janela:
+        # o FWEAICLEAR já apaga as finalizadas; só o corte da base vale).
+        {"id": "eai_status", "rotulo": "EAI — fila por mensagem, status e canal (XX3)",
+         "tabela": f"XX3{s}", "limite": 500,
+         "sql": (f"SELECT RTRIM(XX3_FUNCOD) AS MENSAGEM, XX3_STATUS AS STATUS, XX3_CHANEL AS CANAL, "
+                 f"XX3_TPTRAN AS TPTRAN, COUNT(*) AS QTD, MAX(XX3_TENTAT) AS MAX_TENTATIVAS, "
+                 f"SUM(CASE WHEN XX3_TENTAT >= {EAI_TENTATIVAS} THEN 1 ELSE 0 END) AS ESGOTADAS, "
+                 f"SUM(CASE WHEN {_integ_preenchido('XX3_URL')} THEN 1 ELSE 0 END) AS COM_DESTINO, "
+                 f"MIN(XX3_TRDATA) AS MAIS_ANTIGA, MAX(XX3_TRDATA) AS MAIS_RECENTE "
+                 f"FROM XX3{s} WHERE D_E_L_E_T_ = ' '{corte} "
+                 f"GROUP BY XX3_FUNCOD, XX3_STATUS, XX3_CHANEL, XX3_TPTRAN "
+                 f"ORDER BY MENSAGEM, STATUS")},
+        # Abertas por dia, com a menor hora: dá a idade exata da mais antiga.
+        {"id": "eai_abertas", "rotulo": f"EAI — mensagens abertas por dia ({EAI_JANELA} dias)",
+         "tabela": f"XX3{s}", "limite": 3000,
+         "sql": (f"SELECT RTRIM(XX3_FUNCOD) AS MENSAGEM, XX3_STATUS AS STATUS, XX3_TRDATA AS DIA, "
+                 f"COUNT(*) AS QTD, MIN(XX3_TRHORA) AS PRIMEIRA, MAX(XX3_TENTAT) AS MAX_TENTATIVAS "
+                 f"FROM XX3{s} WHERE D_E_L_E_T_ = ' ' AND {aberta}{jan} "
+                 f"GROUP BY XX3_FUNCOD, XX3_STATUS, XX3_TRDATA ORDER BY DIA")},
+        {"id": "eai_depara", "rotulo": "EAI — de-para gravado (XXF)",
+         "tabela": "XXF", "limite": 300,
+         "sql": ("SELECT RTRIM(XXF_ALIAS) AS ALIAS, RTRIM(XXF_REFER) AS REFERENCIA, "
+                 "RTRIM(XXF_UNMESS) AS MENSAGEM, COUNT(*) AS QTD FROM XXF "
+                 "WHERE D_E_L_E_T_ = ' ' GROUP BY XXF_ALIAS, XXF_REFER, XXF_UNMESS ORDER BY ALIAS")},
+        {"id": "eai_empresa", "rotulo": "EAI — de-para de empresa/filial (XXD)",
+         "tabela": "XXD", "limite": 100,
+         "sql": ("SELECT RTRIM(XXD_REFER) AS REFERENCIA, RTRIM(XXD_COMPA) AS EMPRESA_EXT, "
+                 "RTRIM(XXD_BRANCH) AS FILIAL_EXT, RTRIM(XXD_EMPPRO) AS EMPRESA, "
+                 "RTRIM(XXD_FILPRO) AS FILIAL FROM XXD WHERE D_E_L_E_T_ = ' ' ORDER BY XXD_REFER")},
+        {"id": "eai_cadastros", "rotulo": "EAI — tamanho dos cadastros que sobem por Mensagem Única",
+         "tabela": f"SA1{s}", "limite": 50, "sql": cad},
+        {"id": "eai_agendamentos", "rotulo": "Schedule — agendamentos (XX1)",
+         "tabela": "XX1", "limite": 500,
+         "sqls": [agend(e) for e in _eai_texto_exprs("X.XX1_RECORR", banco, 160)]},
+        {"id": "eai_agend_empfil", "rotulo": "Schedule — empresa/filial dos agendamentos (XX2)",
+         "tabela": "XX2", "limite": 2000,
+         "sql": ("SELECT XX2_AGEND AS CODIGO, RTRIM(XX2_EMPFIL) AS EMPFIL FROM XX2 "
+                 "WHERE D_E_L_E_T_ = ' ' ORDER BY XX2_AGEND, XX2_EMPFIL")},
+        {"id": "eai_tarefas", "rotulo": "Schedule — tarefas geradas (SCHDTSK)",
+         "tabela": "SCHDTSK", "limite": 1000,
+         "sql": ("SELECT TSK_CODIGO AS CODIGO, RTRIM(TSK_ROTINA) AS ROTINA, TSK_STATUS AS STATUS, "
+                 "COUNT(*) AS QTD, MIN(TSK_DIA) AS PRIMEIRA, MAX(TSK_DIA) AS ULTIMA, "
+                 "MAX(TSK_TENTAT) AS MAX_TENTATIVAS FROM SCHDTSK WHERE D_E_L_E_T_ = ' ' "
+                 "GROUP BY TSK_CODIGO, TSK_ROTINA, TSK_STATUS ORDER BY TSK_CODIGO, TSK_STATUS")},
+        {"id": "eai_agents", "rotulo": "Schedule — agents (XX0)",
+         "tabela": "XX0", "limite": 100,
+         "sql": ("SELECT XX0_CODIGO AS CODIGO, RTRIM(XX0_DESCR) AS DESCRICAO, RTRIM(XX0_IP) AS IP, "
+                 "XX0_PORTA AS PORTA, RTRIM(XX0_ENV) AS AMBIENTE, XX0_EMP AS EMPRESA, "
+                 "XX0_THREAD AS THREADS, XX0_STATUS AS STATUS, XX0_ULTDIA AS ULTDIA, "
+                 "RTRIM(XX0_ULTHOR) AS ULTHOR FROM XX0 WHERE D_E_L_E_T_ = ' ' ORDER BY XX0_CODIGO")},
+        # ── detalhe ────────────────────────────────────────────────────────
+        # Nunca XX3_URL nem XX3_TRANS: a URL do iPaaS leva a api-key em texto
+        # claro e o TRANS é a mensagem inteira. Só "tem destino" (S/N).
+        {"id": "eai_pendentes_lista", "rotulo": "EAI — mensagens abertas, das mais antigas (XX3)",
+         "tabela": f"XX3{s}", "limite": 200, "detalhe": True,
+         "sqls": [pend(e) for e in _eai_texto_exprs("XX3_RETURN", banco, 300)]},
+    ]
+
+
+def _eai_idade_min(dia, hora, agora):
+    """Minutos desde (AAAAMMDD, HH:MM[:SS]). Mesmo relógio da ZA3."""
+    return _crm_idade_min(dia, hora, agora)
+
+
+def _eai_fmt_idade(minutos):
+    if minutos is None:
+        return "—"
+    if minutos < 60:
+        return f"{minutos} min"
+    if minutos < 1440:
+        return f"{minutos // 60} h {minutos % 60} min"
+    return f"{minutos // 1440} d {(minutos % 1440) // 60} h"
+
+
+def _eai_mais_antiga(linhas, status, agora, hoje):
+    """(qtd, idade em min da mais antiga) das linhas de eai_abertas nos status."""
+    ls = [x for x in linhas if (x.get("STATUS") or "") in status]
+    n = sum(_integ_int(x.get("QTD")) for x in ls)
+    idades = [i for i in (_eai_idade_min(x.get("DIA"), x.get("PRIMEIRA"), agora) for x in ls)
+              if i is not None]
+    if not idades and ls:
+        idades = [(hoje - d).days * 1440 for d in (_integ_data(x.get("DIA")) for x in ls) if d]
+    return n, (max(idades) if idades else None)
+
+
+def _eai_ult_exec(ag, agora):
+    """Minutos desde a última execução de um agendamento (XX1_ULTDIA/ULTHOR)."""
+    if not _integ_data(ag.get("ULTDIA")):
+        return None
+    return _eai_idade_min(ag.get("ULTDIA"), ag.get("ULTHOR") or "00:00", agora)
+
+
+def _eai_indicadores(blocos, hoje, agora=None):
+    """Indicadores do grupo EAI × Schedule. Cinza = sem dado, não piora."""
+    out, G = [], "eai"
+    par = _integ_params(blocos, "eai_config")
+    ad_b = blocos.get("eai_adapters")
+    adapters = (ad_b or {}).get("linhas") or [] if ad_b and ad_b.get("ok") else []
+    envia = [a for a in adapters if (a.get("ENVIA") or "") == "1"]
+    st_b = blocos.get("eai_status")
+    st = st_b["linhas"] if st_b and st_b.get("ok") else None
+    ab_b = blocos.get("eai_abertas")
+    ab = ab_b["linhas"] if ab_b and ab_b.get("ok") else None
+    ag_b = blocos.get("eai_agendamentos")
+    ags = ag_b["linhas"] if ag_b and ag_b.get("ok") else None
+
+    # 1. Entregues sem a ResponseMessage (o retorno que finaliza e grava a XXF)
+    rot = "Entregues sem retorno"
+    if ab is None:
+        out.append(_integ_bloco_falhou(ab_b, "eai_sem_retorno", G, rot))
+    else:
+        n, idade = _eai_mais_antiga(ab, (EAI_ST_ENTREGUE,), agora, hoje)
+        if not n:
+            nivel, txt = "verde", "Nenhuma mensagem entregue esperando a resposta do destino."
+        else:
+            nivel = ("vermelho" if (idade or 0) >= EAI_RET_HORAS * 60 else
+                     "amarelo" if (idade or 0) >= EAI_RET_MIN else "verde")
+            por = {}
+            for x in ab:
+                if x.get("STATUS") == EAI_ST_ENTREGUE:
+                    por[x.get("MENSAGEM")] = por.get(x.get("MENSAGEM"), 0) + _integ_int(x.get("QTD"))
+            top = " · ".join(f"{k} {v}" for k, v in sorted(por.items(), key=lambda kv: -kv[1])[:4])
+            txt = (f"A mais antiga espera há {_eai_fmt_idade(idade)}. Sem a ResponseMessage processada "
+                   f"(FWEAIRECE) a mensagem não finaliza e o de-para não vai para a XXF. {top}.")
+        out.append(_integ_ind("eai_sem_retorno", G, rot, n, nivel, txt))
+
+    # 2. Falhas (Falhou, Não entregue, Recusada) — 4 tentativas = só com intervenção
+    rot = "Mensagens com falha"
+    if st is None:
+        out.append(_integ_bloco_falhou(st_b, "eai_falhas", G, rot))
+    else:
+        fl = [x for x in st if (x.get("STATUS") or "") in EAI_ST_FALHA]
+        n = sum(_integ_int(x.get("QTD")) for x in fl)
+        esg = sum(_integ_int(x.get("ESGOTADAS")) for x in fl)
+        if not n:
+            nivel, txt = "verde", "Nenhuma mensagem com falha na fila."
+        else:
+            dias = [d for d in (_integ_data(x.get("MAIS_ANTIGA")) for x in fl) if d]
+            antiga = min(dias) if dias else hoje
+            nivel = "vermelho" if (hoje - antiga).days >= 1 or esg else "amarelo"
+            por = " · ".join(f"{x.get('MENSAGEM')} {_integ_int(x.get('QTD'))} "
+                             f"({EAI_STATUS.get(x.get('STATUS'), x.get('STATUS'))})" for x in fl[:5])
+            txt = (f"{esg} com {EAI_TENTATIVAS} tentativas ou mais: só voltam pelo “tentar novamente” "
+                   f"no monitor do EAI (SIGACFG › Schedule › EAI). Mais antiga de {_integ_ddmm(antiga)}. {por}.")
+        out.append(_integ_ind("eai_falhas", G, rot, n, nivel, txt))
+
+    # 3. Aguardando envio (o FWEAISEND / o envio na hora não levou a mensagem)
+    rot = "Aguardando envio"
+    if ab is None:
+        out.append(_integ_bloco_falhou(ab_b, "eai_aguardando", G, rot))
+    else:
+        n, idade = _eai_mais_antiga(ab, EAI_ST_AGUARDA, agora, hoje)
+        if not n:
+            nivel, txt = "verde", "Nada parado antes do envio."
+        else:
+            nivel = ("vermelho" if (idade or 0) >= EAI_AGUARDA_HORAS * 60 else
+                     "amarelo" if (idade or 0) >= EAI_AGUARDA_MIN else "verde")
+            txt = (f"A mais antiga está parada há {_eai_fmt_idade(idade)}. "
+                   + ("Confira se o FWEAISEND está rodando no Schedule." if nivel != "verde" else ""))
+        out.append(_integ_ind("eai_aguardando", G, rot, n, nivel, txt.strip()))
+
+    # 4. Mensagem que saiu por canal diferente do adapter (ex.: SELLER no ESB)
+    rot = "Canal diferente do adapter"
+    if st is None or not (ad_b and ad_b.get("ok")):
+        out.append(_integ_bloco_falhou(st_b if st is None else ad_b, "eai_canal", G, rot))
+    else:
+        canais = {}
+        for a in envia:
+            canais.setdefault((a.get("MENSAGEM") or "").upper(), set()).add(a.get("CANAL") or "")
+        fora = [x for x in st if (x.get("STATUS") or "") != EAI_ST_FINAL
+                and (x.get("MENSAGEM") or "").upper() in canais
+                and (x.get("CANAL") or "") not in canais[(x.get("MENSAGEM") or "").upper()]]
+        n = sum(_integ_int(x.get("QTD")) for x in fora)
+        if not n:
+            nivel, txt = "verde", "Todas as mensagens abertas saíram pelo canal cadastrado no adapter."
+        else:
+            nivel = "amarelo"
+            txt = (" · ".join(f"{x.get('MENSAGEM')} {_integ_int(x.get('QTD'))} no canal "
+                              f"{EAI_CANAL.get(x.get('CANAL'), x.get('CANAL'))}" for x in fora[:4])
+                   + ". Confira MV_EAIPORT/MV_EAIURL e as rotas do adapter; trate as mensagens no monitor.")
+        out.append(_integ_ind("eai_canal", G, rot, n, nivel, txt))
+
+    # 5. De-para gravado (XXF) para o que foi enviado
+    rot = "De-para (XXF)"
+    dp_b = blocos.get("eai_depara")
+    if not (dp_b and dp_b.get("ok")) or st is None:
+        out.append(_integ_bloco_falhou(dp_b if not (dp_b and dp_b.get("ok")) else st_b, "eai_depara", G, rot))
+    else:
+        tot = sum(_integ_int(x.get("QTD")) for x in dp_b["linhas"])
+        com = {(x.get("ALIAS") or "").upper() for x in dp_b["linhas"] if _integ_int(x.get("QTD"))}
+        enviados = sorted({(x.get("MENSAGEM") or "").upper() for x in st
+                           if (x.get("TPTRAN") or "1") == "1" and _integ_int(x.get("QTD"))})
+        esperam = [m for m in enviados if EAI_ALIAS.get(m)]
+        sem = [m for m in esperam if EAI_ALIAS[m] not in com]
+        if not esperam:
+            nivel = "cinza"
+            txt = f"Nenhuma mensagem de cadastro enviada para comparar. {tot} registro(s) na XXF."
+        elif not tot:
+            nivel = "vermelho"
+            txt = (f"XXF vazia com {len(esperam)} mensagem(ns) de cadastro enviada(s) "
+                   f"({', '.join(esperam)}). O de-para nasce no processamento do retorno: sem ele "
+                   f"não há ID do outro sistema para o Protheus (ex.: vendedor do CRM).")
+        elif sem:
+            nivel = "amarelo"
+            txt = f"{tot} registro(s) na XXF; sem de-para: {', '.join(f'{m} ({EAI_ALIAS[m]})' for m in sem)}."
+        else:
+            nivel, txt = "verde", f"{tot} registro(s) de de-para cobrindo {', '.join(sorted(com))}."
+        out.append(_integ_ind("eai_depara", G, rot, tot, nivel, txt))
+
+    # 6. Cadastro com adapter de envio e nenhuma mensagem (carga fora do EAI)
+    rot = "Cadastros sem envio"
+    cd_b = blocos.get("eai_cadastros")
+    if not (cd_b and cd_b.get("ok")) or st is None or not (ad_b and ad_b.get("ok")):
+        falho = next((b for b in (cd_b, st_b, ad_b) if not (b and b.get("ok"))), None)
+        out.append(_integ_bloco_falhou(falho, "eai_cobertura", G, rot))
+    else:
+        qtd = {(x.get("ALIAS") or "").upper(): _integ_int(x.get("QTD")) for x in cd_b["linhas"]}
+        msgs = {}
+        for x in st:
+            if (x.get("TPTRAN") or "1") == "1":
+                m = (x.get("MENSAGEM") or "").upper()
+                msgs[m] = msgs.get(m, 0) + _integ_int(x.get("QTD"))
+        # O FWEAICLEAR apaga as finalizadas: cadastro já integrado some da XX3,
+        # mas deixa o de-para na XXF. Sem mensagem E sem de-para = nunca subiu.
+        dp = blocos.get("eai_depara")
+        com_dp = {(x.get("ALIAS") or "").upper() for x in (dp or {}).get("linhas") or []
+                  if _integ_int(x.get("QTD"))} if dp and dp.get("ok") else set()
+        faltam = []
+        for a in envia:
+            m = (a.get("MENSAGEM") or "").upper()
+            al = EAI_ALIAS.get(m)
+            if al and qtd.get(al) and not msgs.get(m) and al not in com_dp:
+                faltam.append(f"{m} ({al}: {qtd[al]} registro(s), 0 mensagem)")
+        if not envia:
+            nivel, txt = "cinza", "Nenhum adapter de envio cadastrado na XX4."
+        elif faltam:
+            nivel = "vermelho"
+            txt = ("Adapter de envio ativo e cadastro preenchido sem nenhuma mensagem na fila: "
+                   + "; ".join(faltam) + ". Carga por banco, MILE ou Datasul não dispara o evento — "
+                   "reprocesse pelo outro sistema ou altere o cadastro.")
+        else:
+            nivel = "verde"
+            txt = f"Todo cadastro com adapter de envio ({len(envia)}) tem mensagem na fila."
+        out.append(_integ_ind("eai_cobertura", G, rot, len(faltam), nivel, txt))
+
+    # 7. Jobs do EAI no Schedule (FWEAIRECE, FWEAISEND, FWEAICLEAR)
+    rot = "Jobs do EAI no Schedule"
+    if ags is None:
+        out.append(_integ_bloco_falhou(ag_b, "eai_jobs", G, rot))
+    else:
+        assinc = any((a.get("METODO") or "") == "2" for a in adapters)
+        achou = {r: [a for a in ags if (a.get("ROTINA") or "").upper().startswith(r)] for r in EAI_ROTINAS}
+        nivel, avisos, val = "verde", [], 0
+        for r in ("FWEAIRECE", "FWEAISEND"):
+            lst = achou[r]
+            idades = [i for i in (_eai_ult_exec(a, agora) for a in lst) if i is not None]
+            ult = min(idades) if idades else None
+            if not lst:
+                if assinc:
+                    avisos.append(f"{r} não agendado")
+                    nivel = "vermelho"
+            elif ult is None:
+                avisos.append(f"{r} agendado ({', '.join(a.get('CODIGO') or '' for a in lst)}) e nunca executou")
+                nivel = "vermelho"
+            elif ult >= EAI_SCHED_HORAS * 60:
+                avisos.append(f"{r} sem rodar há {_eai_fmt_idade(ult)}")
+                nivel = "vermelho"
+            elif ult >= EAI_SCHED_MIN:
+                avisos.append(f"{r} sem rodar há {_eai_fmt_idade(ult)}")
+                nivel = "amarelo" if nivel == "verde" else nivel
+            else:
+                val += 1
+        lst = achou["FWEAICLEAR"]
+        idades = [i for i in (_eai_ult_exec(a, agora) for a in lst) if i is not None]
+        if not lst:
+            avisos.append("FWEAICLEAR não agendado (a XX3 cresce sem limpeza)")
+            nivel = "amarelo" if nivel == "verde" else nivel
+        elif not idades or min(idades) >= EAI_LIMPEZA_DIAS * 1440:
+            avisos.append("FWEAICLEAR sem rodar há " + (_eai_fmt_idade(min(idades)) if idades else "sempre"))
+            nivel = "amarelo" if nivel == "verde" else nivel
+        txt = ("; ".join(avisos) + ". Agendamento “sempre ativo” não se altera: exclua e recrie com "
+               "intervalo, na porta do Smart Schedule." if nivel == "vermelho" else
+               "; ".join(avisos) + "." if avisos else
+               "FWEAIRECE e FWEAISEND rodando; FWEAICLEAR em dia.")
+        out.append(_integ_ind("eai_jobs", G, rot, f"{val}/2", nivel, txt))
+
+    # 8. Agendamentos que nunca rodaram (qualquer rotina)
+    rot = "Agendamentos parados"
+    if ags is None:
+        out.append(_integ_bloco_falhou(ag_b, "eai_agendamentos", G, rot))
+    else:
+        h = hoje.strftime("%Y%m%d")
+        parados = [a for a in ags if not _integ_data(a.get("ULTDIA"))
+                   and (a.get("INICIO") or "99999999") < h]
+        tk_b = blocos.get("eai_tarefas")
+        tarefas = sum(_integ_int(x.get("QTD")) for x in (tk_b or {}).get("linhas") or []) \
+            if tk_b and tk_b.get("ok") else None
+        if not ags:
+            nivel, txt = "cinza", "Nenhum agendamento na XX1 desta base."
+        elif parados:
+            nivel = "vermelho"
+            txt = (f"{len(parados)} de {len(ags)} agendamento(s) com início no passado e nenhuma execução: "
+                   + ", ".join(f"{a.get('CODIGO')} {a.get('ROTINA')}" for a in parados[:5]) + ".")
+        else:
+            nivel = "verde"
+            txt = f"Os {len(ags)} agendamento(s) já executaram ao menos uma vez."
+        if tarefas is not None:
+            txt += f" {tarefas} tarefa(s) na SCHDTSK."
+        out.append(_integ_ind("eai_agendamentos", G, rot, len(parados), nivel, txt))
+
+    # 9. Parâmetros coerentes com os canais em uso
+    rot = "Parâmetros do EAI"
+    b = blocos.get("eai_config")
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "eai_params", G, rot))
+    else:
+        canais = {a.get("CANAL") or "" for a in envia}
+        url = (par.get("MV_EAIURL") or "").strip()
+        porta = (par.get("MV_EAIPORT") or "").strip()
+        nivel, avisos = "verde", []
+        if "1" in canais and not url:
+            nivel = "vermelho"
+            avisos.append("adapter de envio no canal 1 (ESB) com MV_EAIURL vazio: a mensagem não tem destino")
+        if porta and "1" not in canais:
+            nivel = "amarelo" if nivel == "verde" else nivel
+            avisos.append(f"MV_EAIPORT = {porta} sem adapter de envio no canal ESB: mensagem que cair "
+                          f"no canal 1 falha")
+        txt = ("; ".join(avisos) + ".") if avisos else \
+            f"Canais em uso: {', '.join(EAI_CANAL.get(c, c) for c in sorted(canais)) or 'nenhum'}."
+        out.append(_integ_ind("eai_params", G, rot, f"{len(par)}/{len(EAI_PARAMS)}", nivel, txt))
     return out
 
 

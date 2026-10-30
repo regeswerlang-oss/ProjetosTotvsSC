@@ -904,6 +904,7 @@
               <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="rh"> RH</label>
               <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="transmite"> TOTVS Transmite</label>
               <label class="flex items-center gap-1 text-slate-700" title="Propostas do TOTVS CRM via iPaaS → Painel de Projetos → contrato → medição, e os cadastros que sobem ao CRM"><input type="checkbox" data-int-grupo="crm"> CRM × iPaaS</label>
+              <label class="flex items-center gap-1 text-slate-700" title="Mensagem Única do EAI (adapters XX4, fila XX3, de-para XXF) e os agendamentos do Schedule (XX1, SCHDTSK)"><input type="checkbox" data-int-grupo="eai"> EAI × Schedule</label>
             </span>
             <button id="int-coletar-topo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde disabled:opacity-50">⚡ Coletar agora</button>
             <button id="int-coletar-duas" class="hidden px-3 py-1.5 rounded-md border border-totvs-blue text-totvs-petroleo font-semibold hover:bg-sky-50 disabled:opacity-50" title="Coleta na Base Produção e na Base de Testes, uma depois da outra">⚡ Produção + Teste</button>
@@ -11907,7 +11908,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 // ============================================================================
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
-                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm']),
+                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai']),
                 duas: null };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
@@ -11923,10 +11924,13 @@ const INT_GRUPOS = [
   { id: 'esocial', rot: 'eSocial SST (Middleware)', sub: 'S-2210, S-2220 e S-2240 vindos do Quírons · fila RJE' },
   { id: 'transmite', rot: 'TOTVS Transmite', sub: 'XML de entrada · Importador (COMXCOL / IMPTRATOOL) · CKOCOL, SDS e SF1' },
   { id: 'crm', rot: 'CRM × iPaaS · Painel de Projetos', sub: 'propostas do CRM (ZA3) → projetos (ZA0) → contrato (CN9) → medição (CND) · produtos e tabelas de preço para o CRM' },
+  { id: 'eai', rot: 'EAI Protheus × Schedule', sub: 'Mensagem Única · adapters (XX4) → fila (XX3) → retorno e de-para (XXF) · agendamentos (XX1, SCHDTSK)' },
 ];
 const INT_GRUPO = (id) => INT_GRUPOS.find(g => g.id === id);
 // Grupos da base (⚙ protheus_ambientes.integ_grupos). Nulo = só RH.
-const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'], crm: ['crm'] };
+const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'], crm: ['crm'], eai: ['eai'] };
+// Grupos que comparam Produção × Teste e ganham o botão "⚡ Produção + Teste".
+const INT_GRUPOS_DUAS = ['crm', 'eai'];
 // CRM × iPaaS (Dígitro): domínios da especificação do Painel (§10.4, §4.2) e do SIGAGCT.
 const INT_CRM_STG1 = { R: 'Recebido', P: 'Processando', L: 'Liberado', E: 'Erro' };
 const INT_CRM_STG2 = { N: 'Não liberado', A: 'Aguardando', P: 'Processando', S: 'Sucesso', E: 'Erro' };
@@ -12032,6 +12036,8 @@ const INT_HIST = [
   ['tra_hora_futura', 'Hora futura'], ['tra_revisao', 'Revisão (B)'],
   ['crm_recebidas', 'CRM recebidas'], ['crm_erros', 'CRM erros'], ['crm_fila', 'CRM fila'],
   ['crm_contratos', 'CRM contratos'], ['crm_medicoes', 'CRM medidos'], ['crm_cad_produtos', 'Prod. c/ preço'],
+  ['eai_sem_retorno', 'EAI sem retorno'], ['eai_falhas', 'EAI falhas'], ['eai_depara', 'EAI de-para'],
+  ['eai_agendamentos', 'Agend. parados'],
 ];
 
 const intData = (s) => {
@@ -12076,7 +12082,8 @@ async function coletaIntegracoes() {
   const g = intGruposCfg();
   const oque = [g.includes('rh') ? 'filas de RH + healthcheck da Quírons' : '',
                 g.includes('transmite') ? 'TOTVS Transmite (CKOCOL, SDS, SF1)' : '',
-                g.includes('crm') ? 'CRM × iPaaS (ZA3, ZA0, CN9, CND, SB1, DA0/DA1)' : ''].filter(Boolean).join(' e ');
+                g.includes('crm') ? 'CRM × iPaaS (ZA3, ZA0, CN9, CND, SB1, DA0/DA1)' : '',
+                g.includes('eai') ? 'EAI × Schedule (XX3, XX4, XXF, XX1, SCHDTSK)' : ''].filter(Boolean).join(' e ');
   if (!confirm(`Coletar agora na ${base}?\n\nConsultas só de leitura pela REST da base ` +
                `(TSCMONITREST): ${oque}. Cada chamada usa licença no REST.`)) return;
   integ.coletando = true; integ.erroColeta = null; renderIntegracoes();
@@ -12225,7 +12232,7 @@ function renderIntegracoes() {
   $('#int-coletar-topo').disabled = integ.coletando || !integ.customer;
   const bDuas = $('#int-coletar-duas');
   if (bDuas) {
-    bDuas.classList.toggle('hidden', !intGruposCfg().includes('crm'));
+    bDuas.classList.toggle('hidden', !intGruposCfg().some(g => INT_GRUPOS_DUAS.includes(g)));
     bDuas.disabled = integ.coletando || !integ.customer;
   }
   const inpDesde = $('#int-desde');
@@ -12329,6 +12336,7 @@ function renderIntegracoes() {
     }
     if (gU.includes('transmite')) html += intCaixaTransmite(B, d.hoje, nivelGrupo('transmite'));
     if (gU.includes('crm')) html += intCaixaCrm(B, d, nivelGrupo('crm'));
+    if (gU.includes('eai')) html += intCaixaEai(B, d, nivelGrupo('eai'));
   }
   const serie = (d.serie || []).slice().reverse();
   if (serie.length || (d.coletas || []).length) {
@@ -12475,17 +12483,18 @@ function intCrmFunilHtml(B) {
 }
 
 /** Produção × Teste: os indicadores do grupo nas duas bases, lado a lado. */
-function intCrmDuasBases(u, d) {
+const intCrmDuasBases = (u, d) => intDuasBasesGrupo(u, d, 'crm');
+function intDuasBasesGrupo(u, d, grupo) {
   const outra = d.outra || {};
   const labA = (AMB[integ.ambiente] || AMB.producao).label;
   const labB = (AMB[outra.ambiente] || AMB.teste).label;
-  const indsA = (u.indicadores || []).filter(i => i.grupo === 'crm');
+  const indsA = (u.indicadores || []).filter(i => i.grupo === grupo);
   const ouU = outra.ultima;
-  const indsB = (ouU?.indicadores || []).filter(i => i.grupo === 'crm');
+  const indsB = (ouU?.indicadores || []).filter(i => i.grupo === grupo);
   let aviso = '';
   if (!outra.cadastrada) aviso = `${labB} não cadastrada no ⚙ Ambiente.`;
   else if (!ouU) aviso = `${labB} ainda sem coleta.`;
-  else if (!indsB.length) aviso = `A última coleta da ${labB} não leu o grupo CRM${(outra.integ_grupos || []).includes('crm') ? '' : ' (grupo desligado lá)'}.`;
+  else if (!indsB.length) aviso = `A última coleta da ${labB} não leu o grupo ${INT_GRUPO(grupo)?.rot || grupo}${(outra.integ_grupos || []).includes(grupo) ? '' : ' (grupo desligado lá)'}.`;
   const cel = (i) => i ? `<div class="flex items-center gap-2 justify-end"><span class="tabular-nums">${escapeHtml(String(i.valor ?? '—'))}</span>${intPill(i.nivel)}</div>`
                        : '<span class="text-slate-400">—</span>';
   const linhas = indsA.map(a => ({ a, b: indsB.find(x => x.chave === a.chave) }));
@@ -12498,8 +12507,11 @@ function intCrmDuasBases(u, d) {
                  { rot: `${labB}${ouU ? ' · ' + intQuando(ouU.coletado_em) : ''}`, dir: 1, fmt: x => cel(x.b) }],
                 linhas, 'Sem indicadores do grupo nesta coleta.')}
     ${aviso ? `<p class="text-xs text-amber-800 mt-1">${escapeHtml(aviso)}</p>` : ''}
-    <p class="text-xs text-slate-500 mt-1">Decisão de 27/10: a integração roda plugada na produção do CRM e do Protheus. A Base de
-       Testes mostra o que foi exercitado nos protótipos; a Produção, a prontidão dos cadastros e o fluxo real.</p></div>`;
+    <p class="text-xs text-slate-500 mt-1">${grupo === 'crm'
+      ? `Decisão de 27/10: a integração roda plugada na produção do CRM e do Protheus. A Base de
+       Testes mostra o que foi exercitado nos protótipos; a Produção, a prontidão dos cadastros e o fluxo real.`
+      : `Cada base tem a sua fila (XX3), o seu de-para (XXF) e os seus agendamentos: o Schedule de uma não
+       processa a fila da outra.`}</p></div>`;
 }
 
 function intCaixaCrm(B, d, nivel) {
@@ -12573,19 +12585,162 @@ function intCaixaCrm(B, d, nivel) {
        cadastro e sincronize. A medição (CND) não é gerada pela integração. Tokens (MV_ZCRMTOK, MV_ZLIC*) aparecem só como “(preenchido)”.</p>`);
 }
 
-/** ⚡ Produção + Teste: coleta nas duas bases, uma depois da outra. Liga o
- *  grupo CRM na outra base se ele estiver desligado lá (pergunta antes). */
+// ── Grupo EAI Protheus × Schedule (Dígitro, 30/10/2026) ─────────────────────
+// A pergunta: "o cadastro que o Protheus manda pela Mensagem Única chegou e
+// VOLTOU?". O envio sai na hora (canal 3, iPaaS); o retorno só vira
+// Finalizada + de-para na XXF quando o FWEAIRECE processa a ResponseMessage.
+// XX3_STATUS: ordem da legenda da TDN (0–7), sempre com o código ao lado.
+const INT_EAI_ST = { 0: 'Aguardando execução', 1: 'Executando', 2: 'Finalizada', 3: 'Falhou', 4: 'Bloqueado',
+                     5: 'Não entregue', 6: 'Recusada', 7: 'Entregue' };
+const INT_EAI_ST_COR = { 2: 'bg-emerald-50 text-emerald-800', 7: 'bg-amber-50 text-amber-800',
+                         3: 'bg-rose-50 text-rose-800', 5: 'bg-rose-50 text-rose-800', 6: 'bg-rose-50 text-rose-800' };
+const INT_EAI_CANAL = { 1: 'ESB', 2: 'EAI · Web Service', 3: 'EAI · PAD.APP (iPaaS)' };
+const INT_EAI_METODO = { 1: 'Síncrono', 2: 'Assíncrono' };
+const INT_EAI_SN = { 1: 'sim', 2: 'não' };
+const INT_EAI_TPTRAN = { 1: 'envio', 2: 'recebimento' };
+const intEaiSt = (v) => {
+  const k = String(v ?? '').trim();
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${INT_EAI_ST_COR[k] || 'bg-slate-100 text-slate-700'}">${escapeHtml(k || '?')} · ${escapeHtml(INT_EAI_ST[k] || 'código não documentado')}</span>`;
+};
+const intIdadeTxt = (min) => min == null ? '—' : min < 60 ? `${min} min` : min < 1440
+  ? `${Math.floor(min / 60)} h ${min % 60} min` : `${Math.floor(min / 1440)} d ${Math.floor((min % 1440) / 60)} h`;
+/** Minutos entre AAAAMMDD + HH:MM e agora (relógio do navegador). */
+const intIdadeMin = (dia, hora) => {
+  const s = String(dia || '').trim();
+  if (!/^\d{8}$/.test(s)) return null;
+  const [hh, mm] = String(hora || '00:00').split(':').map(x => parseInt(x, 10) || 0);
+  const t = new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6), hh, mm);
+  return Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+};
+
+/** O caminho de uma mensagem, contado pelos blocos (null = bloco não lido). */
+function intEaiFunil(B) {
+  const st = B.eai_status?.ok ? B.eai_status.linhas || [] : null;
+  const soma = (f) => st ? st.filter(f).reduce((t, x) => t + (parseInt(x.QTD, 10) || 0), 0) : null;
+  const envio = (x) => String(x.TPTRAN || '1') === '1';
+  const xxf = B.eai_depara?.ok ? (B.eai_depara.linhas || []).reduce((t, x) => t + (parseInt(x.QTD, 10) || 0), 0) : null;
+  return [
+    { k: 'fila', rot: 'Na fila (XX3)', v: soma(envio), sub: 'mensagens de envio' },
+    { k: 'aguardando', rot: 'Aguardando envio', v: soma(x => envio(x) && ['0', '1'].includes(String(x.STATUS))), sub: 'status 0 · 1' },
+    { k: 'falha', rot: 'Com falha', v: soma(x => envio(x) && ['3', '5', '6'].includes(String(x.STATUS))), sub: 'falhou · não entregue · recusada' },
+    { k: 'entregue', rot: 'Entregues sem retorno', v: soma(x => envio(x) && String(x.STATUS) === '7'), sub: 'esperam a ResponseMessage' },
+    { k: 'finalizada', rot: 'Finalizadas', v: soma(x => envio(x) && String(x.STATUS) === '2'), sub: 'o FWEAICLEAR apaga as antigas' },
+    { k: 'depara', rot: 'De-para gravado', v: xxf, sub: 'XXF · ID do outro sistema' },
+  ];
+}
+
+function intEaiFunilHtml(B) {
+  const f = intEaiFunil(B);
+  const ruim = { falha: 1, entregue: 1 };
+  return `<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 mb-4" aria-label="Caminho da mensagem">${f.map((x, k) => {
+    const alerta = ruim[x.k] && x.v > 0 || (x.k === 'depara' && x.v === 0 && (f[0].v || 0) > 0);
+    return `<div class="rounded-lg border ${alerta ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-white'} px-3 py-2" data-int-funil="${x.k}">
+      <p class="text-[11px] font-semibold text-slate-600 leading-tight">${k ? '→ ' : ''}${escapeHtml(x.rot)}</p>
+      <p class="text-xl font-totvs text-totvs-petroleo tabular-nums mt-0.5">${x.v == null ? '—' : x.v}</p>
+      <p class="text-[11px] text-slate-500 leading-snug">${escapeHtml(x.sub)}${alerta ? ' · <b class="text-amber-800">! atenção</b>' : ''}</p></div>`;
+  }).join('')}</div>`;
+}
+
+/** Agendamentos com o de/para empresa-filial (XX2) e as tarefas (SCHDTSK). */
+function intEaiAgendamentos(B) {
+  const emp = {};
+  (B.eai_agend_empfil?.ok ? B.eai_agend_empfil.linhas : []).forEach(x => {
+    (emp[x.CODIGO] = emp[x.CODIGO] || []).push(x.EMPFIL);
+  });
+  const tsk = {};
+  (B.eai_tarefas?.ok ? B.eai_tarefas.linhas : []).forEach(x => {
+    (tsk[x.CODIGO] = tsk[x.CODIGO] || []).push(`${x.QTD} · status ${x.STATUS}`);
+  });
+  return intSub('Agendamentos (XX1 · XX2 · SCHDTSK)', B.eai_agendamentos, (ls) => intTabela([
+    { k: 'CODIGO', rot: 'Código' },
+    { rot: 'Rotina', fmt: l => `${escapeHtml(l.ROTINA || '')}${l.EAI === 'S' ? ' <span class="text-[10px] px-1.5 rounded bg-sky-50 text-sky-800 font-semibold">EAI</span>' : ''}` },
+    { k: 'AMBIENTE', rot: 'Ambiente' },
+    { rot: 'Empresa/filial', fmt: l => escapeHtml((emp[l.CODIGO] || []).join(' · ') || '—') },
+    { rot: 'Recorrência', fmt: l => { const t = String(l.RECORR || '').trim();
+      return t ? `<span class="text-slate-600" title="${escapeHtml(t)}">${escapeHtml(t.length > 60 ? t.slice(0, 60) + '…' : t)}</span>` : '<span class="text-slate-400">—</span>'; } },
+    { rot: 'Início', fmt: l => intHora(l.INICIO, l.HORA) },
+    { rot: 'Última execução', fmt: l => String(l.ULTDIA || '').trim()
+      ? `${intHora(l.ULTDIA, l.ULTHOR)} <span class="text-slate-500">(há ${escapeHtml(intIdadeTxt(intIdadeMin(l.ULTDIA, l.ULTHOR)))})</span>`
+      : '<b class="text-rose-700">✕ nunca executou</b>' },
+    { rot: 'Tarefas (qtd · status)', fmt: l => escapeHtml((tsk[l.CODIGO] || []).join(' | ') || '—') }],
+    ls, 'Nenhum agendamento na XX1 desta base.'));
+}
+
+function intCaixaEai(B, d, nivel) {
+  const u = d.ultima || {};
+  const g = INT_GRUPO('eai');
+  return intCaixa('eai', 'EAI Protheus × Schedule — o cadastro saiu e voltou?', g.sub, nivel, () =>
+    intEaiFunilHtml(B) +
+    intDuasBasesGrupo(u, d, 'eai') +
+    intSub('Fila por mensagem, status e canal (XX3)', B.eai_status, (ls) => intTabela([
+      { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+      { rot: 'Sentido', fmt: l => escapeHtml(INT_EAI_TPTRAN[l.TPTRAN] || l.TPTRAN || '') },
+      { k: 'QTD', rot: 'Mensagens', dir: 1 }, { k: 'ESGOTADAS', rot: '4+ tentativas', dir: 1 },
+      { k: 'COM_DESTINO', rot: 'Com destino', dir: 1 },
+      { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGA) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
+      ls, 'Fila do EAI vazia.')) +
+    intSub('Mensagens abertas, das mais antigas (XX3)', B.eai_pendentes_lista, (ls) => intTabela([
+      { rot: 'Gerada', fmt: l => intHora(l.DIA, l.HORA) },
+      { rot: 'Idade', dir: 1, fmt: l => escapeHtml(intIdadeTxt(intIdadeMin(l.DIA, l.HORA))) },
+      { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+      { k: 'TENTATIVAS', rot: 'Tentativas', dir: 1 }, { k: 'EVENTO', rot: 'Evento' },
+      { rot: 'Destino', fmt: l => escapeHtml(l.COM_DESTINO === 'S' ? (l.WEBSERVICE ? `sim · ${l.WEBSERVICE}` : 'sim') : (l.WEBSERVICE || 'não')) },
+      ...(ls.some(l => 'RETORNO' in l) ? [{ rot: 'Retorno (XX3_RETURN)', fmt: l => {
+        const t = String(l.RETORNO || '').trim();
+        return t ? `<span class="text-slate-600" title="${escapeHtml(t)}">${escapeHtml(t.length > 140 ? t.slice(0, 140) + '…' : t)}</span>` : '<span class="text-slate-400">—</span>';
+      } }] : [])], ls, 'Nenhuma mensagem aberta.')) +
+    intSub('Adapters cadastrados (XX4)', B.eai_adapters, (ls) => intTabela([
+      { k: 'ROTINA', rot: 'Rotina' }, { k: 'MENSAGEM', rot: 'Mensagem' }, { k: 'DESCRICAO', rot: 'Descrição' },
+      { rot: 'Envia', fmt: l => escapeHtml(INT_EAI_SN[l.ENVIA] || l.ENVIA || '') },
+      { rot: 'Recebe', fmt: l => escapeHtml(INT_EAI_SN[l.RECEBE] || l.RECEBE || '') },
+      { rot: 'Método', fmt: l => escapeHtml(INT_EAI_METODO[l.METODO] || l.METODO || '') },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) }, { k: 'VERSAO', rot: 'Versão' },
+      { rot: 'Condição de envio', fmt: l => l.CONDICAO ? `<code class="text-[11px]">${escapeHtml(l.CONDICAO)}</code>` : '<span class="text-slate-400">—</span>' }],
+      ls, 'Nenhum adapter cadastrado.')) +
+    intSub('De-para gravado (XXF)', B.eai_depara, (ls) => intTabela([
+      { k: 'ALIAS', rot: 'Alias' }, { k: 'REFERENCIA', rot: 'Referência (produto)' }, { k: 'MENSAGEM', rot: 'Mensagem dona' },
+      { k: 'QTD', rot: 'Registros', dir: 1 }], ls,
+      'XXF vazia: nenhum retorno processado. O de-para (ID do outro sistema × código Protheus) nasce no processamento da ResponseMessage.')) +
+    intSub('Tamanho dos cadastros que sobem por Mensagem Única', B.eai_cadastros, (ls) => intTabela([
+      { k: 'ALIAS', rot: 'Tabela' }, { k: 'QTD', rot: 'Registros', dir: 1 }], ls, 'Sem cadastro.')) +
+    `<h4 class="text-xs font-semibold text-totvs-petroleo uppercase tracking-wide mt-5 mb-2 border-t border-slate-100 pt-3">Schedule</h4>` +
+    intEaiAgendamentos(B) +
+    intSub('Agents (XX0)', B.eai_agents, (ls) => intTabela([
+      { k: 'CODIGO', rot: 'Código' }, { k: 'DESCRICAO', rot: 'Descrição' }, { rot: 'Endereço', fmt: l => escapeHtml(`${l.IP || ''}:${l.PORTA || ''}`) },
+      { k: 'AMBIENTE', rot: 'Ambiente' }, { k: 'THREADS', rot: 'Threads', dir: 1 }, { k: 'STATUS', rot: 'Status' },
+      { rot: 'Último sinal', fmt: l => intHora(l.ULTDIA, l.ULTHOR) }], ls, 'Nenhum agent cadastrado.')) +
+    intSub('Parâmetros do EAI (SX6)', B.eai_config, (ls) => intTabela([
+      { k: 'PARAMETRO', rot: 'Parâmetro' }, { rot: 'Filial', fmt: l => escapeHtml(l.FILIAL || '(todas)') },
+      { k: 'CONTEUDO', rot: 'Conteúdo' }], ls, 'Nenhum dos parâmetros existe nesta base.')) +
+    intSub('De-para de empresa/filial (XXD)', B.eai_empresa, (ls) => intTabela([
+      { k: 'REFERENCIA', rot: 'Referência' }, { rot: 'Externo', fmt: l => escapeHtml(`${l.EMPRESA_EXT || ''} / ${l.FILIAL_EXT || ''}`) },
+      { rot: 'Protheus', fmt: l => escapeHtml(`${l.EMPRESA || ''} / ${l.FILIAL || ''}`) }], ls, 'Nenhum de-para de empresa.')) +
+    `<p class="text-xs text-slate-500">Caminho: evento no cadastro → adapter (<b>XX4</b>) → fila <b>XX3</b> → envio pelo canal do adapter
+       (3 = iPaaS) → o destino devolve a <b>ResponseMessage</b> → o <b>FWEAIRECE</b> (Schedule) processa, grava o de-para na
+       <b>XXF</b> e finaliza. Falha com 4 tentativas só volta pelo “tentar novamente” (SIGACFG › Schedule › EAI). O
+       <b>FWEAICLEAR</b> apaga as finalizadas, por isso o painel mede o que ficou aberto e o de-para. A URL do iPaaS (com a
+       api-key) e o conteúdo da mensagem não são lidos.</p>`);
+}
+
+/** ⚡ Produção + Teste: coleta nas duas bases, uma depois da outra. Liga na
+ *  outra base os grupos de comparação (CRM, EAI) que estiverem desligados lá
+ *  (pergunta antes). */
 async function coletaDuasBases() {
   if (!integ.customer || integ.coletando) return;
   const outra = integ.dados?.outra || {};
   const bases = ['producao', 'teste'];
   const semCad = !outra.cadastrada;
-  const ligar = !semCad && !(outra.integ_grupos || []).includes('crm');
+  const meus = intGruposCfg().filter(g => INT_GRUPOS_DUAS.includes(g));
+  const faltam = semCad ? [] : meus.filter(g => !(outra.integ_grupos || []).includes(g));
+  const ligar = faltam.length > 0;
+  const nomes = meus.map(g => INT_GRUPO(g)?.rot || g).join(' e ');
   const labO = (AMB[outra.ambiente] || AMB.teste).label;
-  if (!confirm(`Coletar o grupo CRM × iPaaS na Base Produção e na Base de Testes?\n\nConsultas só de leitura pela REST de ` +
+  if (!confirm(`Coletar ${nomes} na Base Produção e na Base de Testes?\n\nConsultas só de leitura pela REST de ` +
                `cada base (TSCMONITREST), uma depois da outra — até ~50 s cada. Cada chamada usa licença no REST.` +
                (semCad ? `\n\n${labO} não está cadastrada no ⚙ Ambiente: só esta base será coletada.` : '') +
-               (ligar ? `\n\nO grupo CRM está desligado na ${labO} e será ligado lá (os grupos que ela já monitora continuam).` : ''))) return;
+               (ligar ? `\n\n${faltam.map(g => INT_GRUPO(g)?.rot || g).join(' e ')} desligado(s) na ${labO}: será(ão) ligado(s) lá (os grupos que ela já monitora continuam).` : ''))) return;
   integ.coletando = true; integ.erroColeta = null; integ.duas = { atual: null, falhas: [] };
   renderIntegracoes();
   const cli = encodeURIComponent(integ.customer);
@@ -12593,7 +12748,7 @@ async function coletaDuasBases() {
     if (ligar) {
       await api(`/api/integracoes/${cli}/grupos?ambiente=${outra.ambiente}`,
                 { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ grupos: [...(outra.integ_grupos || []), 'crm'] }) });
+                  body: JSON.stringify({ grupos: [...(outra.integ_grupos || []), ...faltam] }) });
     }
     for (const amb of bases) {
       if (amb !== integ.ambiente && semCad) continue;
