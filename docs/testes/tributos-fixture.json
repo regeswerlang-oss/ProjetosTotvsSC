@@ -1,0 +1,1972 @@
+{
+ "quantidades": [
+  {
+   "tab": "F2E",
+   "rotulo": "Cadastro de Tributo",
+   "grupo": "tributos",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": true,
+    "t": true
+   },
+   "modo": {
+    "p": "CCC",
+    "t": "CCC"
+   },
+   "p": 3,
+   "t": 3,
+   "filiais": [
+    {
+     "fil": "",
+     "p": 3,
+     "t": 3
+    }
+   ]
+  },
+  {
+   "tab": "F2C",
+   "rotulo": "Tributos De/Para",
+   "grupo": "tributos",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F20",
+   "rotulo": "Perfis Tributários",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": true,
+    "t": true
+   },
+   "modo": {
+    "p": "CCC",
+    "t": "CCC"
+   },
+   "p": 2,
+   "t": 3,
+   "filiais": [
+    {
+     "fil": "01",
+     "p": 2,
+     "t": 3
+    }
+   ]
+  },
+  {
+   "tab": "F21",
+   "rotulo": "Perfil Origem/Destino",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": true,
+    "t": true
+   },
+   "modo": {
+    "p": "CCC",
+    "t": "CCC"
+   },
+   "p": 1,
+   "t": 2,
+   "filiais": [
+    {
+     "fil": "01",
+     "p": 1,
+     "t": 2
+    }
+   ]
+  },
+  {
+   "tab": "F22",
+   "rotulo": "Perfil de Participante",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F23",
+   "rotulo": "Perfil de Operação",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F24",
+   "rotulo": "Perfil de Produto",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F25",
+   "rotulo": "Perfil Produto × Origem",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F26",
+   "rotulo": "Perfil Tipo de Operação",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIO",
+   "rotulo": "Cód. Serviço do Perfil de Operação",
+   "grupo": "perfis",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F27",
+   "rotulo": "Regra de Base de Cálculo",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": true,
+    "t": true
+   },
+   "modo": {
+    "p": "CCC",
+    "t": "CCC"
+   },
+   "p": 1,
+   "t": 1,
+   "filiais": [
+    {
+     "fil": "",
+     "p": 1,
+     "t": 1
+    }
+   ]
+  },
+  {
+   "tab": "F28",
+   "rotulo": "Regra de Alíquota",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": true,
+    "t": true
+   },
+   "modo": {
+    "p": "CCC",
+    "t": "CCC"
+   },
+   "p": 3,
+   "t": 5,
+   "filiais": [
+    {
+     "fil": "",
+     "p": 3,
+     "t": 5
+    }
+   ]
+  },
+  {
+   "tab": "F29",
+   "rotulo": "Unidade de Referência Fiscal",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2A",
+   "rotulo": "Valores da URF",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIN",
+   "rotulo": "Fórmulas",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2B",
+   "rotulo": "Regra de Cálculo — Documentos Fiscais",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": true,
+    "t": true
+   },
+   "modo": {
+    "p": "EEE",
+    "t": "EEE"
+   },
+   "p": 5,
+   "t": 7,
+   "filiais": [
+    {
+     "fil": "01",
+     "p": 5,
+     "t": 6
+    },
+    {
+     "fil": "02",
+     "p": null,
+     "t": 1
+    }
+   ]
+  },
+  {
+   "tab": "CIQ",
+   "rotulo": "Tabela Progressiva",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIR",
+   "rotulo": "Itens da Tabela Progressiva",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIS",
+   "rotulo": "Regra por NCM — Cabeçalho",
+   "grupo": "ncm",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIT",
+   "rotulo": "Tributo × Regra (NCM)",
+   "grupo": "ncm",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIU",
+   "rotulo": "Regra Adicional por NCM",
+   "grupo": "ncm",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIV",
+   "rotulo": "Regra por Dependentes",
+   "grupo": "regras",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIX",
+   "rotulo": "Regra de ISS — Cabeçalho",
+   "grupo": "iss",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CIY",
+   "rotulo": "Alíquota de ISS por Município",
+   "grupo": "iss",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ0",
+   "rotulo": "CST — Cabeçalho",
+   "grupo": "escrituracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ1",
+   "rotulo": "CST — Item",
+   "grupo": "escrituracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ2",
+   "rotulo": "Regra de Escrituração",
+   "grupo": "escrituracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ4",
+   "rotulo": "Regra de Guia de Recolhimento",
+   "grupo": "apuracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ5",
+   "rotulo": "Regra de Código de Receita",
+   "grupo": "apuracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ6",
+   "rotulo": "Código de Receita por Estado",
+   "grupo": "apuracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ7",
+   "rotulo": "Mod. Documento × Código de Receita",
+   "grupo": "apuracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ8",
+   "rotulo": "Cadastro de Mensagem",
+   "grupo": "escrituracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ9",
+   "rotulo": "Regra de Ajuste de Lançamento",
+   "grupo": "escrituracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJA",
+   "rotulo": "Itens da Regra de Ajuste",
+   "grupo": "escrituracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2G",
+   "rotulo": "Regra de Apuração",
+   "grupo": "apuracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2N",
+   "rotulo": "Regras de Título da Apuração",
+   "grupo": "apuracao",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2D",
+   "rotulo": "Tributos Calculados (por item de NF)",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": true,
+    "t": true
+   },
+   "modo": {
+    "p": "EEE",
+    "t": "EEE"
+   },
+   "p": 1500,
+   "t": 1500,
+   "filiais": [
+    {
+     "fil": "01",
+     "p": 1500,
+     "t": 1500
+    }
+   ]
+  },
+  {
+   "tab": "F2F",
+   "rotulo": "Títulos de Tributos × NF",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJ3",
+   "rotulo": "Escrituração por Item",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJL",
+   "rotulo": "Mensagens Decodificadas",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "CJM",
+   "rotulo": "Controle de Estorno ICMS",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2H",
+   "rotulo": "Apuração Tributo Genérico",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2I",
+   "rotulo": "Saldos da Apuração",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2J",
+   "rotulo": "Resumo da Apuração por Regra",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2K",
+   "rotulo": "Resumo Analítico",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2L",
+   "rotulo": "Títulos da Apuração",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  },
+  {
+   "tab": "F2M",
+   "rotulo": "Ajustes da Apuração",
+   "grupo": "movimento",
+   "tipo": "mov",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "filiais": []
+  }
+ ],
+ "comparacao": {
+  "F2E": {
+   "chave": [
+    "F2E_FILIAL",
+    "F2E_TRIB"
+   ],
+   "ignoradas": [],
+   "resumo": {
+    "so_teste": 0,
+    "so_prod": 0,
+    "iguais": 3,
+    "diverg": 0,
+    "mesmo_conteudo": 0
+   },
+   "lida": {
+    "p": true,
+    "t": true
+   },
+   "truncada": {
+    "p": false,
+    "t": false
+   },
+   "colunas": [
+    "F2E_FILIAL",
+    "F2E_TRIB",
+    "F2E_DESC"
+   ],
+   "so_dic": {
+    "p": [],
+    "t": []
+   },
+   "titulos": {
+    "F2E_FILIAL": "Filial",
+    "F2E_TRIB": "Trib",
+    "F2E_DESC": "Desc"
+   },
+   "cbox": {},
+   "itens": [
+    {
+     "k": [
+      "",
+      "CBSFED"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F2E_FILIAL": "",
+      "F2E_TRIB": "CBSFED",
+      "F2E_DESC": "CBSFED"
+     },
+     "t": {
+      "F2E_FILIAL": "",
+      "F2E_TRIB": "CBSFED",
+      "F2E_DESC": "CBSFED"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "",
+      "IBSEST"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F2E_FILIAL": "",
+      "F2E_TRIB": "IBSEST",
+      "F2E_DESC": "IBSEST"
+     },
+     "t": {
+      "F2E_FILIAL": "",
+      "F2E_TRIB": "IBSEST",
+      "F2E_DESC": "IBSEST"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "",
+      "IBSMUN"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F2E_FILIAL": "",
+      "F2E_TRIB": "IBSMUN",
+      "F2E_DESC": "IBSMUN"
+     },
+     "t": {
+      "F2E_FILIAL": "",
+      "F2E_TRIB": "IBSMUN",
+      "F2E_DESC": "IBSMUN"
+     },
+     "difs": []
+    }
+   ],
+   "iguais_omitidos": 0
+  },
+  "F20": {
+   "chave": [
+    "F20_FILIAL",
+    "F20_CODIGO",
+    "F20_TIPO"
+   ],
+   "ignoradas": [],
+   "resumo": {
+    "so_teste": 1,
+    "so_prod": 0,
+    "iguais": 2,
+    "diverg": 0,
+    "mesmo_conteudo": 0
+   },
+   "lida": {
+    "p": true,
+    "t": true
+   },
+   "truncada": {
+    "p": false,
+    "t": false
+   },
+   "colunas": [
+    "F20_FILIAL",
+    "F20_CODIGO",
+    "F20_TIPO",
+    "F20_DESC"
+   ],
+   "so_dic": {
+    "p": [],
+    "t": []
+   },
+   "titulos": {
+    "F20_FILIAL": "Filial",
+    "F20_CODIGO": "Codigo",
+    "F20_TIPO": "Tipo",
+    "F20_DESC": "Desc"
+   },
+   "cbox": {},
+   "itens": [
+    {
+     "k": [
+      "01",
+      "TPP009",
+      "01"
+     ],
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F20_FILIAL": "01",
+      "F20_CODIGO": "TPP009",
+      "F20_TIPO": "01",
+      "F20_DESC": "serviços"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "01",
+      "000051",
+      "02"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F20_FILIAL": "01",
+      "F20_CODIGO": "000051",
+      "F20_TIPO": "02",
+      "F20_DESC": "todos os CFOPs"
+     },
+     "t": {
+      "F20_FILIAL": "01",
+      "F20_CODIGO": "000051",
+      "F20_TIPO": "02",
+      "F20_DESC": "todos os CFOPs"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "01",
+      "TPP001",
+      "01"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F20_FILIAL": "01",
+      "F20_CODIGO": "TPP001",
+      "F20_TIPO": "01",
+      "F20_DESC": "todos"
+     },
+     "t": {
+      "F20_FILIAL": "01",
+      "F20_CODIGO": "TPP001",
+      "F20_TIPO": "01",
+      "F20_DESC": "todos"
+     },
+     "difs": []
+    }
+   ],
+   "iguais_omitidos": 0
+  },
+  "F21": {
+   "chave": null,
+   "ignoradas": [
+    "F21_IDF20"
+   ],
+   "resumo": {
+    "so_teste": 1,
+    "so_prod": 0,
+    "iguais": 1,
+    "diverg": 0,
+    "mesmo_conteudo": 0
+   },
+   "lida": {
+    "p": true,
+    "t": true
+   },
+   "truncada": {
+    "p": false,
+    "t": false
+   },
+   "colunas": [
+    "F21_FILIAL",
+    "F21_IDF20",
+    "F21_UFORI",
+    "F21_UFDEST"
+   ],
+   "so_dic": {
+    "p": [],
+    "t": []
+   },
+   "titulos": {
+    "F21_FILIAL": "Filial",
+    "F21_IDF20": "Idf20",
+    "F21_UFORI": "Ufori",
+    "F21_UFDEST": "Ufdest"
+   },
+   "cbox": {},
+   "itens": [
+    {
+     "k": null,
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F21_FILIAL": "01",
+      "F21_IDF20": "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu",
+      "F21_UFORI": "SC",
+      "F21_UFDEST": "PR"
+     },
+     "difs": []
+    },
+    {
+     "k": null,
+     "sit": "iguais",
+     "p": {
+      "F21_FILIAL": "01",
+      "F21_IDF20": "pppppppppppppppppppppppppppppppp",
+      "F21_UFORI": "SC",
+      "F21_UFDEST": "SC"
+     },
+     "t": {
+      "F21_FILIAL": "01",
+      "F21_IDF20": "pppppppppppppppppppppppppppppppp",
+      "F21_UFORI": "SC",
+      "F21_UFDEST": "SC"
+     },
+     "difs": []
+    }
+   ],
+   "iguais_omitidos": 0
+  },
+  "F27": {
+   "chave": [
+    "F27_FILIAL",
+    "F27_CODIGO"
+   ],
+   "ignoradas": [],
+   "resumo": {
+    "so_teste": 0,
+    "so_prod": 0,
+    "iguais": 1,
+    "diverg": 0,
+    "mesmo_conteudo": 0
+   },
+   "lida": {
+    "p": true,
+    "t": true
+   },
+   "truncada": {
+    "p": false,
+    "t": false
+   },
+   "colunas": [
+    "F27_FILIAL",
+    "F27_CODIGO",
+    "F27_DESC"
+   ],
+   "so_dic": {
+    "p": [],
+    "t": []
+   },
+   "titulos": {
+    "F27_FILIAL": "Filial",
+    "F27_CODIGO": "Codigo",
+    "F27_DESC": "Desc"
+   },
+   "cbox": {},
+   "itens": [
+    {
+     "k": [
+      "",
+      "TB0001"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F27_FILIAL": "",
+      "F27_CODIGO": "TB0001",
+      "F27_DESC": "base"
+     },
+     "t": {
+      "F27_FILIAL": "",
+      "F27_CODIGO": "TB0001",
+      "F27_DESC": "base"
+     },
+     "difs": []
+    }
+   ],
+   "iguais_omitidos": 0
+  },
+  "F28": {
+   "chave": [
+    "F28_FILIAL",
+    "F28_CODIGO"
+   ],
+   "ignoradas": [],
+   "resumo": {
+    "so_teste": 2,
+    "so_prod": 0,
+    "iguais": 3,
+    "diverg": 0,
+    "mesmo_conteudo": 0
+   },
+   "lida": {
+    "p": true,
+    "t": true
+   },
+   "truncada": {
+    "p": false,
+    "t": false
+   },
+   "colunas": [
+    "F28_FILIAL",
+    "F28_CODIGO",
+    "F28_DESC",
+    "F28_ALIQ"
+   ],
+   "so_dic": {
+    "p": [],
+    "t": []
+   },
+   "titulos": {
+    "F28_FILIAL": "Filial",
+    "F28_CODIGO": "Codigo",
+    "F28_DESC": "Desc",
+    "F28_ALIQ": "Aliq"
+   },
+   "cbox": {},
+   "itens": [
+    {
+     "k": [
+      "",
+      "TA0003"
+     ],
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0003",
+      "F28_DESC": "nova",
+      "F28_ALIQ": "0.05"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "",
+      "TA0004"
+     ],
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0004",
+      "F28_DESC": "mun",
+      "F28_ALIQ": "0.02"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "",
+      "TA0001"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0001",
+      "F28_DESC": "0,9%",
+      "F28_ALIQ": "0.90"
+     },
+     "t": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0001",
+      "F28_DESC": "0,9%",
+      "F28_ALIQ": "0.90"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "",
+      "TA0002"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0002",
+      "F28_DESC": "0,1%",
+      "F28_ALIQ": "0.10"
+     },
+     "t": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0002",
+      "F28_DESC": "0,1%",
+      "F28_ALIQ": "0.10"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "",
+      "TA0007"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0007",
+      "F28_DESC": "x",
+      "F28_ALIQ": "1"
+     },
+     "t": {
+      "F28_FILIAL": "",
+      "F28_CODIGO": "TA0007",
+      "F28_DESC": "x",
+      "F28_ALIQ": "1"
+     },
+     "difs": []
+    }
+   ],
+   "iguais_omitidos": 0
+  },
+  "F2B": {
+   "chave": [
+    "F2B_FILIAL",
+    "F2B_REGRA",
+    "F2B_VIGINI"
+   ],
+   "ignoradas": [
+    "F2B_ID"
+   ],
+   "resumo": {
+    "so_teste": 4,
+    "so_prod": 2,
+    "iguais": 2,
+    "diverg": 1,
+    "mesmo_conteudo": 1
+   },
+   "lida": {
+    "p": true,
+    "t": true
+   },
+   "truncada": {
+    "p": false,
+    "t": false
+   },
+   "colunas": [
+    "F2B_FILIAL",
+    "F2B_ID",
+    "F2B_REGRA",
+    "F2B_DESC",
+    "F2B_TRIB",
+    "F2B_VIGINI",
+    "F2B_VIGFIM",
+    "F2B_STATUS",
+    "F2B_RBASE",
+    "F2B_RALIQ",
+    "F2B_PERFPR"
+   ],
+   "so_dic": {
+    "p": [],
+    "t": []
+   },
+   "titulos": {
+    "F2B_FILIAL": "Filial",
+    "F2B_ID": "Id",
+    "F2B_REGRA": "Regra",
+    "F2B_DESC": "Desc",
+    "F2B_TRIB": "Trib",
+    "F2B_VIGINI": "Vigini",
+    "F2B_VIGFIM": "Vigfim",
+    "F2B_STATUS": "Status",
+    "F2B_RBASE": "Rbase",
+    "F2B_RALIQ": "Raliq",
+    "F2B_PERFPR": "Perfpr"
+   },
+   "cbox": {
+    "F2B_STATUS": {
+     "1": "Em teste",
+     "2": "Aprovado"
+    }
+   },
+   "itens": [
+    {
+     "k": [
+      "01",
+      "PROD01",
+      "20260101"
+     ],
+     "sit": "so_prod",
+     "p": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "dddddddddddddddddddddddddddddddd",
+      "F2B_REGRA": "PROD01",
+      "F2B_DESC": "criada na produção",
+      "F2B_TRIB": "CBSFED",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0099",
+      "F2B_PERFPR": "TPP001"
+     },
+     "t": null,
+     "difs": []
+    },
+    {
+     "k": [
+      "01",
+      "TR0000",
+      "20250101"
+     ],
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "llllllllllllllllllllllllllllllll",
+      "F2B_REGRA": "TR0000",
+      "F2B_DESC": "vencida",
+      "F2B_TRIB": "CBSFED",
+      "F2B_VIGINI": "20250101",
+      "F2B_VIGFIM": "20251231",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0001",
+      "F2B_PERFPR": "TPP001"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "01",
+      "TR0002",
+      "20260101"
+     ],
+     "sit": "diverg",
+     "p": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "F2B_REGRA": "TR0002",
+      "F2B_DESC": "IBS",
+      "F2B_TRIB": "IBSEST",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0002",
+      "F2B_PERFPR": "TPP001"
+     },
+     "t": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "gggggggggggggggggggggggggggggggg",
+      "F2B_REGRA": "TR0002",
+      "F2B_DESC": "IBS",
+      "F2B_TRIB": "IBSEST",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0003",
+      "F2B_PERFPR": "TPP001"
+     },
+     "difs": [
+      "F2B_RALIQ"
+     ]
+    },
+    {
+     "k": [
+      "01",
+      "TR0007",
+      "20260101"
+     ],
+     "sit": "so_prod",
+     "p": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "F2B_REGRA": "TR0007",
+      "F2B_DESC": "mesmo conteúdo",
+      "F2B_TRIB": "IBSEST",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0007",
+      "F2B_PERFPR": "TPP001"
+     },
+     "t": null,
+     "difs": [],
+     "par": [
+      "01",
+      "TR0008",
+      "20260101"
+     ]
+    },
+    {
+     "k": [
+      "01",
+      "TR0008",
+      "20260101"
+     ],
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk",
+      "F2B_REGRA": "TR0008",
+      "F2B_DESC": "mesmo conteúdo",
+      "F2B_TRIB": "IBSEST",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0007",
+      "F2B_PERFPR": "TPP001"
+     },
+     "difs": [],
+     "par": [
+      "01",
+      "TR0007",
+      "20260101"
+     ]
+    },
+    {
+     "k": [
+      "01",
+      "TR0010",
+      "20260101"
+     ],
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+      "F2B_REGRA": "TR0010",
+      "F2B_DESC": "nova",
+      "F2B_TRIB": "IBSMUN",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0004",
+      "F2B_PERFPR": "TPP009"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "02",
+      "TR0001",
+      "20260101"
+     ],
+     "sit": "so_teste",
+     "p": null,
+     "t": {
+      "F2B_FILIAL": "02",
+      "F2B_ID": "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+      "F2B_REGRA": "TR0001",
+      "F2B_DESC": "CBS",
+      "F2B_TRIB": "CBSFED",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0001",
+      "F2B_PERFPR": "TPP001"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "01",
+      "TR0001",
+      "20260101"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "F2B_REGRA": "TR0001",
+      "F2B_DESC": "CBS",
+      "F2B_TRIB": "CBSFED",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0001",
+      "F2B_PERFPR": "TPP001"
+     },
+     "t": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "ffffffffffffffffffffffffffffffff",
+      "F2B_REGRA": "TR0001",
+      "F2B_DESC": "CBS",
+      "F2B_TRIB": "CBSFED",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "2",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0001",
+      "F2B_PERFPR": "TPP001"
+     },
+     "difs": []
+    },
+    {
+     "k": [
+      "01",
+      "TR0009",
+      "20260101"
+     ],
+     "sit": "iguais",
+     "p": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "cccccccccccccccccccccccccccccccc",
+      "F2B_REGRA": "TR0009",
+      "F2B_DESC": "IBS MUN",
+      "F2B_TRIB": "IBSMUN",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "1",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0001",
+      "F2B_PERFPR": "TPP001"
+     },
+     "t": {
+      "F2B_FILIAL": "01",
+      "F2B_ID": "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+      "F2B_REGRA": "TR0009",
+      "F2B_DESC": "IBS MUN",
+      "F2B_TRIB": "IBSMUN",
+      "F2B_VIGINI": "20260101",
+      "F2B_VIGFIM": "",
+      "F2B_STATUS": "1",
+      "F2B_RBASE": "TB0001",
+      "F2B_RALIQ": "TA0001",
+      "F2B_PERFPR": "TPP001"
+     },
+     "difs": []
+    }
+   ],
+   "iguais_omitidos": 0
+  }
+ },
+ "analise": {
+  "producao": {
+   "refs": [
+    {
+     "filial": "01",
+     "regra": "PROD01",
+     "trib": "CBSFED",
+     "campo": "F2B_RALIQ",
+     "rotulo": "Regra de alíquota",
+     "valor": "TA0099",
+     "destino": "F28",
+     "motivo": "não existe"
+    }
+   ],
+   "vig": {
+    "vigente": 5,
+    "futura": 0,
+    "encerrada": 0
+   },
+   "status": {
+    "Aprovado": 4,
+    "Em teste": 1
+   },
+   "em_teste": [
+    {
+     "filial": "01",
+     "regra": "TR0009",
+     "trib": "IBSMUN",
+     "desc": "IBS MUN",
+     "status": "Em teste"
+    }
+   ],
+   "orfaos": [
+    {
+     "tabela": "F20",
+     "codigo": "000051",
+     "desc": "todos os CFOPs"
+    }
+   ],
+   "regras": 5
+  },
+  "teste": {
+   "refs": [
+    {
+     "filial": "02",
+     "regra": "TR0001",
+     "trib": "CBSFED",
+     "campo": "F2B_PERFPR",
+     "rotulo": "Perfil de produto",
+     "valor": "TPP001",
+     "destino": "F20",
+     "motivo": "existe em outra filial"
+    }
+   ],
+   "vig": {
+    "vigente": 6,
+    "futura": 0,
+    "encerrada": 1
+   },
+   "status": {
+    "Aprovado": 6,
+    "Em teste": 1
+   },
+   "em_teste": [
+    {
+     "filial": "01",
+     "regra": "TR0009",
+     "trib": "IBSMUN",
+     "desc": "IBS MUN",
+     "status": "Em teste"
+    }
+   ],
+   "orfaos": [
+    {
+     "tabela": "F20",
+     "codigo": "000051",
+     "desc": "todos os CFOPs"
+    },
+    {
+     "tabela": "F28",
+     "codigo": "TA0002",
+     "desc": "0,1%"
+    }
+   ],
+   "regras": 7
+  }
+ },
+ "reforma": {
+  "tributos": [
+   "CBSFED",
+   "IBSEST",
+   "IBSMUN"
+  ],
+  "filiais": [
+   "01",
+   "02"
+  ],
+  "compartilhada": false,
+  "producao": {
+   "CBSFED": {
+    "01": 2
+   },
+   "IBSEST": {
+    "01": 2
+   },
+   "IBSMUN": {
+    "01": 1
+   }
+  },
+  "teste": {
+   "CBSFED": {
+    "01": 1,
+    "02": 1
+   },
+   "IBSEST": {
+    "01": 2
+   },
+   "IBSMUN": {
+    "01": 2
+   }
+  }
+ },
+ "migracao": [
+  {
+   "sit": "so_teste",
+   "filial": "01",
+   "regra": "TR0000",
+   "trib": "CBSFED",
+   "desc": "vencida",
+   "vigini": "20250101",
+   "difs": [],
+   "deps": [],
+   "par": null
+  },
+  {
+   "sit": "diverg",
+   "filial": "01",
+   "regra": "TR0002",
+   "trib": "IBSEST",
+   "desc": "IBS",
+   "vigini": "20260101",
+   "difs": [
+    "F2B_RALIQ"
+   ],
+   "deps": [
+    {
+     "tabela": "F28",
+     "rotulo": "Regra de alíquota",
+     "codigo": "TA0003"
+    }
+   ],
+   "par": null
+  },
+  {
+   "sit": "so_teste",
+   "filial": "01",
+   "regra": "TR0008",
+   "trib": "IBSEST",
+   "desc": "mesmo conteúdo",
+   "vigini": "20260101",
+   "difs": [],
+   "deps": [],
+   "par": [
+    "01",
+    "TR0007",
+    "20260101"
+   ]
+  },
+  {
+   "sit": "so_teste",
+   "filial": "01",
+   "regra": "TR0010",
+   "trib": "IBSMUN",
+   "desc": "nova",
+   "vigini": "20260101",
+   "difs": [],
+   "deps": [
+    {
+     "tabela": "F28",
+     "rotulo": "Regra de alíquota",
+     "codigo": "TA0004"
+    },
+    {
+     "tabela": "F20",
+     "rotulo": "Perfil de produto",
+     "codigo": "TPP009"
+    }
+   ],
+   "par": null
+  },
+  {
+   "sit": "so_teste",
+   "filial": "02",
+   "regra": "TR0001",
+   "trib": "CBSFED",
+   "desc": "CBS",
+   "vigini": "20260101",
+   "difs": [],
+   "deps": [],
+   "par": null
+  }
+ ],
+ "indicadores": [
+  {
+   "chave": "migrar",
+   "rotulo": "Regras só em Teste",
+   "valor": 4,
+   "nivel": "amarelo",
+   "texto": "Regras de cálculo homologadas em Teste que ainda não estão na Produção."
+  },
+  {
+   "chave": "diverg",
+   "rotulo": "Mesmo código, conteúdo diferente",
+   "valor": 1,
+   "nivel": "amarelo",
+   "texto": "Regra com o mesmo código nas duas bases e algum campo diferente."
+  },
+  {
+   "chave": "so_prod",
+   "rotulo": "Regras só na Produção",
+   "valor": 2,
+   "nivel": "amarelo",
+   "texto": "Regra criada direto na Produção, sem passar pelo Teste."
+  },
+  {
+   "chave": "refs_p",
+   "rotulo": "Referências quebradas (Produção)",
+   "valor": 1,
+   "nivel": "vermelho",
+   "texto": "Regra apontando para tributo, perfil, base, alíquota ou escrituração que não existe."
+  },
+  {
+   "chave": "refs_t",
+   "rotulo": "Referências quebradas (Teste)",
+   "valor": 1,
+   "nivel": "vermelho",
+   "texto": "Regra apontando para tributo, perfil, base, alíquota ou escrituração que não existe."
+  },
+  {
+   "chave": "em_teste_prod",
+   "rotulo": "Regras 'em teste' vigentes na Produção",
+   "valor": 1,
+   "nivel": "amarelo",
+   "texto": "Status da regra ainda em teste numa base que fatura."
+  },
+  {
+   "chave": "reforma",
+   "rotulo": "CBS/IBS na Produção",
+   "valor": "3 trib.",
+   "nivel": "amarelo",
+   "texto": "3 combinação(ões) tributo × filial sem regra vigente na Produção."
+  }
+ ],
+ "filiais": [
+  {
+   "codigo": "01",
+   "nome": "Matriz",
+   "uf": "SC"
+  },
+  {
+   "codigo": "02",
+   "nome": "Filial SP",
+   "uf": "SP"
+  }
+ ],
+ "grupos": [
+  {
+   "id": "tributos",
+   "rotulo": "Tributos"
+  },
+  {
+   "id": "perfis",
+   "rotulo": "Perfis"
+  },
+  {
+   "id": "regras",
+   "rotulo": "Regras de cálculo"
+  },
+  {
+   "id": "ncm",
+   "rotulo": "Regras por NCM"
+  },
+  {
+   "id": "iss",
+   "rotulo": "ISS"
+  },
+  {
+   "id": "escrituracao",
+   "rotulo": "Escrituração e CST"
+  },
+  {
+   "id": "apuracao",
+   "rotulo": "Apuração e guias"
+  },
+  {
+   "id": "movimento",
+   "rotulo": "Uso (movimento)"
+  }
+ ]
+}

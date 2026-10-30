@@ -568,6 +568,7 @@
             <button data-tab="compara"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Compara</button>
             <button data-tab="auditoria" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Auditoria</button>
             <button data-tab="integracoes" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Integrações</button>
+            <button data-tab="tributos" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Configurador de Tributos (FISA170) — Produção × Teste">Tributos</button>
             <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
             <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
@@ -923,6 +924,20 @@
             <button id="int-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
           </div>
           <div id="int-conteudo"></div>
+        </div>
+
+        <!-- Aba Tributos — Configurador de Tributos (FISA170) comparado entre
+             Produção e Teste. Abrir lê a última coleta de cada base no
+             Supabase; as bases só são lidas no "Coletar". -->
+        <div id="tab-tributos" class="p-5 hidden">
+          <div class="mb-4 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="trb-cliente-nome" class="font-medium"></span>
+            <span class="text-xs text-slate-500">· Configurador de Tributos (FISA170) — Base Produção × Base de Testes</span>
+            <button id="trb-coletar" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde disabled:opacity-50" title="Lê dicionário, quantidades e o conteúdo das tabelas F2x/CIx/CJx nas duas bases (só leitura)">⚡ Coletar Produção + Teste</button>
+            <button id="trb-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="trb-conteudo"></div>
         </div>
 
         <!-- Aba Protótipo — roteiro MIT045, ciclos e aproveitamento.
@@ -2417,7 +2432,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'tributos', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2482,6 +2497,7 @@ function setTab(nome) {
   if (nome === 'compara') initCompara();
   if (nome === 'auditoria') initAuditoria();
   if (nome === 'integracoes') initIntegracoes();
+  if (nome === 'tributos') initTributos();
   if (nome === 'prototipo') initPrototipo();
   if (nome === 'transicao') initTransicao();
   if (nome === 'radar') initRadar();
@@ -7161,6 +7177,7 @@ const RELATORIOS = {
   empresas:  { titulo: 'Empresas e Compartilhamento', alvo: '#emp-conteudo' },
   estrutura: { titulo: 'Estrutura de Empresas',    alvo: '#est-conteudo' },
   integracoes: { titulo: 'Monitoramento de Integrações', alvo: '#int-conteudo' },
+  tributos:  { titulo: 'Configurador de Tributos — Produção × Teste', alvo: '#trb-conteudo' },
   prototipo: { titulo: 'Protótipo',               alvo: '#tab-prototipo' },
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
   radar:     { titulo: 'Radar de Definições',     alvo: '#rad-conteudo' },
@@ -12921,6 +12938,345 @@ async function abreScriptsIntegracoes() {
   });
 }
 
+// ============================================================================
+//  ABA TRIBUTOS — Configurador de Tributos (FISA170), Produção × Teste
+//  Spec: docs/specs/2026-10-30-aba-tributos.md
+//  Abrir lê a comparação do Supabase; as bases só são lidas no ⚡ Coletar.
+//  A coleta é FASEADA: cada chamada lê o que couber em ~45 s e devolve as
+//  tabelas pendentes; o front repete até esvaziar, uma base depois da outra.
+// ============================================================================
+const trib = { customer: null, dados: null, carregando: false, coletando: false, progresso: '',
+               erro: null, erroColeta: null, abertas: new Set(['migracao', 'reforma', 'saude', 'qtd']),
+               filtro: {}, busca: {} };
+const TRIB_SIT = {
+  so_teste: { rot: 'Só em Teste', cls: 'bg-amber-100 text-amber-900', ico: '⬆' },
+  so_prod:  { rot: 'Só na Produção', cls: 'bg-sky-100 text-sky-900', ico: '⬇' },
+  diverg:   { rot: 'Conteúdo diferente', cls: 'bg-rose-100 text-rose-800', ico: '≠' },
+  iguais:   { rot: 'Igual', cls: 'bg-emerald-100 text-emerald-800', ico: '=' },
+};
+const TRIB_AMB = { p: 'Produção', t: 'Teste' };
+const tribN = (v) => (v === null || v === undefined) ? '—' : Number(v).toLocaleString('pt-BR');
+const tribData = (s) => { const t = String(s || '').trim(); return /^\d{8}$/.test(t) ? `${t.slice(6, 8)}/${t.slice(4, 6)}/${t.slice(0, 4)}` : (t || '—'); };
+
+function initTributos() {
+  const cli = state.selected?.cli;
+  $('#trb-cliente-nome').textContent = (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (trib.customer !== cli) {
+    trib.customer = cli; trib.dados = null; trib.erro = null; trib.erroColeta = null;
+    carregaTributos();
+  } else {
+    renderTributos();
+  }
+}
+
+async function carregaTributos() {
+  if (!trib.customer) { renderTributos(); return; }
+  trib.carregando = true; trib.erro = null; renderTributos();
+  try {
+    trib.dados = await api(`/api/tributos/${encodeURIComponent(trib.customer)}`);
+  } catch (e) {
+    trib.erro = e.message; trib.dados = null;
+  } finally {
+    trib.carregando = false; renderTributos();
+  }
+}
+
+async function coletaTributos() {
+  if (!trib.customer || trib.coletando) return;
+  const b = trib.dados?.bases || {};
+  const bases = ['producao', 'teste'].filter(a => b[a]?.cadastrada !== false);
+  if (!bases.length) { alert('Nenhuma base cadastrada no ⚙ Ambiente.'); return; }
+  if (!confirm(`Coletar o Configurador de Tributos na ${bases.map(a => (AMB[a] || {}).label || a).join(' e na ')}?\n\n` +
+               'Consultas só de leitura pela REST de cada base (TSCMONITREST): dicionário, quantidades e o ' +
+               'conteúdo das tabelas F2x/CIx/CJx. Leva de 1 a 3 minutos por base. Cada chamada usa licença no REST.')) return;
+  trib.coletando = true; trib.erroColeta = null; renderTributos();
+  const cli = encodeURIComponent(trib.customer);
+  const falhas = [];
+  for (const amb of bases) {
+    const rot = (AMB[amb] || {}).label || amb;
+    let cid = null, pend = null, volta = 0, total = null;
+    try {
+      while (volta < 40) {
+        volta++;
+        trib.progresso = `${rot}: ${cid ? `lendo o conteúdo — faltam ${pend.length}${total ? ` de ${total}` : ''} tabela(s)` : 'lendo dicionário e quantidades'}…`;
+        renderTributos();
+        const r = await api(`/api/tributos/${cli}/coletar?ambiente=${amb}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cid ? { coleta_id: cid } : {}) });
+        cid = r.coleta_id; pend = r.pendentes || [];
+        if (total === null) total = pend.length + (r.lidas || []).length;
+        if (!pend.length) break;
+      }
+      if (pend && pend.length) falhas.push(`${rot}: coleta não terminou (${pend.length} tabela(s) pendentes)`);
+    } catch (e) {
+      falhas.push(`${rot}: ${e.message}`);
+    }
+  }
+  trib.coletando = false; trib.progresso = '';
+  trib.erroColeta = falhas.length ? falhas.join(' · ') : null;
+  await carregaTributos();
+}
+
+function tribEstado(d) {
+  const barra = (cls, html) => `<div class="mb-4 rounded-lg border px-4 py-2.5 text-sm ${cls}">${html}</div>`;
+  if (trib.coletando) {
+    return barra('border-sky-200 bg-sky-50 text-sky-900',
+      `<span class="inline-block animate-spin mr-2">⟳</span><b>Coletando…</b> ${escapeHtml(trib.progresso)}`);
+  }
+  const out = [];
+  if (trib.erroColeta) out.push(barra('border-rose-200 bg-rose-50 text-rose-800', `<b>A coleta falhou:</b> ${escapeHtml(trib.erroColeta)}`));
+  const b = d?.bases || {};
+  const lin = ['producao', 'teste'].map(a => {
+    const x = b[a] || {};
+    const c = x.coleta;
+    const lab = `<span class="px-2 py-0.5 rounded-full text-xs font-semibold ${(AMB[a] || {}).cls}">${(AMB[a] || {}).label}</span>`;
+    if (!x.cadastrada) return `${lab} não cadastrada no ⚙ Ambiente`;
+    if (!c) return `${lab} ainda sem coleta`;
+    const erros = Object.keys(x.erros || {}).filter(k => x.erros[k]);
+    return `${lab} coletada em <b>${intQuando(c.concluido_em || c.iniciado_em)}</b>` +
+      (c.environment ? ` · environment <code>${escapeHtml(c.environment)}</code>` : '') +
+      (c.status === 'parcial' ? ` · <span class="text-amber-700" title="${escapeHtml(erros.map(k => `${k}: ${x.erros[k]}`).join('\n'))}">parcial (${erros.length} leitura(s) com falha)</span>` : '');
+  });
+  out.push(`<div class="mb-4 flex flex-col gap-1 text-xs text-slate-600">${lin.map(l => `<div>${l}</div>`).join('')}</div>`);
+  const sem = ['producao', 'teste'].filter(a => !b[a]?.coleta);
+  if (sem.length === 1) {
+    out.push(barra('border-amber-200 bg-amber-50 text-amber-900',
+      `Só uma base tem coleta: a comparação Produção × Teste aparece quando as duas forem coletadas.`));
+  }
+  return out.join('');
+}
+
+function tribCaixa(id, titulo, sub, corpo, extra = '') {
+  const aberta = trib.abertas.has(id);
+  return `<section class="mb-4 border border-slate-200 rounded-lg bg-white">
+    <button data-trb-caixa="${id}" class="w-full flex items-center gap-3 px-4 py-3 text-left">
+      <span class="text-slate-400 w-3">${aberta ? '▾' : '▸'}</span>
+      <span class="font-semibold text-totvs-petroleo">${titulo}</span>
+      <span class="text-xs text-slate-500">${sub || ''}</span>
+      <span class="ml-auto flex items-center gap-2">${extra}</span>
+    </button>
+    ${aberta ? `<div class="px-4 pb-4">${typeof corpo === 'function' ? corpo() : corpo}</div>` : ''}
+  </section>`;
+}
+
+function tribCartoes(d) {
+  const inds = d.indicadores || [];
+  if (!inds.length) return '';
+  return `<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">${inds.map(i => {
+    const n = INT_NIVEL[i.nivel] || INT_NIVEL.cinza;
+    return `<div class="rounded-lg border p-3 ${n.card}" title="${escapeHtml(i.texto || '')}">
+      <div class="flex items-start justify-between gap-2"><div class="text-xs text-slate-600 leading-tight">${escapeHtml(i.rotulo)}</div>${intPill(i.nivel)}</div>
+      <div class="mt-1 text-2xl font-bold text-totvs-petroleo">${i.valor === null || i.valor === undefined ? '—' : escapeHtml(String(i.valor))}</div>
+      <div class="mt-1 text-[11px] text-slate-500 leading-snug">${escapeHtml(i.texto || '')}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function tribSit(s) {
+  const x = TRIB_SIT[s] || { rot: s, cls: 'bg-slate-100 text-slate-700', ico: '' };
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${x.cls}">${x.ico} ${x.rot}</span>`;
+}
+
+function tribMigracao(d) {
+  const lst = d.migracao || [];
+  const cmp = d.comparacao?.F2B;
+  if (!cmp) return '<p class="text-sm text-slate-500">A Regra de Cálculo (F2B) ainda não foi lida nas duas bases.</p>';
+  const tit = cmp.titulos || {};
+  if (!lst.length) return '<p class="text-sm text-emerald-700">✓ Nenhuma regra de cálculo só em Teste ou com conteúdo diferente da Produção.</p>';
+  const so = lst.filter(m => m.sit === 'so_teste').length;
+  return `<p class="text-xs text-slate-500 mb-2">${so} regra(s) só em Teste e ${lst.length - so} com o mesmo código e conteúdo diferente.
+      "Também falta na Produção" lista o que a regra usa e a Produção ainda não tem — sobe junto, senão a regra quebra.</p>
+    <div class="overflow-x-auto"><table class="w-full text-sm">
+    <thead><tr class="text-left text-xs text-slate-500 border-b">
+      <th class="py-1.5 pr-3">Situação</th><th class="pr-3">Filial</th><th class="pr-3">Regra</th><th class="pr-3">Tributo</th>
+      <th class="pr-3">Descrição</th><th class="pr-3">Início</th><th class="pr-3">Campos diferentes / também falta na Produção</th></tr></thead>
+    <tbody>${lst.map(m => `<tr class="border-b border-slate-100 align-top">
+      <td class="py-1.5 pr-3">${tribSit(m.sit)}</td>
+      <td class="pr-3 font-mono text-xs">${escapeHtml(m.filial || '—')}</td>
+      <td class="pr-3 font-mono">${escapeHtml(m.regra)}</td>
+      <td class="pr-3 font-mono">${escapeHtml(m.trib)}</td>
+      <td class="pr-3">${escapeHtml(m.desc || '')}${m.par ? `<div class="text-[11px] text-sky-700">mesmo conteúdo na Produção com o código ${escapeHtml(m.par.join(' / '))}</div>` : ''}</td>
+      <td class="pr-3 whitespace-nowrap">${tribData(m.vigini)}</td>
+      <td class="pr-3 text-xs">${m.difs.length ? `<div class="text-rose-700">${m.difs.map(c => escapeHtml(tit[c] ? `${tit[c]} (${c})` : c)).join(', ')}</div>` : ''}
+        ${m.deps.length ? `<div class="flex flex-wrap gap-1 mt-0.5">${m.deps.map(x => `<span class="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900">${escapeHtml(x.rotulo)} <b class="font-mono">${escapeHtml(x.codigo)}</b></span>`).join('')}</div>` : (m.sit === 'so_teste' ? '<span class="text-slate-400">dependências já na Produção</span>' : '')}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+}
+
+function tribReforma(d) {
+  const r = d.reforma || {};
+  if (!(r.tributos || []).length) {
+    return '<p class="text-sm text-slate-600">Nenhuma regra de cálculo vigente para CBS/IBS em nenhuma das bases. A carga padrão fica em <b>Regra de Cálculo → Outras ações → Carga regras de cálculo CBS/IBS</b> (FISA170) e roda <b>só na filial logada</b>.</p>';
+  }
+  const fils = r.compartilhada ? [''] : (r.filiais.length ? r.filiais : ['']);
+  const nomeFil = (f) => { const x = (d.filiais || []).find(y => y.codigo === f); return f ? `${f}${x ? ` · ${x.nome}` : ''}` : 'todas (compartilhada)'; };
+  const cel = (t, f) => {
+    const p = (r.producao[t] || {})[f] || 0, s = (r.teste[t] || {})[f] || 0;
+    const cls = p ? 'bg-emerald-50 text-emerald-800' : (s ? 'bg-amber-50 text-amber-900' : 'bg-rose-50 text-rose-700');
+    const tit = p ? 'regra vigente na Produção' : (s ? 'só em Teste — falta subir' : 'sem regra vigente nas duas bases');
+    return `<td class="px-2 py-1.5 text-center text-xs ${cls}" title="${tit}">P <b>${p}</b> · T <b>${s}</b></td>`;
+  };
+  return `<p class="text-xs text-slate-500 mb-2">Regras <b>vigentes hoje</b> por tributo e filial. P = Produção, T = Teste.
+      Verde: a Produção já calcula. Amarelo: só o Teste tem. Vermelho: nenhuma das duas.</p>
+    <div class="overflow-x-auto"><table class="text-sm border border-slate-200">
+    <thead><tr class="bg-slate-50 text-xs text-slate-600"><th class="px-2 py-1.5 text-left">Tributo</th>${fils.map(f => `<th class="px-2 py-1.5">${escapeHtml(nomeFil(f))}</th>`).join('')}</tr></thead>
+    <tbody>${r.tributos.map(t => `<tr class="border-t border-slate-100"><td class="px-2 py-1.5 font-mono font-semibold">${escapeHtml(t)}</td>${fils.map(f => cel(t, f)).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function tribSaude(d) {
+  const an = d.analise || {};
+  const bloco = (k) => {
+    const a = an[k === 'p' ? 'producao' : 'teste'];
+    if (!a) return `<div class="text-sm text-slate-400">${TRIB_AMB[k]}: sem coleta.</div>`;
+    const vig = a.vig || {};
+    const st = Object.entries(a.status || {}).map(([s, n]) => `${escapeHtml(s)}: <b>${n}</b>`).join(' · ');
+    return `<div class="border border-slate-200 rounded-md p-3">
+      <div class="font-semibold text-sm mb-1">${TRIB_AMB[k]} — ${tribN(a.regras)} regra(s) de cálculo</div>
+      <div class="text-xs text-slate-600 mb-2">Vigentes <b>${vig.vigente || 0}</b> · futuras <b>${vig.futura || 0}</b> · encerradas <b>${vig.encerrada || 0}</b>${st ? `<br>Status: ${st}` : ''}</div>
+      ${a.refs.length ? `<div class="text-xs font-semibold text-rose-700 mb-1">✕ ${a.refs.length} referência(s) quebrada(s)</div>
+        <table class="w-full text-xs mb-2"><tbody>${a.refs.slice(0, 200).map(x => `<tr class="border-b border-slate-100">
+          <td class="py-1 pr-2 font-mono">${escapeHtml(x.filial || '—')}</td><td class="pr-2 font-mono">${escapeHtml(x.regra)}</td>
+          <td class="pr-2">${escapeHtml(x.rotulo)} <b class="font-mono">${escapeHtml(x.valor)}</b></td><td class="text-rose-700">${escapeHtml(x.motivo)} (${escapeHtml(x.destino)})</td></tr>`).join('')}</tbody></table>`
+        : '<div class="text-xs text-emerald-700 mb-2">✓ Toda regra aponta para cadastros que existem.</div>'}
+      ${k === 'p' && a.em_teste.length ? `<div class="text-xs font-semibold text-amber-800 mb-1">! ${a.em_teste.length} regra(s) vigente(s) com status de teste</div>
+        <div class="text-xs text-slate-600 mb-2">${a.em_teste.slice(0, 50).map(x => `<span class="font-mono">${escapeHtml(x.regra)}</span> ${escapeHtml(x.trib)}`).join(' · ')}</div>` : ''}
+      ${a.orfaos.length ? `<details class="text-xs"><summary class="cursor-pointer text-slate-500">${a.orfaos.length} cadastro(s) que nenhuma regra usa (informativo)</summary>
+        <div class="mt-1 text-slate-600">${a.orfaos.slice(0, 300).map(x => `<span class="font-mono">${escapeHtml(x.tabela)} ${escapeHtml(x.codigo)}</span>${x.desc ? ` ${escapeHtml(x.desc)}` : ''}`).join(' · ')}</div></details>` : ''}
+    </div>`;
+  };
+  return `<div class="grid md:grid-cols-2 gap-3">${bloco('p')}${bloco('t')}</div>`;
+}
+
+function tribQuantidades(d) {
+  const qs = d.quantidades || [];
+  const grupos = d.grupos || [];
+  const delta = (q) => (q.p === null || q.p === undefined || q.t === null || q.t === undefined) ? '' : (q.t - q.p);
+  const linha = (q) => {
+    const dl = delta(q);
+    const naoExiste = (k) => q.existe[k] === false ? '<span class="text-slate-400" title="tabela não existe nesta base">não existe</span>' : tribN(q[k]);
+    const modo = [q.modo.p, q.modo.t].filter(Boolean);
+    const filTxt = (q.filiais || []).filter(f => f.fil).map(f => `${f.fil}: P ${tribN(f.p)} · T ${tribN(f.t)}`).join('\n');
+    return `<tr class="border-b border-slate-100 ${q.tipo === 'mov' ? 'text-slate-500' : ''}">
+      <td class="py-1 pr-3 font-mono font-semibold">${q.tab}</td>
+      <td class="pr-3">${escapeHtml(q.rotulo)}${filTxt ? ` <span class="text-[11px] text-slate-400 cursor-help" title="${escapeHtml(filTxt)}">por filial ⓘ</span>` : ''}</td>
+      <td class="pr-3 text-right tabular-nums">${naoExiste('p')}</td>
+      <td class="pr-3 text-right tabular-nums">${naoExiste('t')}</td>
+      <td class="pr-3 text-right tabular-nums ${dl > 0 ? 'text-amber-700 font-semibold' : dl < 0 ? 'text-sky-700 font-semibold' : 'text-slate-400'}">${dl === '' ? '' : (dl > 0 ? '+' : '') + tribN(dl)}</td>
+      <td class="pr-3 text-xs font-mono ${modo.length === 2 && modo[0] !== modo[1] ? 'text-rose-700 font-semibold' : 'text-slate-500'}" title="Compartilhamento X2_MODOEMP+X2_MODOUN+X2_MODO (C = compartilhado, E = exclusivo)">${escapeHtml(modo.length === 2 && modo[0] !== modo[1] ? `P ${modo[0]} · T ${modo[1]}` : (modo[0] || ''))}</td>
+    </tr>`;
+  };
+  return `<p class="text-xs text-slate-500 mb-2">Registros ativos (sem os deletados). Δ = Teste − Produção: positivo é o que o Teste tem a mais.</p>
+    <div class="overflow-x-auto"><table class="w-full text-sm">
+    <thead><tr class="text-left text-xs text-slate-500 border-b"><th class="py-1.5 pr-3">Tabela</th><th class="pr-3">Conteúdo</th>
+      <th class="pr-3 text-right">Produção</th><th class="pr-3 text-right">Teste</th><th class="pr-3 text-right">Δ</th><th class="pr-3">Compart.</th></tr></thead>
+    <tbody>${grupos.map(g => {
+      const ls = qs.filter(q => q.grupo === g.id);
+      return ls.length ? `<tr><td colspan="6" class="pt-3 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">${escapeHtml(g.rotulo)}</td></tr>${ls.map(linha).join('')}` : '';
+    }).join('')}</tbody></table></div>`;
+}
+
+function tribValor(cmp, col, v) {
+  const cb = (cmp.cbox || {})[col];
+  if (cb && v in cb) return `${v} - ${cb[v]}`;
+  if (/(_VIG|_DT)[A-Z]*$/.test(col) && /^\d{8}$/.test(v || '')) return tribData(v);
+  return v;
+}
+
+function tribRegistros(d, cod) {
+  const cmp = d.comparacao[cod];
+  const f = trib.filtro[cod] || 'pend';
+  const busca = (trib.busca[cod] || '').toLowerCase();
+  let itens = cmp.itens.filter(i => f === 'todos' || (f === 'pend' ? i.sit !== 'iguais' : i.sit === f));
+  if (busca) itens = itens.filter(i => JSON.stringify([i.p, i.t]).toLowerCase().includes(busca));
+  const tit = (c) => (cmp.titulos || {})[c] ? `${cmp.titulos[c]}` : c;
+  // Colunas mostradas: a chave + as que descrevem (DESC) + as que diferem.
+  const chave = cmp.chave || [];
+  const desc = cmp.colunas.filter(c => /_(DESC|DESCRI|DTRIB|TRIB|STATUS|VIGINI|VIGFIM|ALIQ|TIPO)$/.test(c) && !chave.includes(c)).slice(0, 5);
+  // Sem chave estável o registro só se reconhece pelo conteúdo: mostra as colunas.
+  const mostrar = chave.length ? [...chave, ...desc]
+    : cmp.colunas.filter(c => !cmp.ignoradas.includes(c)).slice(0, 8);
+  const MAX = 400;
+  const pedaco = itens.slice(0, MAX);
+  const opts = [['pend', 'Só diferenças'], ['so_teste', 'Só em Teste'], ['so_prod', 'Só na Produção'], ['diverg', 'Conteúdo diferente'], ['iguais', 'Iguais'], ['todos', 'Todos']];
+  return `<div class="flex items-center gap-2 mb-2 text-xs">
+      <select data-trb-filtro="${cod}" class="px-2 py-1 border border-slate-300 rounded bg-white">${opts.map(([v, r]) => `<option value="${v}" ${v === f ? 'selected' : ''}>${r}</option>`).join('')}</select>
+      <input data-trb-busca="${cod}" value="${escapeHtml(trib.busca[cod] || '')}" placeholder="buscar…" class="px-2 py-1 border border-slate-300 rounded w-48">
+      <span class="text-slate-500">${itens.length} registro(s)${itens.length > MAX ? `, mostrando ${MAX}` : ''}</span>
+      ${cmp.chave ? `<span class="text-slate-400">chave: ${cmp.chave.map(escapeHtml).join(' + ')}</span>` : '<span class="text-slate-400">sem chave estável: comparado pelo conteúdo do registro</span>'}
+      ${cmp.ignoradas.length ? `<span class="text-slate-400" title="ID técnico gerado em cada base — não entra na comparação">ignora: ${cmp.ignoradas.map(escapeHtml).join(', ')}</span>` : ''}
+    </div>
+    ${cmp.so_dic && (cmp.so_dic.p.length || cmp.so_dic.t.length) ? `<div class="text-xs text-rose-700 mb-2">Dicionário diferente — campos só na Produção: ${cmp.so_dic.p.join(', ') || 'nenhum'}; só no Teste: ${cmp.so_dic.t.join(', ') || 'nenhum'}.</div>` : ''}
+    ${(cmp.truncada.p || cmp.truncada.t) ? '<div class="text-xs text-amber-800 mb-2">! Tabela acima do limite de leitura — a comparação é parcial.</div>' : ''}
+    <div class="overflow-x-auto"><table class="w-full text-xs">
+      <thead><tr class="text-left text-slate-500 border-b"><th class="py-1 pr-2">Situação</th>${mostrar.map(c => `<th class="pr-2" title="${c}">${escapeHtml(tit(c))}</th>`).join('')}<th class="pr-2">Diferenças (Produção → Teste)</th></tr></thead>
+      <tbody>${pedaco.map(i => {
+        const r = i.t || i.p;
+        return `<tr class="border-b border-slate-100 align-top">
+          <td class="py-1 pr-2">${tribSit(i.sit)}</td>
+          ${mostrar.map(c => `<td class="pr-2 ${chave.includes(c) ? 'font-mono' : ''}">${escapeHtml(tribValor(cmp, c, r[c] ?? ''))}</td>`).join('')}
+          <td class="pr-2">${i.difs.map(c => `<div><span class="text-slate-500">${escapeHtml(tit(c))}:</span> <span class="line-through text-rose-700">${escapeHtml(tribValor(cmp, c, i.p[c] ?? '') || '∅')}</span> → <span class="text-emerald-800">${escapeHtml(tribValor(cmp, c, i.t[c] ?? '') || '∅')}</span></div>`).join('')}
+            ${i.par ? `<div class="text-sky-700">mesmo conteúdo, outro código: ${escapeHtml(i.par.join(' / '))}</div>` : ''}</td>
+        </tr>`;
+      }).join('')}</tbody></table></div>
+    ${cmp.iguais_omitidos ? `<div class="text-[11px] text-slate-400 mt-1">${cmp.iguais_omitidos} registro(s) iguais não listados.</div>` : ''}`;
+}
+
+function tribComparacoes(d) {
+  const cmp = d.comparacao || {};
+  const qs = (d.quantidades || []).filter(q => cmp[q.tab]);
+  if (!qs.length) return '<p class="text-sm text-slate-500">Nenhuma tabela lida ainda.</p>';
+  return qs.map(q => {
+    const c = cmp[q.tab]; const r = c.resumo;
+    const chips = ['so_teste', 'so_prod', 'diverg'].filter(s => r[s]).map(s => `<span class="px-1.5 py-0.5 rounded text-[11px] font-semibold ${TRIB_SIT[s].cls}">${TRIB_SIT[s].ico} ${r[s]}</span>`).join('')
+      + `<span class="px-1.5 py-0.5 rounded text-[11px] ${TRIB_SIT.iguais.cls}">= ${r.iguais}</span>`;
+    const lida = (!c.lida.p || !c.lida.t) ? `<span class="text-[11px] text-slate-400">${!c.lida.p ? 'Produção não lida' : 'Teste não lido'}</span>` : '';
+    return tribCaixa(`cmp_${q.tab}`, `<span class="font-mono">${q.tab}</span> · ${escapeHtml(q.rotulo)}`, '', () => tribRegistros(d, q.tab), lida + chips);
+  }).join('');
+}
+
+function renderTributos() {
+  const el = $('#trb-conteudo');
+  if (!el) return;
+  $('#trb-coletar') && ($('#trb-coletar').disabled = trib.coletando);
+  if (trib.carregando && !trib.dados) { el.innerHTML = '<div class="py-12 text-center text-slate-400">Carregando…</div>'; return; }
+  if (trib.erro) { el.innerHTML = `<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">${escapeHtml(trib.erro)}</div>`; return; }
+  const d = trib.dados;
+  if (!d) { el.innerHTML = tribEstado(null); return; }
+  const algum = d.bases?.producao?.coleta || d.bases?.teste?.coleta;
+  if (!algum) {
+    el.innerHTML = tribEstado(d) + `<div class="py-10 text-center text-slate-500 text-sm">Nenhuma coleta ainda.
+      ${d.interno ? 'Clique em <b>⚡ Coletar Produção + Teste</b> para ler o Configurador de Tributos das duas bases.' : 'A equipe TOTVS ainda não fez a primeira leitura.'}</div>`;
+    ligaTributos(); return;
+  }
+  const nMig = (d.migracao || []).length;
+  const nRef = ['producao', 'teste'].reduce((s, a) => s + ((d.analise?.[a]?.refs || []).length), 0);
+  el.innerHTML = tribEstado(d) + tribCartoes(d)
+    + tribCaixa('migracao', 'O que falta subir para a Produção', 'regras de cálculo (F2B) só em Teste ou diferentes, com o que cada uma usa', () => tribMigracao(d),
+                nMig ? `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-900">${nMig}</span>` : '')
+    + tribCaixa('reforma', 'Reforma Tributária — CBS/IBS por filial', 'regras vigentes por tributo e filial nas duas bases', () => tribReforma(d))
+    + tribCaixa('saude', 'Saúde das regras', 'referências, vigência, status e cadastros sem uso', () => tribSaude(d),
+                nRef ? `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-100 text-rose-800">${nRef} ref.</span>` : '')
+    + tribCaixa('qtd', 'Quantidades por tabela', 'Produção × Teste, por grupo do Configurador', () => tribQuantidades(d))
+    + `<h3 class="mt-6 mb-2 text-sm font-semibold text-totvs-petroleo">Comparação registro a registro</h3>`
+    + tribComparacoes(d);
+  ligaTributos();
+}
+
+function ligaTributos() {
+  $$('#trb-conteudo [data-trb-caixa]').forEach(b => b.addEventListener('click', () => {
+    const id = b.dataset.trbCaixa;
+    trib.abertas.has(id) ? trib.abertas.delete(id) : trib.abertas.add(id);
+    renderTributos();
+  }));
+  $$('#trb-conteudo [data-trb-filtro]').forEach(s => s.addEventListener('change', () => {
+    trib.filtro[s.dataset.trbFiltro] = s.value; renderTributos();
+  }));
+  $$('#trb-conteudo [data-trb-busca]').forEach(inp => inp.addEventListener('change', () => {
+    trib.busca[inp.dataset.trbBusca] = inp.value; renderTributos();
+  }));
+}
+
+$('#trb-coletar').addEventListener('click', coletaTributos);
+$('#trb-reload').addEventListener('click', carregaTributos);
 $('#int-coletar').addEventListener('click', coletaIntegracoes);
 $('#int-coletar-topo').addEventListener('click', coletaIntegracoes);
 $('#int-coletar-duas').addEventListener('click', coletaDuasBases);
