@@ -32,9 +32,11 @@ const BLOCOS = {
     { MENSAGEM: 'ITEM', STATUS: '2', CANAL: '3', TPTRAN: '1', QTD: '4', ESGOTADAS: '0', COM_DESTINO: '4', MAIS_ANTIGA: '20261030', MAIS_RECENTE: '20261030' }] },
   eai_pendentes_lista: { ok: true, variante: 0, linhas: [
     { MENSAGEM: 'CUSTOMERVENDOR', STATUS: '7', CANAL: '3', TENTATIVAS: '0', DIA: '20261029', HORA: '16:00:47', EVENTO: 'upsert', WEBSERVICE: '', COM_DESTINO: 'S', RETORNO: '' },
+    { MENSAGEM: 'SELLER', STATUS: '5', CANAL: '1', TENTATIVAS: '4', DIA: '20261030', HORA: '07:56:23', EVENTO: 'upsert', WEBSERVICE: 'WS_ERPProtheusToGFE', COM_DESTINO: 'N', RETORNO: 'Erro de comunicação' },
     { MENSAGEM: 'SELLER<b>x</b>', STATUS: '5', CANAL: '1', TENTATIVAS: '4', DIA: '20261030', HORA: '07:56:23', EVENTO: 'upsert', WEBSERVICE: 'WS_ERPProtheusToGFE', COM_DESTINO: 'N', RETORNO: 'Erro de comunicação' }] },
   eai_adapters: { ok: true, linhas: [
     { ROTINA: 'OMSA010', MENSAGEM: 'PRICELISTHEADERITEM', DESCRICAO: 'TABELA DE PRECO', ENVIA: '1', RECEBE: '2', METODO: '2', CANAL: '3', VERSAO: '2.001', CONDICAO: '' },
+    { ROTINA: 'MATA040', MENSAGEM: 'SELLER', DESCRICAO: 'VENDEDOR', ENVIA: '1', RECEBE: '2', METODO: '2', CANAL: '3', VERSAO: '2.001', CONDICAO: '' },
     { ROTINA: 'MATA010', MENSAGEM: 'ITEM', DESCRICAO: 'PRODUTO', ENVIA: '1', RECEBE: '1', METODO: '2', CANAL: '3', VERSAO: '4.013', CONDICAO: "b1_grupo = '0009'" }] },
   eai_depara: { ok: true, linhas: [] },
   eai_cadastros: { ok: true, linhas: [{ ALIAS: 'SA1', QTD: '820' }, { ALIAS: 'DA0', QTD: '7' }] },
@@ -46,6 +48,25 @@ const BLOCOS = {
   eai_agents: { ok: true, linhas: [{ CODIGO: '01', DESCRICAO: 'AGENT 01', IP: '127.0.0.1', PORTA: '6001', AMBIENTE: 'PRODUCAO', THREADS: '2', STATUS: '0', ULTDIA: '20260625', ULTHOR: '14:40' }] },
   eai_config: { ok: true, linhas: [{ PARAMETRO: 'MV_EAIPASS', FILIAL: '', CONTEUDO: '(preenchido)' }] },
   eai_empresa: { ok: true, linhas: [{ REFERENCIA: 'CRM-COMPANY', EMPRESA_EXT: '01', FILIAL_EXT: '', EMPRESA: '01', FILIAL: '01' }] },
+  eai_ultimas_lista: { ok: true, linhas: [
+    { MENSAGEM: 'ITEM', STATUS: '2', CANAL: '3', TENTATIVAS: '0', DIA: '20261030', HORA: '09:10:00', PROC_DIA: '20261030', PROC_HORA: '09:11:00', EVENTO: 'upsert' },
+    { MENSAGEM: 'CUSTOMERVENDOR', STATUS: '7', CANAL: '3', TENTATIVAS: '0', DIA: '20261029', HORA: '16:09:08', PROC_DIA: '', PROC_HORA: '', EVENTO: 'upsert' }] },
+  eai_por_tipo: { ok: true, linhas: [
+    { TIPO: 'clientes', ROTULO: 'Clientes', ALIAS: 'SA1', MENSAGENS: 'CUSTOMERVENDOR', ROTINAS: 'CRMA980, MATA030', TEM_ADAPTER: 'S', ENVIA: 'S',
+      REGISTROS: 820, ITENS: null, FILA: 821, FALHAS: 0, ESGOTADAS: 0, ENTREGUES: 821, FINALIZADAS: 0, DEPARA: 0, IDADE_ENTREGUE_MIN: 1100,
+      ULTIMA: '20261029', STATUS: { 7: 821 }, NIVEL: 'amarelo', TEXTO: '821 entregue(s) esperando o retorno há 18 h 20 min.' },
+    { TIPO: 'fornecedores', ROTULO: 'Fornecedores', ALIAS: 'SA2', MENSAGENS: 'CUSTOMERVENDOR', ROTINAS: 'MATA020', TEM_ADAPTER: 'N', ENVIA: 'N',
+      REGISTROS: 932, ITENS: null, FILA: 0, FALHAS: 0, ESGOTADAS: 0, ENTREGUES: 0, FINALIZADAS: 0, DEPARA: 0, ULTIMA: null, STATUS: {},
+      NIVEL: 'cinza', TEXTO: 'Sem adapter cadastrado (MATA020): este tipo não sobe por Mensagem Única — 932 registro(s) no SA2 ficam só no Protheus.' },
+    { TIPO: 'produtos', ROTULO: 'Produtos', ALIAS: 'SB1', MENSAGENS: 'ITEM', ROTINAS: 'MATA010', TEM_ADAPTER: 'S', ENVIA: 'S',
+      REGISTROS: 844, ITENS: null, FILA: 4, FALHAS: 0, ESGOTADAS: 0, ENTREGUES: 0, FINALIZADAS: 4, DEPARA: 0, ULTIMA: '20261030',
+      STATUS: { 2: 4 }, NIVEL: 'amarelo', TEXTO: 'Mensagens sem de-para gravado na XXF.' },
+    { TIPO: 'tabelas', ROTULO: 'Tabelas de preço', ALIAS: 'DA0', MENSAGENS: 'PRICELISTHEADERITEM, PRICELIST', ROTINAS: 'OMSA010', TEM_ADAPTER: 'S', ENVIA: 'S',
+      REGISTROS: 7, ITENS: 322, FILA: 0, FALHAS: 0, ESGOTADAS: 0, ENTREGUES: 0, FINALIZADAS: 0, DEPARA: 0, ULTIMA: null, STATUS: {},
+      NIVEL: 'vermelho', TEXTO: '7 registro(s) no DA0 (322 item(ns) na DA1) e nenhuma mensagem nem de-para.' },
+    { TIPO: 'vendedores', ROTULO: 'Vendedores', ALIAS: 'SA3', MENSAGENS: 'SELLER', ROTINAS: 'MATA040', TEM_ADAPTER: 'S', ENVIA: 'S',
+      REGISTROS: 11, ITENS: null, FILA: 17, FALHAS: 6, ESGOTADAS: 6, ENTREGUES: 11, FINALIZADAS: 0, DEPARA: 0, IDADE_ENTREGUE_MIN: 90,
+      ULTIMA: '20261030', STATUS: { 5: 6, 7: 11 }, NIVEL: 'vermelho', TEXTO: '6 com falha, 6 com 4+ tentativas.' }] },
 };
 const ULTIMA = { id: 9, coletado_em: AGORA, duracao_ms: 7100, nivel: 'vermelho', indicadores: INDS,
   blocos: Object.assign({ _meta: { desde: null, grupos: ['eai'] } }, BLOCOS), environment: 'producao',
@@ -127,6 +148,41 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: '000348D0', ambi
   t('agent com último sinal', linhas.some(l => /AGENT 01/.test(l) && /127\.0\.0\.1:6001/.test(l)));
   t('senha do ESB mascarada', /\(preenchido\)/.test(c));
   t('rodapé diz que URL do iPaaS não é lida', /api-key\) e o conteúdo da mensagem não são lidos/.test(c));
+
+  // ── por tipo de informação ───────────────────────────────────────────────
+  const tipos = await pg.$$eval('[data-eai-tipo]', ns => ns.map(n => n.textContent.replace(/\s+/g, ' ').trim()));
+  t('cinco tipos listados', tipos.length === 5, tipos.length);
+  t('fornecedores sem adapter, cinza com o SA2', /Fornecedores/.test(tipos[1]) && /Sem dado/.test(tipos[1]) && /932/.test(tipos[1]) && /nunca/.test(tipos[1]), tipos[1]);
+  t('tabelas de preço crítica com os itens', /Tabelas de preço/.test(tipos[3]) && /Crítico/.test(tipos[3]) && /322 itens/.test(tipos[3]), tipos[3]);
+  t('vendedores: falhas com 4+ tentativas', /6 com 4\+ tent/.test(tipos[4]), tipos[4]);
+  t('clientes: entregues com idade', /821 \(há 18 h 20 min\)/.test(tipos[0]) && /0 · vazio/.test(tipos[0]), tipos[0]);
+  t('fechado no início', (await pg.$$('[data-eai-tipo-det]')).length === 0);
+  await pg.click('[data-eai-tipo="vendedores"]'); await pg.waitForTimeout(80);
+  const det = await txt('[data-eai-tipo-det="vendedores"]');
+  t('abre vendedores', /Mensagens por status/.test(det) && /5 · Não entregue/.test(det) && /7 · Entregue/.test(det), det.slice(0, 200));
+  t('detalhe só do tipo: abertas do SELLER, sem CUSTOMERVENDOR', /SELLER/.test(det) && !/CUSTOMERVENDOR/.test(det) && /Erro de comunicação/.test(det), det);
+  t('adapter do tipo no detalhe', !/Nenhum adapter MATA040/.test(det));
+  t('seta aberta', /▾ Vendedores/.test(await txt('[data-eai-tipo="vendedores"]')));
+  await pg.click('[data-eai-tipo="produtos"]'); await pg.waitForTimeout(80);
+  const detP = await txt('[data-eai-tipo-det="produtos"]');
+  t('produtos: últimas com processada', /30\/10\/2026 09:11/.test(detP) && /2 · Finalizada/.test(detP), detP.slice(0, 300));
+  t('dois abertos ao mesmo tempo', (await pg.$$('[data-eai-tipo-det]')).length === 2);
+  await pg.click('[data-eai-tipo="vendedores"]'); await pg.waitForTimeout(80);
+  t('clicar de novo fecha', (await pg.$$('[data-eai-tipo-det="vendedores"]')).length === 0);
+  await pg.click('[data-eai-tipo-todos]'); await pg.waitForTimeout(80);
+  t('fechar todos', (await pg.$$('[data-eai-tipo-det]')).length === 0);
+  await pg.click('[data-eai-tipo-todos]'); await pg.waitForTimeout(80);
+  t('abrir todos', (await pg.$$('[data-eai-tipo-det]')).length === 5);
+  const detF = await txt('[data-eai-tipo-det="fornecedores"]');
+  t('fornecedores: sem adapter explicado', /Nenhum adapter MATA020 cadastrado/.test(detF) && /SA2: 932/.test(detF), detF.slice(0, 200));
+  t('fornecedores não herdam a fila dos clientes', !/CUSTOMERVENDOR\s*7 · Entregue/.test(detF) && /Nenhuma mensagem aberta deste tipo/.test(detF), detF.slice(0, 400));
+  const detT = await txt('[data-eai-tipo-det="tabelas"]');
+  t('tabelas: DA1 no detalhe', /DA1: 322 item/.test(detT));
+  if (process.env.SHOT) {
+    await pg.$eval('[data-eai-tipos]', n => n.scrollIntoView());
+    await pg.screenshot({ path: process.env.SHOT.replace('.png', '-tipos.png'), fullPage: false });
+  }
+  await pg.click('[data-eai-tipo-todos]'); await pg.waitForTimeout(80);
 
   await pg.click('#int-coletar-duas');
   await pg.waitForTimeout(60);

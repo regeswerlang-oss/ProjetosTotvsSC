@@ -11909,7 +11909,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
                 abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai']),
-                duas: null };
+                duas: null, eaiTipos: new Set() };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
 const INT_NIVEL = {
@@ -12641,6 +12641,78 @@ function intEaiFunilHtml(B) {
   }).join('')}</div>`;
 }
 
+/** Por tipo de informação (Clientes, Fornecedores, Produtos…): uma linha por
+ *  tipo com o nível dele; clicar abre adapters, status, abertas e últimas. */
+function intEaiTipos(B) {
+  const pt = B.eai_por_tipo;
+  if (!pt) return intSub('Por tipo de informação', null, () => '');
+  const msgsDe = (t) => String(t.MENSAGENS || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+  // Tipo sem adapter de envio não "herda" a fila da mensagem compartilhada
+  // (CUSTOMERVENDOR de clientes não aparece em Fornecedores).
+  const filtra = (b, t) => t.ENVIA !== 'S' ? [] : (b?.ok ? b.linhas || [] : [])
+    .filter(l => msgsDe(t).includes(String(l.MENSAGEM || '').toUpperCase()));
+  const num = (v) => v == null ? '<span class="text-slate-400">—</span>' : escapeHtml(String(v));
+  const detalhe = (t) => {
+    const ads = (B.eai_adapters?.ok ? B.eai_adapters.linhas : [])
+      .filter(a => String(t.ROTINAS || '').split(',').map(x => x.trim()).includes(String(a.ROTINA || '').toUpperCase()));
+    const st = Object.entries(t.STATUS || {}).map(([k, q]) => ({ k, q })).sort((a, b) => b.q - a.q);
+    const abertas = filtra(B.eai_pendentes_lista, t);
+    const ultimas = filtra(B.eai_ultimas_lista, t);
+    return `<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div><h5 class="text-[11px] font-semibold text-slate-600 uppercase mb-1">Adapters (XX4)</h5>${intTabela([
+        { k: 'ROTINA', rot: 'Rotina' }, { k: 'MENSAGEM', rot: 'Mensagem' },
+        { rot: 'Envia', fmt: l => escapeHtml(INT_EAI_SN[l.ENVIA] || l.ENVIA || '') },
+        { rot: 'Recebe', fmt: l => escapeHtml(INT_EAI_SN[l.RECEBE] || l.RECEBE || '') },
+        { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+        { rot: 'Condição de envio', fmt: l => l.CONDICAO ? `<code class="text-[11px]">${escapeHtml(l.CONDICAO)}</code>` : '<span class="text-slate-400">—</span>' }],
+        ads, `Nenhum adapter ${t.ROTINAS} cadastrado: o tipo não sobe por Mensagem Única.`)}</div>
+      <div><h5 class="text-[11px] font-semibold text-slate-600 uppercase mb-1">Mensagens por status (XX3)</h5>${intTabela([
+        { rot: 'Status', fmt: l => intEaiSt(l.k) }, { rot: 'Mensagens', dir: 1, fmt: l => escapeHtml(String(l.q)) }],
+        st, 'Nada na fila do EAI para este tipo.')}
+        <p class="text-[11px] text-slate-500 mt-1">Cadastro ${escapeHtml(t.ALIAS)}: ${num(t.REGISTROS)} registro(s)${t.ITENS != null ? ` · DA1: ${escapeHtml(String(t.ITENS))} item(ns)` : ''} · de-para na XXF: ${num(t.DEPARA)}</p></div>
+    </div>
+    <h5 class="text-[11px] font-semibold text-slate-600 uppercase mt-3 mb-1">Abertas mais antigas (até 30 por mensagem)</h5>${intTabela([
+      { rot: 'Gerada', fmt: l => intHora(l.DIA, l.HORA) },
+      { rot: 'Idade', dir: 1, fmt: l => escapeHtml(intIdadeTxt(intIdadeMin(l.DIA, l.HORA))) },
+      { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) }, { k: 'TENTATIVAS', rot: 'Tentativas', dir: 1 },
+      { k: 'EVENTO', rot: 'Evento' },
+      { rot: 'Retorno', fmt: l => { const r = String(l.RETORNO || '').trim();
+        return r ? `<span class="text-slate-600" title="${escapeHtml(r)}">${escapeHtml(r.length > 120 ? r.slice(0, 120) + '…' : r)}</span>` : '<span class="text-slate-400">—</span>'; } }],
+      abertas, 'Nenhuma mensagem aberta deste tipo.')}
+    <h5 class="text-[11px] font-semibold text-slate-600 uppercase mt-3 mb-1">Últimas mensagens (até 10 por mensagem)</h5>${intTabela([
+      { rot: 'Gerada', fmt: l => intHora(l.DIA, l.HORA) }, { k: 'MENSAGEM', rot: 'Mensagem' },
+      { rot: 'Status', fmt: l => intEaiSt(l.STATUS) }, { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+      { k: 'TENTATIVAS', rot: 'Tentativas', dir: 1 },
+      { rot: 'Processada', fmt: l => String(l.PROC_DIA || '').trim() ? intHora(l.PROC_DIA, l.PROC_HORA) : '<span class="text-slate-400">—</span>' },
+      { k: 'EVENTO', rot: 'Evento' }], ultimas, 'Nenhuma mensagem deste tipo na fila (pode ter sido limpa pelo FWEAICLEAR).')}`;
+  };
+  const linhas = pt.linhas || [];
+  const ths = ['Tipo de informação', 'Situação', 'Cadastro', 'Na fila', 'Com falha', 'Entregues sem retorno', 'Finalizadas', 'De-para (XXF)', 'Último envio'];
+  return `<div class="mb-4" data-eai-tipos><div class="flex items-center justify-between gap-2 mb-1 flex-wrap">
+      <h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide">Por tipo de informação</h4>
+      <span class="text-[11px] text-slate-500">clique no tipo para abrir · <button data-eai-tipo-todos class="underline">${integ.eaiTipos.size ? 'fechar todos' : 'abrir todos'}</button></span></div>
+    <div class="overflow-x-auto"><table class="w-full text-xs border border-slate-200 rounded">
+      <thead class="bg-slate-50 text-slate-600"><tr>${ths.map((h, k) => `<th class="px-2 py-1.5 font-semibold text-${k >= 2 ? 'right' : 'left'}">${h}</th>`).join('')}</tr></thead>
+      <tbody>${linhas.map(t => {
+        const aberto = integ.eaiTipos.has(t.TIPO);
+        const ent = t.ENTREGUES ? `${t.ENTREGUES}${t.IDADE_ENTREGUE_MIN != null ? ` <span class="text-slate-500">(há ${escapeHtml(intIdadeTxt(t.IDADE_ENTREGUE_MIN))})</span>` : ''}` : '0';
+        return `<tr class="border-t border-slate-100 cursor-pointer hover:bg-sky-50/50" data-eai-tipo="${escapeHtml(t.TIPO)}" aria-expanded="${aberto}">
+          <td class="px-2 py-1.5"><span class="font-semibold text-totvs-petroleo">${aberto ? '▾' : '▸'} ${escapeHtml(t.ROTULO)}</span>
+            <span class="block text-[11px] text-slate-500">${escapeHtml(t.MENSAGENS)} · ${escapeHtml(t.ALIAS)}</span></td>
+          <td class="px-2 py-1.5">${intPill(t.NIVEL)}<span class="block text-[11px] text-slate-600 mt-0.5 max-w-xs">${escapeHtml(t.TEXTO || '')}</span></td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${num(t.REGISTROS)}${t.ITENS != null ? `<span class="block text-[11px] text-slate-500">${escapeHtml(String(t.ITENS))} itens</span>` : ''}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${num(t.FILA)}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${t.FALHAS ? `<b class="text-rose-700">${t.FALHAS}</b>${t.ESGOTADAS ? `<span class="block text-[11px] text-rose-700">${t.ESGOTADAS} com 4+ tent.</span>` : ''}` : '0'}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${ent}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${num(t.FINALIZADAS)}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${t.DEPARA === 0 && t.FILA ? '<b class="text-amber-800">0 · vazio</b>' : num(t.DEPARA)}</td>
+          <td class="px-2 py-1.5 text-right">${t.ULTIMA ? intData(t.ULTIMA) : '<span class="text-slate-400">nunca</span>'}</td></tr>
+          ${aberto ? `<tr class="bg-slate-50/60" data-eai-tipo-det="${escapeHtml(t.TIPO)}"><td colspan="9" class="px-3 py-3">${detalhe(t)}</td></tr>` : ''}`;
+      }).join('')}</tbody></table></div>
+    <p class="text-[11px] text-slate-500 mt-1">Cliente e fornecedor usam a mesma mensagem (CUSTOMERVENDOR): a fila vai para o tipo cujo adapter envia; a XXF separa pelo alias (SA1 × SA2). Filiais (SM0) não têm contagem por SQL.</p></div>`;
+}
+
 /** Agendamentos com o de/para empresa-filial (XX2) e as tarefas (SCHDTSK). */
 function intEaiAgendamentos(B) {
   const emp = {};
@@ -12671,6 +12743,7 @@ function intCaixaEai(B, d, nivel) {
   const g = INT_GRUPO('eai');
   return intCaixa('eai', 'EAI Protheus × Schedule — o cadastro saiu e voltou?', g.sub, nivel, () =>
     intEaiFunilHtml(B) +
+    intEaiTipos(B) +
     intDuasBasesGrupo(u, d, 'eai') +
     intSub('Fila por mensagem, status e canal (XX3)', B.eai_status, (ls) => intTabela([
       { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
@@ -12680,7 +12753,7 @@ function intCaixaEai(B, d, nivel) {
       { k: 'COM_DESTINO', rot: 'Com destino', dir: 1 },
       { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGA) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
       ls, 'Fila do EAI vazia.')) +
-    intSub('Mensagens abertas, das mais antigas (XX3)', B.eai_pendentes_lista, (ls) => intTabela([
+    intSub('Mensagens abertas, das mais antigas (até 30 por mensagem)', B.eai_pendentes_lista, (ls) => intTabela([
       { rot: 'Gerada', fmt: l => intHora(l.DIA, l.HORA) },
       { rot: 'Idade', dir: 1, fmt: l => escapeHtml(intIdadeTxt(intIdadeMin(l.DIA, l.HORA))) },
       { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
@@ -12774,6 +12847,17 @@ function ligaIntegracoes() {
   }));
   $$('#int-conteudo [data-int-amb]').forEach(b => b.addEventListener('click', abreAmbienteIntegracoes));
   $$('#int-conteudo [data-int-duas-btn]').forEach(b => b.addEventListener('click', coletaDuasBases));
+  $$('#int-conteudo [data-eai-tipo]').forEach(tr => tr.addEventListener('click', () => {
+    const k = tr.dataset.eaiTipo;
+    integ.eaiTipos.has(k) ? integ.eaiTipos.delete(k) : integ.eaiTipos.add(k);
+    renderIntegracoes();
+  }));
+  $$('#int-conteudo [data-eai-tipo-todos]').forEach(b => b.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const todos = (integ.dados?.ultima?.blocos?.eai_por_tipo?.linhas || []).map(t => t.TIPO);
+    integ.eaiTipos = integ.eaiTipos.size ? new Set() : new Set(todos);
+    renderIntegracoes();
+  }));
 }
 
 async function abreAmbienteIntegracoes() {

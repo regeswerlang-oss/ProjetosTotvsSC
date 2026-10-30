@@ -468,6 +468,8 @@ EAI_CSV = {
     "agents": "CODIGO;DESCRICAO;IP;PORTA;AMBIENTE;EMPRESA;THREADS;STATUS;ULTDIA;ULTHOR\n01;AGENT 01;127.0.0.1;6001;PRODUCAO;01;2;0;20260625;14:40\n",
     "pendentes": "MENSAGEM;STATUS;CANAL;TPTRAN;TENTATIVAS;DIA;HORA;ULT_TENTATIVA;ULT_TENT_HORA;EVENTO;WEBSERVICE;UUID;COM_DESTINO;RETORNO\n"
                  "CUSTOMERVENDOR;7;3;1;0;20261029;16:00:47;;;upsert;;u-1;S;\n",
+    "ultimas": "MENSAGEM;STATUS;CANAL;TPTRAN;TENTATIVAS;DIA;HORA;PROC_DIA;PROC_HORA;EVENTO;RN\n"
+               f"SELLER;7;3;1;0;{HOJE};08:49:28;;;upsert;1\n",
 }
 
 
@@ -476,6 +478,7 @@ def eai_chave(sql):
     if "FROM XX4010" in sql: return "adapters"
     if "AS COM_DESTINO, MIN(" in sql or "AS ESGOTADAS" in sql: return "status"
     if "AS RETORNO" in sql or "AS UUID" in sql: return "pendentes"
+    if "AS PROC_DIA" in sql: return "ultimas"
     if "FROM XX3010" in sql and "AS PRIMEIRA" in sql: return "abertas"
     if "FROM XXF" in sql: return "depara"
     if "FROM XXD" in sql: return "empresa"
@@ -509,7 +512,7 @@ d = r.get_json()
 q_eai = [c for c in CHAMADAS if "/query" in c["url"]]
 confere("eai: coleta 200", r.status_code == 200 and d["ok"])
 confere("eai: sem healthcheck da Quírons", not any("healthcheck" in c["url"] for c in CHAMADAS))
-confere("eai: 12 consultas (uma por bloco)", len(q_eai) == 12)
+confere("eai: 13 consultas (uma por bloco)", len(q_eai) == 13)
 confere("eai: nenhuma consulta de outro grupo",
         not any(t in c["sql"] for c in q_eai for t in ("RJP010", "CKOCOL", "ZA3010")))
 ult = d["ultima"]
@@ -526,9 +529,12 @@ confere("eai: FWEAIRECE nunca executou", inds["eai_jobs"]["nivel"] == "vermelho"
 confere("eai: 2 agendamentos parados", inds["eai_agendamentos"]["valor"] == 2)
 confere("eai: recorrência lida", ult["blocos"]["eai_agendamentos"]["linhas"][2]["RECORR"] == "Smart A")
 confere("eai: grupos gravados na coleta", ult["blocos"]["_meta"]["grupos"] == ["eai"])
+pt = {t["TIPO"]: t for t in ult["blocos"]["eai_por_tipo"]["linhas"]}
+confere("eai: por tipo gravado na coleta", len(pt) == 10 and pt["clientes"]["ENTREGUES"] == 821
+        and pt["tabelas"]["NIVEL"] == "vermelho" and pt["vendedores"]["FALHAS"] == 6)
 confere("eai: payload sem segredo", "tok123" not in r.get_data(as_text=True))
 d = cli.get("/api/integracoes/000348D0/scripts?ambiente=producao").get_json()
-confere("eai: scripts do grupo", d["grupos"] == ["eai"] and len(d["scripts"]) == 12
+confere("eai: scripts do grupo", d["grupos"] == ["eai"] and len(d["scripts"]) == 13
         and all(s["id"].startswith("eai_") for s in d["scripts"]))
 m.execute = exec_grupos
 r = cli.post("/api/integracoes/000348D0/grupos?ambiente=producao", json={"grupos": ["eai", "crm"]})

@@ -9582,15 +9582,25 @@ def _eai_scripts(sufixo, hoje, desde=None, banco=None):
         f"CASE WHEN {rotinas} THEN 'S' ELSE 'N' END AS EAI"
         + (f", {expr} AS RECORR" if expr else "")
         + " FROM XX1 X WHERE X.D_E_L_E_T_ = ' ' ORDER BY X.XX1_CODIGO")
+    # Abertas: as N mais antigas DE CADA mensagem (senão os 821 clientes de um
+    # dia escondem o vendedor). ROW_NUMBER roda em Oracle, SQL Server e Postgres.
     pend = lambda expr: (
-        f"SELECT RTRIM(XX3_FUNCOD) AS MENSAGEM, XX3_STATUS AS STATUS, XX3_CHANEL AS CANAL, "
+        f"SELECT * FROM (SELECT RTRIM(XX3_FUNCOD) AS MENSAGEM, XX3_STATUS AS STATUS, XX3_CHANEL AS CANAL, "
         f"XX3_TPTRAN AS TPTRAN, XX3_TENTAT AS TENTATIVAS, XX3_TRDATA AS DIA, RTRIM(XX3_TRHORA) AS HORA, "
         f"XX3_TNDATA AS ULT_TENTATIVA, RTRIM(XX3_TNHORA) AS ULT_TENT_HORA, RTRIM(XX3_EVENT) AS EVENTO, "
         f"RTRIM(XX3_WBSER) AS WEBSERVICE, RTRIM(XX3_UUID) AS UUID, "
         f"CASE WHEN {_integ_preenchido('XX3_URL')} THEN 'S' ELSE 'N' END AS COM_DESTINO"
         + (f", {expr} AS RETORNO" if expr else "")
-        + f" FROM XX3{s} WHERE D_E_L_E_T_ = ' ' AND {aberta}{corte} "
-        f"ORDER BY XX3_TRDATA, XX3_TRHORA")
+        + f", ROW_NUMBER() OVER (PARTITION BY XX3_FUNCOD ORDER BY XX3_TRDATA, XX3_TRHORA) AS RN "
+        f"FROM XX3{s} WHERE D_E_L_E_T_ = ' ' AND {aberta}{corte}) T "
+        f"WHERE T.RN <= {EAI_POR_TIPO_ABERTAS} ORDER BY T.MENSAGEM, T.DIA, T.HORA")
+    ultimas = (
+        f"SELECT * FROM (SELECT RTRIM(XX3_FUNCOD) AS MENSAGEM, XX3_STATUS AS STATUS, XX3_CHANEL AS CANAL, "
+        f"XX3_TPTRAN AS TPTRAN, XX3_TENTAT AS TENTATIVAS, XX3_TRDATA AS DIA, RTRIM(XX3_TRHORA) AS HORA, "
+        f"XX3_PRDATA AS PROC_DIA, RTRIM(XX3_PRHORA) AS PROC_HORA, RTRIM(XX3_EVENT) AS EVENTO, "
+        f"ROW_NUMBER() OVER (PARTITION BY XX3_FUNCOD ORDER BY XX3_TRDATA DESC, XX3_TRHORA DESC) AS RN "
+        f"FROM XX3{s} WHERE D_E_L_E_T_ = ' '{corte}) T "
+        f"WHERE T.RN <= {EAI_POR_TIPO_ULTIMAS} ORDER BY T.MENSAGEM, T.DIA DESC, T.HORA DESC")
     return [
         {"id": "eai_config", "rotulo": "EAI — parâmetros (SX6 MV_EAI*)",
          "tabela": f"SX6{s}", "limite": 200,
@@ -9661,9 +9671,13 @@ def _eai_scripts(sufixo, hoje, desde=None, banco=None):
         # ── detalhe ────────────────────────────────────────────────────────
         # Nunca XX3_URL nem XX3_TRANS: a URL do iPaaS leva a api-key em texto
         # claro e o TRANS é a mensagem inteira. Só "tem destino" (S/N).
-        {"id": "eai_pendentes_lista", "rotulo": "EAI — mensagens abertas, das mais antigas (XX3)",
-         "tabela": f"XX3{s}", "limite": 200, "detalhe": True,
+        {"id": "eai_pendentes_lista",
+         "rotulo": f"EAI — abertas mais antigas, {EAI_POR_TIPO_ABERTAS} por mensagem (XX3)",
+         "tabela": f"XX3{s}", "limite": 600, "detalhe": True,
          "sqls": [pend(e) for e in _eai_texto_exprs("XX3_RETURN", banco, 300)]},
+        {"id": "eai_ultimas_lista",
+         "rotulo": f"EAI — últimas {EAI_POR_TIPO_ULTIMAS} mensagens de cada tipo (XX3)",
+         "tabela": f"XX3{s}", "limite": 400, "detalhe": True, "sql": ultimas},
     ]
 
 
@@ -9698,6 +9712,122 @@ def _eai_ult_exec(ag, agora):
     if not _integ_data(ag.get("ULTDIA")):
         return None
     return _eai_idade_min(ag.get("ULTDIA"), ag.get("ULTHOR") or "00:00", agora)
+
+
+# Tipos de informação (como o consultor e o cliente falam): cada tipo junta o
+# cadastro, os adapters que o enviam, as mensagens da XX3 e o de-para da XXF.
+# CUSTOMERVENDOR é UMA mensagem para cliente (CRMA980/MATA030) e fornecedor
+# (MATA020): a XX3 não diz qual dos dois sem abrir o XX3_TRANS (não lido), então
+# a mensagem vai para o tipo cujo adapter envia; se os dois enviam, ela aparece
+# nos dois marcada como compartilhada. A XXF separa pelo alias (SA1 × SA2).
+EAI_TIPOS = (
+    ("clientes", "Clientes", "SA1", ("CUSTOMERVENDOR",), ("CRMA980", "MATA030")),
+    ("fornecedores", "Fornecedores", "SA2", ("CUSTOMERVENDOR",), ("MATA020",)),
+    ("produtos", "Produtos", "SB1", ("ITEM",), ("MATA010",)),
+    ("grupos", "Grupos de produto", "SBM", ("STOCKGROUP",), ("MATA035",)),
+    ("tabelas", "Tabelas de preço", "DA0", ("PRICELISTHEADERITEM", "PRICELIST"), ("OMSA010",)),
+    ("vendedores", "Vendedores", "SA3", ("SELLER",), ("MATA040",)),
+    ("condicoes", "Condições de pagamento", "SE4", ("PAYMENTCONDITION",), ("MATA360",)),
+    ("unidades", "Unidades de medida", "SAH", ("UNITOFMEASURE",), ("QIEA030",)),
+    ("transportadoras", "Transportadoras", "SA4", ("CARRIER",), ("MATA050",)),
+    ("filiais", "Filiais", "SM0", ("BRANCH",), ("APCFG230",)),
+)
+EAI_POR_TIPO_ABERTAS = 30          # abertas mais antigas lidas por mensagem
+EAI_POR_TIPO_ULTIMAS = 10          # últimas mensagens lidas por mensagem
+
+
+def _eai_por_tipo(blocos, hoje, agora=None):
+    """Resumo por tipo de informação, montado dos blocos já lidos (função pura).
+    Uma linha por tipo, sempre na ordem de EAI_TIPOS, com o nível do tipo."""
+    ok = lambda k: (blocos.get(k) or {}).get("ok")
+    lin = lambda k: (blocos.get(k) or {}).get("linhas") or [] if ok(k) else []
+    adapters = lin("eai_adapters")
+    st = lin("eai_status")
+    ab = lin("eai_abertas")
+    cad = {(x.get("ALIAS") or "").upper(): _integ_int(x.get("QTD")) for x in lin("eai_cadastros")}
+    dp = {}
+    for x in lin("eai_depara"):
+        a = (x.get("ALIAS") or "").upper()
+        dp[a] = dp.get(a, 0) + _integ_int(x.get("QTD"))
+    # Quem envia cada mensagem: tipos com adapter ENVIA = 1
+    envia_por_msg = {}
+    for chave, _r, _a, msgs, rotinas in EAI_TIPOS:
+        if any((a.get("ROTINA") or "").upper() in rotinas and a.get("ENVIA") == "1" for a in adapters):
+            for m in msgs:
+                envia_por_msg.setdefault(m, set()).add(chave)
+    out = []
+    for chave, rot, alias, msgs, rotinas in EAI_TIPOS:
+        ads = [a for a in adapters if (a.get("ROTINA") or "").upper() in rotinas]
+        envia = any(a.get("ENVIA") == "1" for a in ads)
+        meus = [m for m in msgs if chave in envia_por_msg.get(m, set())]
+        compart = [m for m in meus if len(envia_por_msg.get(m, ())) > 1]
+        ls = [x for x in st if (x.get("MENSAGEM") or "").upper() in meus and (x.get("TPTRAN") or "1") == "1"]
+        por_st = {}
+        for x in ls:
+            k = x.get("STATUS") or ""
+            por_st[k] = por_st.get(k, 0) + _integ_int(x.get("QTD"))
+        total = sum(por_st.values())
+        falhas = sum(por_st.get(s, 0) for s in EAI_ST_FALHA)
+        esgot = sum(_integ_int(x.get("ESGOTADAS")) for x in ls if (x.get("STATUS") or "") in EAI_ST_FALHA)
+        entreg = por_st.get(EAI_ST_ENTREGUE, 0)
+        aguard = sum(por_st.get(s, 0) for s in EAI_ST_AGUARDA)
+        final = por_st.get(EAI_ST_FINAL, 0)
+        recentes = [d for d in (_integ_data(x.get("MAIS_RECENTE")) for x in ls) if d]
+        abm = [x for x in ab if (x.get("MENSAGEM") or "").upper() in meus]
+        _n, idade_ent = _eai_mais_antiga(abm, (EAI_ST_ENTREGUE,), agora, hoje)
+        _n, idade_ab = _eai_mais_antiga(abm, tuple(EAI_STATUS) , agora, hoje)
+        reg = cad.get(alias)
+        itens = cad.get("DA1") if chave == "tabelas" else None
+        depara = dp.get(alias, 0) if ok("eai_depara") else None
+        # Nível do tipo: a mesma régua dos cartões, aplicada só a ele.
+        if not ok("eai_adapters") or not ok("eai_status"):
+            nivel, txt = "cinza", "Adapters ou fila do EAI não lidos nesta coleta."
+        elif not ads:
+            nivel = "cinza"
+            txt = (f"Sem adapter cadastrado ({' / '.join(rotinas)}): este tipo não sobe por Mensagem Única"
+                   + (f" — {reg} registro(s) no {alias} ficam só no Protheus." if reg else "."))
+        elif not envia:
+            nivel, txt = "cinza", f"Adapter {', '.join(a.get('ROTINA') for a in ads)} cadastrado sem envio (só recebe ou desligado)."
+        elif reg and not total and not depara:
+            nivel = "vermelho"
+            txt = (f"{reg} registro(s) no {alias}" + (f" ({itens} item(ns) na DA1)" if itens else "")
+                   + " e nenhuma mensagem nem de-para: a carga foi feita por fora do evento do cadastro.")
+        elif falhas:
+            nivel = "vermelho" if esgot else "amarelo"
+            txt = f"{falhas} com falha" + (f", {esgot} com {EAI_TENTATIVAS}+ tentativas (só pelo “tentar novamente”)" if esgot else "") + "."
+        elif entreg and (idade_ent or 0) >= EAI_RET_HORAS * 60:
+            nivel, txt = "vermelho", f"{entreg} entregue(s) sem retorno; a mais antiga há {_eai_fmt_idade(idade_ent)}."
+        elif entreg and (idade_ent or 0) >= EAI_RET_MIN:
+            nivel, txt = "amarelo", f"{entreg} entregue(s) esperando o retorno há {_eai_fmt_idade(idade_ent)}."
+        elif aguard:
+            nivel, txt = "amarelo", f"{aguard} aguardando envio."
+        elif depara == 0 and total:
+            nivel, txt = "amarelo", "Mensagens sem de-para gravado na XXF."
+        elif not reg and not total:
+            nivel, txt = "cinza", f"Cadastro {alias} vazio e nada na fila."
+        else:
+            nivel, txt = "verde", "Enviado e com retorno processado." if depara else "Sem pendência na fila."
+        if compart:
+            txt += f" Mensagem {', '.join(compart)} compartilhada com outro tipo (a fila não separa cliente de fornecedor)."
+        out.append({
+            "TIPO": chave, "ROTULO": rot, "ALIAS": alias, "MENSAGENS": ", ".join(msgs),
+            "ROTINAS": ", ".join(rotinas), "TEM_ADAPTER": "S" if ads else "N", "ENVIA": "S" if envia else "N",
+            "CANAL": ", ".join(sorted({a.get("CANAL") or "" for a in ads if a.get("ENVIA") == "1"})),
+            "CONDICAO": "; ".join(a.get("CONDICAO") for a in ads if a.get("CONDICAO")),
+            "REGISTROS": reg, "ITENS": itens, "FILA": total, "AGUARDANDO": aguard, "FALHAS": falhas,
+            "ESGOTADAS": esgot, "ENTREGUES": entreg, "FINALIZADAS": final, "DEPARA": depara,
+            "IDADE_ENTREGUE_MIN": idade_ent, "IDADE_ABERTA_MIN": idade_ab,
+            "ULTIMA": max(recentes).strftime("%Y%m%d") if recentes else None,
+            "STATUS": por_st, "COMPARTILHADA": compart, "NIVEL": nivel, "TEXTO": txt})
+    return out
+
+
+def _eai_anota_tipos(blocos, hoje, agora=None):
+    """Grava o resumo por tipo junto da coleta (bloco eai_por_tipo)."""
+    if not any(k.startswith("eai_") for k in blocos):
+        return
+    blocos["eai_por_tipo"] = {"rotulo": "EAI — por tipo de informação", "tabela": "XX3/XX4/XXF",
+                              "ok": True, "linhas": _eai_por_tipo(blocos, hoje, agora)}
 
 
 def _eai_indicadores(blocos, hoje, agora=None):
@@ -10252,6 +10382,7 @@ def api_integracoes_coletar(customer):
         bm["resumo"] = _integ_motivos(bm["linhas"])
         bm["linhas"] = []                  # só o resumo vai para o histórico
     _crm_anota_causas(blocos.get("crm_pendentes_lista"))
+    _eai_anota_tipos(blocos, hoje, datetime.now(TZ_SP))
     inds = _integ_indicadores(blocos, health, hoje, grupos, datetime.now(TZ_SP))
     nivel = _integ_pior(i["nivel"] for i in inds)
     # O corte usado fica GRAVADO com a coleta: trocar o corte depois não pode

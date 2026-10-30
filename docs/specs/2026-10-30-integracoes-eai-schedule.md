@@ -76,7 +76,58 @@ FWEAICLEAR (diário) ─► apaga FISICAMENTE as finalizadas
 | `eai_agend_empfil` | resumo | XX2 (empresa/filial de cada agendamento) |
 | `eai_tarefas` | resumo | SCHDTSK por agendamento × status |
 | `eai_agents` | resumo | XX0 |
-| `eai_pendentes_lista` | detalhe (200) | XX3 abertas das mais antigas: status, canal, tentativas, evento, web service, `COM_DESTINO`, retorno (CLOB) |
+| `eai_pendentes_lista` | detalhe (600) | XX3 abertas, as **30 mais antigas de cada mensagem** (`ROW_NUMBER`): status, canal, tentativas, evento, web service, `COM_DESTINO`, retorno (CLOB) |
+| `eai_ultimas_lista` | detalhe (400) | XX3, as **10 últimas de cada mensagem**, em qualquer status, com a data de processamento |
+| `eai_por_tipo` | calculado | não vai à base: `_eai_por_tipo()` junta os blocos acima por tipo de informação e grava junto da coleta |
+
+## Por tipo de informação (`_eai_por_tipo`, 30/10)
+
+O consultor e o cliente falam em tipos de cadastro, não em mensagem única. Cada tipo junta:
+
+- o cadastro;
+- os adapters que o enviam;
+- as mensagens da XX3;
+- o de-para da XXF.
+
+Cada tipo tem um nível próprio, pela mesma régua dos cartões.
+
+| tipo | cadastro | mensagem | rotinas |
+|---|---|---|---|
+| Clientes | SA1 | CUSTOMERVENDOR | CRMA980, MATA030 |
+| Fornecedores | SA2 | CUSTOMERVENDOR | MATA020 |
+| Produtos | SB1 | ITEM | MATA010 |
+| Grupos de produto | SBM | STOCKGROUP | MATA035 |
+| Tabelas de preço | DA0 (+DA1) | PRICELISTHEADERITEM, PRICELIST | OMSA010 |
+| Vendedores | SA3 | SELLER | MATA040 |
+| Condições de pagamento | SE4 | PAYMENTCONDITION | MATA360 |
+| Unidades de medida | SAH | UNITOFMEASURE | QIEA030 |
+| Transportadoras | SA4 | CARRIER | MATA050 |
+| Filiais | SM0 (sem contagem) | BRANCH | APCFG230 |
+
+- **Cliente e fornecedor usam a mesma mensagem (CUSTOMERVENDOR).**
+  - A fila vai para o tipo cujo adapter envia.
+  - Se os dois enviam, ela aparece nos dois, marcada como compartilhada: separar exigiria ler o `XX3_TRANS`, que não é lido.
+  - Tipo sem adapter de envio não herda a fila do outro.
+  - A XXF separa pelo alias (SA1 × SA2).
+- **Nível do tipo**, na ordem em que a regra é aplicada:
+  1. cinza: sem adapter, ou adapter que não envia;
+  2. vermelho: cadastro com registros sem nenhuma mensagem e sem de-para;
+  3. vermelho com 4 tentativas, amarelo sem: falhas;
+  4. vermelho com 24 h, amarelo com 30 min: entregue sem retorno;
+  5. amarelo: aguardando envio;
+  6. amarelo: sem de-para;
+  7. verde: nenhum dos casos acima.
+- **Na Dígitro (Produção, 30/10):**
+  - vermelhos:
+    - Tabelas de preço: 7 registros e 322 itens, nunca enviados;
+    - Vendedores: 6 com 4 tentativas;
+    - Unidades e Grupos: retorno há mais de 24 h.
+  - amarelos: Clientes e Produtos, entregues há menos de 24 h.
+  - cinza: Fornecedores, sem adapter MATA020; os 932 registros ficam só no Protheus.
+- **Tela:**
+  - tabela "Por tipo de informação" no alto da caixa EAI;
+  - clicar no tipo abre os adapters do tipo, as mensagens por status, as abertas mais antigas e as últimas mensagens;
+  - "abrir todos" e "fechar todos".
 
 ## Indicadores (`_eai_indicadores`, grupo `eai`)
 
@@ -126,7 +177,7 @@ O teste `docs/testes/integracoes-eai-back.py` usa esses números.
 
 ## Testes
 
-- `python3 docs/testes/integracoes-eai-back.py`: 299 asserções. Cobre o SQL
+- `python3 docs/testes/integracoes-eai-back.py`: 331 asserções, com o resumo por tipo (cliente × fornecedor compartilhado, tabela de preço nunca enviada, sem adapter). Cobre o SQL
   (sem `;`, sem relógio, sem `||`, sem URL/TRANS, sufixo só onde cabe,
   variantes CLOB, SQL Server, corte), o retrato real da Produção, o cenário
   saudável, a mensagem limpa pelo FWEAICLEAR com de-para, as tabelas ausentes
@@ -134,7 +185,7 @@ O teste `docs/testes/integracoes-eai-back.py` usa esses números.
 - `python3 docs/testes/integracoes-rotas.py`: inclui a coleta só-EAI com a REST
   fingida (12 consultas, nenhuma de outro grupo, sem segredo no payload,
   recorrência lida), os scripts do grupo e a rota `/grupos` aceitando `eai`.
-- `node docs/testes/integracoes-eai-front.js`: 30 asserções (checkbox, botão,
+- `node docs/testes/integracoes-eai-front.js`: 48 asserções (por tipo: abrir, fechar, abrir todos, detalhe só do tipo, fornecedor sem herdar a fila; checkbox, botão,
   cartões, caminho, status com código, nunca executou, escape, duas bases
   ligando o EAI na outra, zero erro de JS).
 

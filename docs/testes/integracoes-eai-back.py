@@ -21,13 +21,13 @@ exec(compile(src[ini:fim], 'integ', 'exec'), ns)
 ok = falhou = 0
 
 
-def confere(nome, cond):
+def confere(nome, cond, extra=None):
     global ok, falhou
     if cond:
         ok += 1
     else:
         falhou += 1
-        print('FALHOU:', nome)
+        print('FALHOU:', nome, '' if extra is None else extra)
 
 
 HOJE = date(2026, 10, 30)
@@ -45,9 +45,9 @@ scripts = ns['_integ_scripts']('010', HOJE, None, 'oracle', ['eai'], AGORA)
 ids = [s['id'] for s in scripts]
 ESPERADOS = ['eai_config', 'eai_adapters', 'eai_status', 'eai_abertas', 'eai_depara', 'eai_empresa',
              'eai_cadastros', 'eai_agendamentos', 'eai_agend_empfil', 'eai_tarefas', 'eai_agents',
-             'eai_pendentes_lista']
+             'eai_pendentes_lista', 'eai_ultimas_lista']
 confere('blocos do grupo EAI', ids == ESPERADOS)
-confere('um detalhe, no fim', [s['id'] for s in scripts if s.get('detalhe')] == ['eai_pendentes_lista'])
+confere('dois detalhes, no fim', [s['id'] for s in scripts if s.get('detalhe')] == ['eai_pendentes_lista', 'eai_ultimas_lista'])
 SEM_SUFIXO = {'eai_depara', 'eai_empresa', 'eai_agendamentos', 'eai_agend_empfil', 'eai_tarefas', 'eai_agents'}
 for s in scripts:
     for k, sql in enumerate(s['sqls']):
@@ -86,7 +86,11 @@ confere('recorrência CLOB: DBMS_LOB → SUBSTR → sem', len(ag) == 3 and 'DBMS
 confere('marca os jobs do EAI', "LIKE 'FWEAIRECE%'" in ag[0])
 pend = by['eai_pendentes_lista']['sqls']
 confere('retorno CLOB com variantes', 'DBMS_LOB.SUBSTR(XX3_RETURN' in pend[0] and 'AS RETORNO' not in pend[-1])
-confere('pendentes: mais antigas primeiro', pend[0].rstrip().endswith('ORDER BY XX3_TRDATA, XX3_TRHORA'))
+confere('pendentes: 30 mais antigas por mensagem', 'PARTITION BY XX3_FUNCOD ORDER BY XX3_TRDATA, XX3_TRHORA' in pend[0]
+        and 'T.RN <= 30' in pend[0])
+ult = by['eai_ultimas_lista']['sql']
+confere('últimas: 10 por mensagem, mais recentes', 'ORDER BY XX3_TRDATA DESC, XX3_TRHORA DESC' in ult and 'T.RN <= 10' in ult)
+confere('últimas: todos os status', 'XX3_STATUS <>' not in ult)
 mssql = {x['id']: x for x in ns['_integ_scripts']('010', HOJE, None, 'mssql', ['eai'])}
 confere('SQL Server: texto por CONVERT', 'CONVERT(VARCHAR(300), XX3_RETURN)' in mssql['eai_pendentes_lista']['sqls'][0])
 confere('sufixo de outra base', 'XX3020' in {x['id']: x for x in ns['_integ_scripts']('020', HOJE, None, None, ['eai'])}['eai_status']['sql'])
@@ -96,6 +100,7 @@ confere('corte vence a janela', "XX3_TRDATA >= '20261025'" in corte['eai_abertas
 confere('corte não mexe no Schedule', '20261025' not in corte['eai_agendamentos']['sqls'][0])
 todos = ns['_integ_scripts']('010', HOJE, None, 'oracle', ['crm', 'eai'], AGORA)
 confere('crm + eai somam os blocos', len(todos) == 13 + len(ESPERADOS))
+confere('SQL Server: derivada com alias', ' T WHERE T.RN' in mssql['eai_pendentes_lista']['sqls'][0])
 
 
 def ind(inds, chave):
@@ -175,6 +180,43 @@ confere('3 agendamentos parados? não: 2 (o CLEAR rodou)', i['valor'] == 2 and i
 i = ind(inds, 'eai_params')
 confere('MV_EAIPORT sem adapter ESB = amarelo', i['nivel'] == 'amarelo' and 'WS_ERPProtheusToGFE' in i['texto'])
 confere('situação geral vermelha', ns['_integ_pior'](x['nivel'] for x in inds) == 'vermelho')
+
+# ── por tipo de informação (retrato da Produção) ────────────────────────────
+PROD['eai_adapters'] = B([dict(a, CONDICAO="b1_grupo = '0009'" if a['ROTINA'] == 'MATA010' else '') for a in ADAPTERS])
+tipos = {t['TIPO']: t for t in ns['_eai_por_tipo'](PROD, HOJE, AGORA)}
+confere('dez tipos na ordem', list(tipos) == ['clientes', 'fornecedores', 'produtos', 'grupos', 'tabelas', 'vendedores',
+                                              'condicoes', 'unidades', 'transportadoras', 'filiais'])
+t = tipos['clientes']
+confere('clientes: 821 entregues há 18 h = amarelo', t['ENTREGUES'] == 821 and t['FILA'] == 821
+        and t['REGISTROS'] == 820 and t['NIVEL'] == 'amarelo' and t['DEPARA'] == 0, t)
+confere('clientes: rotina que envia', t['ENVIA'] == 'S' and t['CANAL'] == '3')
+t = tipos['fornecedores']
+confere('fornecedores: sem adapter = cinza com os 932 registros', t['TEM_ADAPTER'] == 'N' and t['NIVEL'] == 'cinza'
+        and '932 registro(s) no SA2' in t['TEXTO'] and t['FILA'] == 0, t)
+t = tipos['produtos']
+confere('produtos: 81 entregues, condição do grupo 0009', t['ENTREGUES'] == 81 and "b1_grupo = '0009'" in t['CONDICAO']
+        and t['NIVEL'] == 'amarelo')
+t = tipos['tabelas']
+confere('tabelas de preço: nunca enviadas = vermelho com DA1', t['NIVEL'] == 'vermelho' and t['FILA'] == 0
+        and '7 registro(s) no DA0 (322 item(ns) na DA1)' in t['TEXTO'], t)
+t = tipos['vendedores']
+confere('vendedores: 6 falhas esgotadas + 11 entregues', t['FALHAS'] == 6 and t['ESGOTADAS'] == 6 and t['ENTREGUES'] == 11
+        and t['NIVEL'] == 'vermelho' and 'tentar novamente' in t['TEXTO'])
+confere('condições: falha e entregue', tipos['condicoes']['FALHAS'] == 5 and tipos['condicoes']['ENTREGUES'] == 5)
+confere('filiais: 2 mensagens, sem cadastro SQL (SM0)', tipos['filiais']['FILA'] == 2 and tipos['filiais']['REGISTROS'] is None)
+confere('idade da entregue mais antiga por tipo', tipos['unidades']['IDADE_ENTREGUE_MIN'] > 24 * 60)
+amb = json.loads(json.dumps(PROD))
+amb['eai_adapters'] = B(ADAPTERS + [AD('MATA020', 'CUSTOMERVENDOR')])
+tp = {t['TIPO']: t for t in ns['_eai_por_tipo'](amb, HOJE, AGORA)}
+confere('cliente e fornecedor enviando: mensagem compartilhada nos dois', tp['fornecedores']['FILA'] == 821
+        and 'compartilhada' in tp['fornecedores']['TEXTO'] and 'compartilhada' in tp['clientes']['TEXTO'])
+blk = dict(PROD)
+ns['_eai_anota_tipos'](blk, HOJE, AGORA)
+confere('coleta grava eai_por_tipo', blk['eai_por_tipo']['ok'] and len(blk['eai_por_tipo']['linhas']) == 10)
+so_crm = {'crm_totais': B([])}
+ns['_eai_anota_tipos'](so_crm, HOJE, AGORA)
+confere('sem grupo EAI não grava por tipo', 'eai_por_tipo' not in so_crm)
+confere('sem adapters lidos = tudo cinza', all(t['NIVEL'] == 'cinza' for t in ns['_eai_por_tipo']({}, HOJE, AGORA)))
 
 # ── saudável: retorno processado, XXF populada, jobs rodando ────────────────
 sau = json.loads(json.dumps(PROD))
