@@ -895,7 +895,7 @@
               <option value="producao">Base Produção</option>
               <option value="teste">Base de Testes</option>
             </select>
-            <label class="flex items-center gap-1.5 text-xs text-slate-500" title="Só entram movimentos a partir desta data (fila Quírons, Ahgora e eSocial). Vale para esta base.">
+            <label class="flex items-center gap-1.5 text-xs text-slate-500" title="Só entram movimentos a partir desta data (fila Quírons, Ahgora, eSocial, XML do Transmite e propostas recebidas do CRM). Vale para esta base.">
               A partir de
               <input id="int-desde" type="date" class="px-2 py-1 border border-slate-300 rounded-md bg-white text-sm text-slate-800">
             </label>
@@ -903,8 +903,11 @@
               Monitorar
               <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="rh"> RH</label>
               <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="transmite"> TOTVS Transmite</label>
+              <label class="flex items-center gap-1 text-slate-700" title="Propostas do TOTVS CRM via iPaaS → Painel de Projetos → contrato → medição, e os cadastros que sobem ao CRM"><input type="checkbox" data-int-grupo="crm"> CRM × iPaaS</label>
+              <label class="flex items-center gap-1 text-slate-700" title="Mensagem Única do EAI (adapters XX4, fila XX3, de-para XXF) e os agendamentos do Schedule (XX1, SCHDTSK)"><input type="checkbox" data-int-grupo="eai"> EAI × Schedule</label>
             </span>
             <button id="int-coletar-topo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde disabled:opacity-50">⚡ Coletar agora</button>
+            <button id="int-coletar-duas" class="hidden px-3 py-1.5 rounded-md border border-totvs-blue text-totvs-petroleo font-semibold hover:bg-sky-50 disabled:opacity-50" title="Coleta na Base Produção e na Base de Testes, uma depois da outra">⚡ Produção + Teste</button>
             <button id="int-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
           </div>
           <div id="int-conteudo"></div>
@@ -11905,7 +11908,8 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 // ============================================================================
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
-                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite']) };
+                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai']),
+                duas: null, eaiTipos: new Set() };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
 const INT_NIVEL = {
@@ -11919,9 +11923,39 @@ const INT_GRUPOS = [
   { id: 'ahgora',  rot: 'Ahgora PontoWeb', sub: 'funcionários e afastamentos · JOB GPEM943 / tela GPEM929 · fila RUM' },
   { id: 'esocial', rot: 'eSocial SST (Middleware)', sub: 'S-2210, S-2220 e S-2240 vindos do Quírons · fila RJE' },
   { id: 'transmite', rot: 'TOTVS Transmite', sub: 'XML de entrada · Importador (COMXCOL / IMPTRATOOL) · CKOCOL, SDS e SF1' },
+  { id: 'crm', rot: 'CRM × iPaaS · Painel de Projetos', sub: 'propostas do CRM (ZA3) → projetos (ZA0) → contrato (CN9) → medição (CND) · produtos e tabelas de preço para o CRM' },
+  { id: 'eai', rot: 'EAI Protheus × Schedule', sub: 'Mensagem Única · adapters (XX4) → fila (XX3) → retorno e de-para (XXF) · agendamentos (XX1, SCHDTSK)' },
 ];
+const INT_GRUPO = (id) => INT_GRUPOS.find(g => g.id === id);
 // Grupos da base (⚙ protheus_ambientes.integ_grupos). Nulo = só RH.
-const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'] };
+const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'], crm: ['crm'], eai: ['eai'] };
+// Grupos que comparam Produção × Teste e ganham o botão "⚡ Produção + Teste".
+const INT_GRUPOS_DUAS = ['crm', 'eai'];
+// CRM × iPaaS (Dígitro): domínios da especificação do Painel (§10.4, §4.2) e do SIGAGCT.
+const INT_CRM_STG1 = { R: 'Recebido', P: 'Processando', L: 'Liberado', E: 'Erro' };
+const INT_CRM_STG2 = { N: 'Não liberado', A: 'Aguardando', P: 'Processando', S: 'Sucesso', E: 'Erro' };
+const INT_CRM_STIPA = { N: 'Não disponível', A: 'Aguardando', P: 'Enviando', S: 'Sucesso', E: 'Erro' };
+const INT_CRM_ZA0 = { 1: 'Em Implantação', 2: 'Vigente', 3: 'Não Vigente', 4: 'Cancelado', 5: 'Devolvida',
+                      6: 'Em Produção', 7: 'Em Devolução', 8: 'Suspensa', 9: 'Migrada' };
+const INT_CRM_TPPROD = { 1: 'Físico', 2: 'Virtual' };
+const INT_CN9_SIT = { '01': 'Cancelado', '02': 'Em elaboração', '03': 'Emitido', '04': 'Em aprovação',
+                      '05': 'Vigente', '06': 'Paralisado', '07': 'Sol. finalização', '08': 'Finalizado',
+                      '09': 'Em revisão', '10': 'Revisado (revisão antiga)', A: 'Revisão em aprovação' };
+const INT_CND_SIT = { E: 'Encerrada' };
+// Causa do erro da ZA3 = QUEM resolve. Mesmas chaves de CRM_CAUSAS (api).
+const INT_CRM_CAUSA = {
+  duplicidade:   { rot: 'Duplicidade', ico: '♊', quem: 'CRM/iPaaS reenviou — ver P2/P12' },
+  tabela:        { rot: 'Tabela de preço', ico: '💲', quem: 'DA0/DA1 no Protheus' },
+  cliente:       { rot: 'Cliente', ico: '🏢', quem: 'cadastro de clientes (SA1)' },
+  vendedor:      { rot: 'Vendedor', ico: '🧑‍💼', quem: 'vendedores/representantes (SA3)' },
+  produto:       { rot: 'Produto', ico: '📦', quem: 'cadastro de produtos (SB1)' },
+  condicao:      { rot: 'Condição de pagamento', ico: '📅', quem: 'condições (SE4)' },
+  tipo_contrato: { rot: 'Tipo de contrato', ico: '📄', quem: 'tipos de contrato (CN1/CNL)' },
+  mensagem:      { rot: 'Mensagem (JSON)', ico: '🧾', quem: 'conteúdo enviado pelo CRM' },
+  ambiente:      { rot: 'Ambiente', ico: '🔌', quem: 'infraestrutura, token, licença' },
+  outros:        { rot: 'Outros', ico: '❔', quem: 'não reconhecido — ver a mensagem' },
+  sem_texto:     { rot: 'Sem texto', ico: '–', quem: 'ZA3_ERRO vazio ou não lido' },
+};
 const intGruposCfg = () => integ.dados?.ambiente_cfg?.integ_grupos || ['rh'];
 // Transmite: só o 4 é documentado (Classificada); o resto aparece cru.
 const INT_TRA_STRAN = { '4': 'Classificada' };
@@ -12000,6 +12034,10 @@ const INT_HIST = [
   ['ahgora_nao_enviados', 'Ahgora não env.'], ['sst_pendentes', 'SST pend.'],
   ['tra_sem_retorno', 'Transm. sem retorno'], ['tra_prazo', 'Transm. prazo'],
   ['tra_hora_futura', 'Hora futura'], ['tra_revisao', 'Revisão (B)'],
+  ['crm_recebidas', 'CRM recebidas'], ['crm_erros', 'CRM erros'], ['crm_fila', 'CRM fila'],
+  ['crm_contratos', 'CRM contratos'], ['crm_medicoes', 'CRM medidos'], ['crm_cad_produtos', 'Prod. c/ preço'],
+  ['eai_sem_retorno', 'EAI sem retorno'], ['eai_falhas', 'EAI falhas'], ['eai_depara', 'EAI de-para'],
+  ['eai_agendamentos', 'Agend. parados'],
 ];
 
 const intData = (s) => {
@@ -12043,7 +12081,9 @@ async function coletaIntegracoes() {
   const base = (AMB[integ.ambiente] || AMB.producao).label;
   const g = intGruposCfg();
   const oque = [g.includes('rh') ? 'filas de RH + healthcheck da Quírons' : '',
-                g.includes('transmite') ? 'TOTVS Transmite (CKOCOL, SDS, SF1)' : ''].filter(Boolean).join(' e ');
+                g.includes('transmite') ? 'TOTVS Transmite (CKOCOL, SDS, SF1)' : '',
+                g.includes('crm') ? 'CRM × iPaaS (ZA3, ZA0, CN9, CND, SB1, DA0/DA1)' : '',
+                g.includes('eai') ? 'EAI × Schedule (XX3, XX4, XXF, XX1, SCHDTSK)' : ''].filter(Boolean).join(' e ');
   if (!confirm(`Coletar agora na ${base}?\n\nConsultas só de leitura pela REST da base ` +
                `(TSCMONITREST): ${oque}. Cada chamada usa licença no REST.`)) return;
   integ.coletando = true; integ.erroColeta = null; renderIntegracoes();
@@ -12064,7 +12104,7 @@ function intEstado(d) {
   const btnAmb = `<button data-int-amb class="ml-2 underline font-semibold">⚙ Ambiente</button>`;
   if (integ.coletando) {
     return barra('border-sky-200 bg-sky-50 text-sky-900',
-      `<span class="inline-block animate-spin mr-2">⟳</span><b>Coletando na base…</b>
+      `<span class="inline-block animate-spin mr-2">⟳</span><b>Coletando na ${integ.duas?.atual ? escapeHtml((AMB[integ.duas.atual] || {}).label || integ.duas.atual) : 'base'}…</b>${integ.duas ? ' (Produção + Teste)' : ''}
        Consultas só de leitura${intGruposCfg().includes('rh') ? ' e o healthcheck' : ''}. Pode levar até 50 s.`);
   }
   const cfg = d?.ambiente_cfg;
@@ -12190,6 +12230,11 @@ function renderIntegracoes() {
   const box = $('#int-conteudo');
   if (!box) return;
   $('#int-coletar-topo').disabled = integ.coletando || !integ.customer;
+  const bDuas = $('#int-coletar-duas');
+  if (bDuas) {
+    bDuas.classList.toggle('hidden', !intGruposCfg().some(g => INT_GRUPOS_DUAS.includes(g)));
+    bDuas.disabled = integ.coletando || !integ.customer;
+  }
   const inpDesde = $('#int-desde');
   if (inpDesde && document.activeElement !== inpDesde) {
     inpDesde.value = (integ.dados?.ambiente_cfg?.integ_desde || '').slice(0, 10);
@@ -12290,6 +12335,8 @@ function renderIntegracoes() {
     });
     }
     if (gU.includes('transmite')) html += intCaixaTransmite(B, d.hoje, nivelGrupo('transmite'));
+    if (gU.includes('crm')) html += intCaixaCrm(B, d, nivelGrupo('crm'));
+    if (gU.includes('eai')) html += intCaixaEai(B, d, nivelGrupo('eai'));
   }
   const serie = (d.serie || []).slice().reverse();
   if (serie.length || (d.coletas || []).length) {
@@ -12387,6 +12434,411 @@ function intCaixaTransmite(B, hoje, nivel) {
        A ciência/confirmação em si fica no portal do Transmite — o painel lê só o lado Protheus.</p>`);
 }
 
+// ── Grupo CRM × iPaaS (Dígitro, 30/10/2026) ─────────────────────────────────
+// A pergunta: "a proposta que o comercial ganhou no CRM virou projeto,
+// contrato e medição — e o que parou no caminho?". O funil segue a CHAVE do
+// contrato gravada na ZA3 (ZA3_CONTRA), nunca o número da proposta (P10).
+const intCod = (mapa, v) => intNw(v ? `${v}${mapa[v] ? ' · ' + mapa[v] : ''}` : '(vazio)');
+const intCausaChip = (c) => {
+  const k = INT_CRM_CAUSA[c] || INT_CRM_CAUSA.outros;
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap bg-indigo-50 text-indigo-800" title="${escapeHtml(k.quem)}">${k.ico} ${escapeHtml(k.rot)}</span>`;
+};
+const intHora = (d, h) => `${intData(d)} ${escapeHtml(String(h || '').slice(0, 5))}`;
+
+/** Os números do funil, tirados dos blocos (null = bloco não lido). */
+function intCrmFunil(B) {
+  const um = (b) => (b && b.ok ? (b.linhas || [])[0] || {} : null);
+  const soma = (b, k, filtro = () => true) => (b && b.ok ? (b.linhas || []).filter(filtro)
+    .reduce((t, x) => t + (parseInt(x[k], 10) || 0), 0) : null);
+  const t = um(B.crm_totais);
+  const rast = B.crm_rastreio_lista;
+  const medidos = rast && rast.ok && !rast.truncado
+    ? new Set(rast.linhas.filter(x => parseInt(x.MEDICOES, 10) > 0).map(x => x.CONTRATO)).size
+    : soma(B.crm_medicoes, 'CONTRATOS');
+  return [
+    { k: 'recebidas', rot: 'Propostas recebidas', v: t ? +t.PROPOSTAS || 0 : null, sub: t ? `${+t.MENSAGENS || 0} mensagem(ns) do iPaaS` : 'ZA3' },
+    { k: 'liberadas', rot: 'Liberadas (Etapa 1)', v: t ? +t.LIBERADAS || 0 : null, sub: 'STG1 = L', vs: 'recebidas', alerta: true },
+    { k: 'tratadas', rot: 'Tratadas (Etapa 2)', v: t ? +t.TRATADAS || 0 : null, sub: 'STG2 = S', vs: 'liberadas', alerta: true },
+    { k: 'projetos', rot: 'Projetos gerados', v: soma(B.crm_projetos, 'QTD'), sub: 'ZA0 · 1 por OV' },
+    // Contrato é 1 por PROPOSTA: compara com as tratadas, não com os projetos (1 por OV).
+    { k: 'contratos', rot: 'Contratos gerados', v: soma(B.crm_contratos, 'CONTRATOS', x => x.SITUAC !== '10'), sub: 'CN9 · 1 por proposta', vs: 'tratadas', alerta: true },
+    // A medição vem depois, pelo cronograma: "x de N", sem cor de alerta.
+    { k: 'medidos', rot: 'Contratos medidos', v: medidos, sub: `${soma(B.crm_medicoes, 'QTD') ?? '—'} medição(ões) · CND`, vs: 'contratos' },
+    { k: 'retorno', rot: 'Retorno ao CRM', v: t ? +t.RETORNADAS || 0 : null, sub: 'ZA3_STIPA · não implementado (P11)' },
+  ];
+}
+
+function intCrmFunilHtml(B) {
+  const f = intCrmFunil(B);
+  const val = Object.fromEntries(f.map(x => [x.k, x.v]));
+  return `<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 mb-4" aria-label="Funil da integração">${f.map((x, k) => {
+    const ant = x.vs ? val[x.vs] : null;
+    const queda = x.alerta && ant != null && x.v != null && x.v < ant;
+    const de = !x.alerta && ant != null && x.v != null ? ` · de ${ant}` : '';
+    return `<div class="rounded-lg border ${queda ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-white'} px-3 py-2" data-int-funil="${x.k}">
+      <p class="text-[11px] font-semibold text-slate-600 leading-tight">${k ? '→ ' : ''}${escapeHtml(x.rot)}</p>
+      <p class="text-xl font-totvs text-totvs-petroleo tabular-nums mt-0.5">${x.v == null ? '—' : x.v}</p>
+      <p class="text-[11px] text-slate-500 leading-snug">${escapeHtml(x.sub)}${escapeHtml(de)}${queda ? ` · <b class="text-amber-800">! ${ant - x.v} a menos que ${escapeHtml(f.find(y => y.k === x.vs).rot.toLowerCase())}</b>` : ''}</p></div>`;
+  }).join('')}</div>`;
+}
+
+/** Produção × Teste: os indicadores do grupo nas duas bases, lado a lado. */
+const intCrmDuasBases = (u, d) => intDuasBasesGrupo(u, d, 'crm');
+function intDuasBasesGrupo(u, d, grupo) {
+  const outra = d.outra || {};
+  const labA = (AMB[integ.ambiente] || AMB.producao).label;
+  const labB = (AMB[outra.ambiente] || AMB.teste).label;
+  const indsA = (u.indicadores || []).filter(i => i.grupo === grupo);
+  const ouU = outra.ultima;
+  const indsB = (ouU?.indicadores || []).filter(i => i.grupo === grupo);
+  let aviso = '';
+  if (!outra.cadastrada) aviso = `${labB} não cadastrada no ⚙ Ambiente.`;
+  else if (!ouU) aviso = `${labB} ainda sem coleta.`;
+  else if (!indsB.length) aviso = `A última coleta da ${labB} não leu o grupo ${INT_GRUPO(grupo)?.rot || grupo}${(outra.integ_grupos || []).includes(grupo) ? '' : ' (grupo desligado lá)'}.`;
+  const cel = (i) => i ? `<div class="flex items-center gap-2 justify-end"><span class="tabular-nums">${escapeHtml(String(i.valor ?? '—'))}</span>${intPill(i.nivel)}</div>`
+                       : '<span class="text-slate-400">—</span>';
+  const linhas = indsA.map(a => ({ a, b: indsB.find(x => x.chave === a.chave) }));
+  return `<div class="mb-4" data-int-duas>
+    <div class="flex items-center justify-between gap-2 mb-1 flex-wrap">
+      <h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide">${escapeHtml(labA)} × ${escapeHtml(labB)}</h4>
+      <button data-int-duas-btn class="px-2.5 py-1 rounded-md border border-totvs-blue text-xs font-semibold text-totvs-petroleo hover:bg-sky-50 disabled:opacity-50" ${integ.coletando ? 'disabled' : ''}>⚡ Coletar nas duas bases</button></div>
+    ${intTabela([{ rot: 'Indicador', fmt: x => escapeHtml(x.a.rotulo) },
+                 { rot: `${labA} · ${intQuando(u.coletado_em)}`, dir: 1, fmt: x => cel(x.a) },
+                 { rot: `${labB}${ouU ? ' · ' + intQuando(ouU.coletado_em) : ''}`, dir: 1, fmt: x => cel(x.b) }],
+                linhas, 'Sem indicadores do grupo nesta coleta.')}
+    ${aviso ? `<p class="text-xs text-amber-800 mt-1">${escapeHtml(aviso)}</p>` : ''}
+    <p class="text-xs text-slate-500 mt-1">${grupo === 'crm'
+      ? `Decisão de 27/10: a integração roda plugada na produção do CRM e do Protheus. A Base de
+       Testes mostra o que foi exercitado nos protótipos; a Produção, a prontidão dos cadastros e o fluxo real.`
+      : `Cada base tem a sua fila (XX3), o seu de-para (XXF) e os seus agendamentos: o Schedule de uma não
+       processa a fila da outra.`}</p></div>`;
+}
+
+function intCaixaCrm(B, d, nivel) {
+  const u = d.ultima || {};
+  const g = INT_GRUPO('crm');
+  return intCaixa('crm', 'CRM × iPaaS — da proposta ao contrato e à medição', g.sub, nivel, () =>
+    intCrmFunilHtml(B) +
+    intCrmDuasBases(u, d) +
+    intSub('Propostas com erro ou paradas na fila (ZA3)', B.crm_pendentes_lista, (ls) => intTabela([
+      { rot: 'Entrada', fmt: l => intHora(l.DTINC, l.HRINC) },
+      { k: 'IDCRM', rot: 'ID oportunidade (CRM)' },
+      { rot: 'Etapa 1', fmt: l => intCod(INT_CRM_STG1, l.STG1) }, { rot: 'Etapa 2', fmt: l => intCod(INT_CRM_STG2, l.STG2) },
+      { k: 'ETAPA', rot: 'Último passo' },
+      { rot: 'Causa', fmt: l => l.CAUSA ? intCausaChip(l.CAUSA) : '<span class="text-slate-400">na fila</span>' },
+      { rot: 'Já com sucesso depois?', fmt: l => escapeHtml(l.JA_OK === 'S' ? 'sim (erro antigo)' : 'não') },
+      ...(ls.some(l => 'ERRO' in l) ? [{ rot: 'Erro (ZA3_ERRO)', fmt: l => {
+        const t = String(l.ERRO || '').trim();
+        return t ? `<span class="text-slate-600" title="${escapeHtml(t)}">${escapeHtml(t.length > 160 ? t.slice(0, 160) + '…' : t)}</span>` : '<span class="text-slate-400">—</span>';
+      } }] : [])], ls, 'Nenhuma proposta com erro ou parada.') +
+      (B.crm_pendentes_lista?.aviso_variante && !ls.some(l => 'ERRO' in l)
+        ? `<p class="text-xs text-amber-800 mt-1">A base não devolveu o texto do erro (ZA3_ERRO): ${escapeHtml(B.crm_pendentes_lista.aviso_variante)}</p>` : '')) +
+    intSub('Rastreio: proposta → projetos → contrato → medições', B.crm_rastreio_lista, (ls) => intTabela([
+      { rot: 'Entrada', fmt: l => intHora(l.DTINC, l.HRINC) }, { rot: 'Gerado', fmt: l => intHora(l.DTFIM, l.HRFIM) },
+      { k: 'IDCRM', rot: 'ID oportunidade' }, { k: 'PROPOSTA', rot: 'Proposta (ZA0_PROPOS)' },
+      { k: 'PROJETOS', rot: 'Projetos', dir: 1 }, { k: 'CONTRATO', rot: 'Contrato' },
+      { rot: 'Situação do contrato', fmt: l => l.SITUAC ? intCod(INT_CN9_SIT, l.SITUAC) : '<b class="text-rose-700">✕ não está na CN9</b>' },
+      { k: 'MEDICOES', rot: 'Medições', dir: 1 },
+      { rot: 'Retorno CRM', fmt: l => intCod(INT_CRM_STIPA, l.STIPA) }], ls, 'Nenhuma proposta gerou contrato ainda.')) +
+    intSub('Registros por etapa (ZA3)', B.crm_situacao, (ls) => intTabela([
+      { rot: 'Etapa 1', fmt: l => intCod(INT_CRM_STG1, l.STG1) }, { rot: 'Etapa 2', fmt: l => intCod(INT_CRM_STG2, l.STG2) },
+      { rot: 'Retorno', fmt: l => intCod(INT_CRM_STIPA, l.STIPA) },
+      { k: 'QTD', rot: 'Registros', dir: 1 }, { k: 'PROPOSTAS', rot: 'Propostas', dir: 1 },
+      { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
+      ls, 'Nenhuma proposta recebida.')) +
+    intSub('Projetos gerados (ZA0)', B.crm_projetos, (ls) => intTabela([
+      { rot: 'Tipo', fmt: l => intCod(INT_CRM_TPPROD, l.TPPROD) }, { rot: 'Situação', fmt: l => intCod(INT_CRM_ZA0, l.STATUS) },
+      { k: 'QTD', rot: 'Projetos', dir: 1 }, { k: 'CONTRATOS', rot: 'Contratos', dir: 1 },
+      { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
+      ls, 'Nenhum projeto gerado pela integração.')) +
+    intSub('Contratos gerados (CN9)', B.crm_contratos, (ls) => intTabela([
+      { rot: 'Situação', fmt: l => intCod(INT_CN9_SIT, l.SITUAC) }, { k: 'CONTRATOS', rot: 'Contratos', dir: 1 },
+      { k: 'REVISOES', rot: 'Linhas (revisões)', dir: 1 }, { rot: 'Início mais antigo', fmt: l => intData(l.INICIO_MAIS_ANTIGO) }],
+      ls, 'Nenhum contrato gerado pela integração.')) +
+    intSub('Medições dos contratos gerados (CND)', B.crm_medicoes, (ls) => intTabela([
+      { rot: 'Situação', fmt: l => intCod(INT_CND_SIT, l.SITUAC) }, { k: 'QTD', rot: 'Medições', dir: 1 },
+      { k: 'CONTRATOS', rot: 'Contratos', dir: 1 },
+      ...(ls.some(l => 'COM_PEDIDO' in l) ? [{ k: 'COM_PEDIDO', rot: 'Com pedido de venda', dir: 1 }] : [])],
+      ls, 'Nenhuma medição nos contratos gerados pela integração.')) +
+    `<h4 class="text-xs font-semibold text-totvs-petroleo uppercase tracking-wide mt-5 mb-2 border-t border-slate-100 pt-3">Protheus → CRM · produtos e tabelas de preço</h4>
+     <p class="text-xs text-slate-500 mb-3">O gatilho, a API e a periodicidade do envio ao CRM ainda não foram definidos (P1). Por isso o painel mede a
+       <b>prontidão</b> (produto ativo com preço em tabela vigente) e o <b>efeito</b> (proposta barrada por cadastro, na causa do erro acima).</p>` +
+    intSub('Produtos ativos por tipo (sem os PRJ criados pela integração)', B.crm_cad_produtos, (ls) => intTabela([
+      { k: 'TIPO', rot: 'Tipo' }, { k: 'ATIVOS', rot: 'Ativos', dir: 1 }, { k: 'COM_PRECO', rot: 'Com preço vigente', dir: 1 },
+      { rot: '% com preço', dir: 1, fmt: l => `${Math.round(100 * (+l.COM_PRECO || 0) / Math.max(1, +l.ATIVOS || 0))}%` },
+      ...(ls.some(l => 'COM_ZFATURA' in l) ? [{ k: 'COM_ZFATURA', rot: 'Com B1_ZFATURA', dir: 1 }] : [])],
+      ls, 'Nenhum produto ativo.')) +
+    intSub('Tabelas de preço (DA0)', B.crm_cad_tabelas, (ls) => intTabela([
+      { k: 'TABELA', rot: 'Tabela' }, { k: 'DESCRICAO', rot: 'Descrição' },
+      { rot: 'Ativa', fmt: l => escapeHtml(l.ATIVO === '1' ? 'sim' : 'não') },
+      { rot: 'Vigência', fmt: l => `${intData(l.DE)} → ${String(l.ATE || '').trim() ? intData(l.ATE) : 'sem fim'}` },
+      { k: 'ITENS', rot: 'Itens', dir: 1 }, { k: 'COM_PRECO', rot: 'Com preço', dir: 1 }], ls, 'Nenhuma tabela de preço cadastrada.')) +
+    intSub('Produtos ativos sem preço em tabela vigente', B.crm_sem_preco_lista, (ls) => intTabela([
+      { k: 'PRODUTO', rot: 'Produto' }, { k: 'DESCRICAO', rot: 'Descrição' }, { k: 'TIPO', rot: 'Tipo' }, { k: 'GRUPO', rot: 'Grupo' }],
+      ls, 'Todo produto ativo tem preço vigente.')) +
+    intSub('Parâmetros da integração (SX6)', B.crm_config, (ls) => intTabela([
+      { k: 'PARAMETRO', rot: 'Parâmetro' }, { rot: 'Filial', fmt: l => escapeHtml(l.FILIAL || '(todas)') },
+      { k: 'CONTEUDO', rot: 'Conteúdo' }], ls, 'Nenhum dos parâmetros existe nesta base.')) +
+    `<p class="text-xs text-slate-500">Caminho: proposta ganha no CRM → iPaaS → <b>POST /api/v1/CRMIntegracao</b> grava a <b>ZA3</b>
+       (Etapa 1) → job <b>U_CRMPROJT</b> ou Sincronizar (DIG00A05) gera, numa transação só, um projeto por Ordem de Venda (ZA0),
+       o item contábil e um contrato por oportunidade (CN9) com uma planilha por projeto (Etapa 2). Erro = nada gravado: corrija o
+       cadastro e sincronize. A medição (CND) não é gerada pela integração. Tokens (MV_ZCRMTOK, MV_ZLIC*) aparecem só como “(preenchido)”.</p>`);
+}
+
+// ── Grupo EAI Protheus × Schedule (Dígitro, 30/10/2026) ─────────────────────
+// A pergunta: "o cadastro que o Protheus manda pela Mensagem Única chegou e
+// VOLTOU?". O envio sai na hora (canal 3, iPaaS); o retorno só vira
+// Finalizada + de-para na XXF quando o FWEAIRECE processa a ResponseMessage.
+// XX3_STATUS: ordem da legenda da TDN (0–7), sempre com o código ao lado.
+const INT_EAI_ST = { 0: 'Aguardando execução', 1: 'Executando', 2: 'Finalizada', 3: 'Falhou', 4: 'Bloqueado',
+                     5: 'Não entregue', 6: 'Recusada', 7: 'Entregue' };
+const INT_EAI_ST_COR = { 2: 'bg-emerald-50 text-emerald-800', 7: 'bg-amber-50 text-amber-800',
+                         3: 'bg-rose-50 text-rose-800', 5: 'bg-rose-50 text-rose-800', 6: 'bg-rose-50 text-rose-800' };
+const INT_EAI_CANAL = { 1: 'ESB', 2: 'EAI · Web Service', 3: 'EAI · PAD.APP (iPaaS)' };
+const INT_EAI_METODO = { 1: 'Síncrono', 2: 'Assíncrono' };
+const INT_EAI_SN = { 1: 'sim', 2: 'não' };
+const INT_EAI_TPTRAN = { 1: 'envio', 2: 'recebimento' };
+const intEaiSt = (v) => {
+  const k = String(v ?? '').trim();
+  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${INT_EAI_ST_COR[k] || 'bg-slate-100 text-slate-700'}">${escapeHtml(k || '?')} · ${escapeHtml(INT_EAI_ST[k] || 'código não documentado')}</span>`;
+};
+const intIdadeTxt = (min) => min == null ? '—' : min < 60 ? `${min} min` : min < 1440
+  ? `${Math.floor(min / 60)} h ${min % 60} min` : `${Math.floor(min / 1440)} d ${Math.floor((min % 1440) / 60)} h`;
+/** Minutos entre AAAAMMDD + HH:MM e agora (relógio do navegador). */
+const intIdadeMin = (dia, hora) => {
+  const s = String(dia || '').trim();
+  if (!/^\d{8}$/.test(s)) return null;
+  const [hh, mm] = String(hora || '00:00').split(':').map(x => parseInt(x, 10) || 0);
+  const t = new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6), hh, mm);
+  return Math.max(0, Math.round((Date.now() - t.getTime()) / 60000));
+};
+
+/** O caminho de uma mensagem, contado pelos blocos (null = bloco não lido). */
+function intEaiFunil(B) {
+  const st = B.eai_status?.ok ? B.eai_status.linhas || [] : null;
+  const soma = (f) => st ? st.filter(f).reduce((t, x) => t + (parseInt(x.QTD, 10) || 0), 0) : null;
+  const envio = (x) => String(x.TPTRAN || '1') === '1';
+  const xxf = B.eai_depara?.ok ? (B.eai_depara.linhas || []).reduce((t, x) => t + (parseInt(x.QTD, 10) || 0), 0) : null;
+  return [
+    { k: 'fila', rot: 'Na fila (XX3)', v: soma(envio), sub: 'mensagens de envio' },
+    { k: 'aguardando', rot: 'Aguardando envio', v: soma(x => envio(x) && ['0', '1'].includes(String(x.STATUS))), sub: 'status 0 · 1' },
+    { k: 'falha', rot: 'Com falha', v: soma(x => envio(x) && ['3', '5', '6'].includes(String(x.STATUS))), sub: 'falhou · não entregue · recusada' },
+    { k: 'entregue', rot: 'Entregues sem retorno', v: soma(x => envio(x) && String(x.STATUS) === '7'), sub: 'esperam a ResponseMessage' },
+    { k: 'finalizada', rot: 'Finalizadas', v: soma(x => envio(x) && String(x.STATUS) === '2'), sub: 'o FWEAICLEAR apaga as antigas' },
+    { k: 'depara', rot: 'De-para gravado', v: xxf, sub: 'XXF · ID do outro sistema' },
+  ];
+}
+
+function intEaiFunilHtml(B) {
+  const f = intEaiFunil(B);
+  const ruim = { falha: 1, entregue: 1 };
+  return `<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 mb-4" aria-label="Caminho da mensagem">${f.map((x, k) => {
+    const alerta = ruim[x.k] && x.v > 0 || (x.k === 'depara' && x.v === 0 && (f[0].v || 0) > 0);
+    return `<div class="rounded-lg border ${alerta ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-white'} px-3 py-2" data-int-funil="${x.k}">
+      <p class="text-[11px] font-semibold text-slate-600 leading-tight">${k ? '→ ' : ''}${escapeHtml(x.rot)}</p>
+      <p class="text-xl font-totvs text-totvs-petroleo tabular-nums mt-0.5">${x.v == null ? '—' : x.v}</p>
+      <p class="text-[11px] text-slate-500 leading-snug">${escapeHtml(x.sub)}${alerta ? ' · <b class="text-amber-800">! atenção</b>' : ''}</p></div>`;
+  }).join('')}</div>`;
+}
+
+/** Por tipo de informação (Clientes, Fornecedores, Produtos…): uma linha por
+ *  tipo com o nível dele; clicar abre adapters, status, abertas e últimas. */
+function intEaiTipos(B) {
+  const pt = B.eai_por_tipo;
+  if (!pt) return intSub('Por tipo de informação', null, () => '');
+  const msgsDe = (t) => String(t.MENSAGENS || '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+  // Tipo sem adapter de envio não "herda" a fila da mensagem compartilhada
+  // (CUSTOMERVENDOR de clientes não aparece em Fornecedores).
+  const filtra = (b, t) => t.ENVIA !== 'S' ? [] : (b?.ok ? b.linhas || [] : [])
+    .filter(l => msgsDe(t).includes(String(l.MENSAGEM || '').toUpperCase()));
+  const num = (v) => v == null ? '<span class="text-slate-400">—</span>' : escapeHtml(String(v));
+  const detalhe = (t) => {
+    const ads = (B.eai_adapters?.ok ? B.eai_adapters.linhas : [])
+      .filter(a => String(t.ROTINAS || '').split(',').map(x => x.trim()).includes(String(a.ROTINA || '').toUpperCase()));
+    const st = Object.entries(t.STATUS || {}).map(([k, q]) => ({ k, q })).sort((a, b) => b.q - a.q);
+    const abertas = filtra(B.eai_pendentes_lista, t);
+    const ultimas = filtra(B.eai_ultimas_lista, t);
+    return `<div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+      <div><h5 class="text-[11px] font-semibold text-slate-600 uppercase mb-1">Adapters (XX4)</h5>${intTabela([
+        { k: 'ROTINA', rot: 'Rotina' }, { k: 'MENSAGEM', rot: 'Mensagem' },
+        { rot: 'Envia', fmt: l => escapeHtml(INT_EAI_SN[l.ENVIA] || l.ENVIA || '') },
+        { rot: 'Recebe', fmt: l => escapeHtml(INT_EAI_SN[l.RECEBE] || l.RECEBE || '') },
+        { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+        { rot: 'Condição de envio', fmt: l => l.CONDICAO ? `<code class="text-[11px]">${escapeHtml(l.CONDICAO)}</code>` : '<span class="text-slate-400">—</span>' }],
+        ads, `Nenhum adapter ${t.ROTINAS} cadastrado: o tipo não sobe por Mensagem Única.`)}</div>
+      <div><h5 class="text-[11px] font-semibold text-slate-600 uppercase mb-1">Mensagens por status (XX3)</h5>${intTabela([
+        { rot: 'Status', fmt: l => intEaiSt(l.k) }, { rot: 'Mensagens', dir: 1, fmt: l => escapeHtml(String(l.q)) }],
+        st, 'Nada na fila do EAI para este tipo.')}
+        <p class="text-[11px] text-slate-500 mt-1">Cadastro ${escapeHtml(t.ALIAS)}: ${num(t.REGISTROS)} registro(s)${t.ITENS != null ? ` · DA1: ${escapeHtml(String(t.ITENS))} item(ns)` : ''} · de-para na XXF: ${num(t.DEPARA)}</p></div>
+    </div>
+    <h5 class="text-[11px] font-semibold text-slate-600 uppercase mt-3 mb-1">Abertas mais antigas (até 30 por mensagem)</h5>${intTabela([
+      { rot: 'Gerada', fmt: l => intHora(l.DIA, l.HORA) },
+      { rot: 'Idade', dir: 1, fmt: l => escapeHtml(intIdadeTxt(intIdadeMin(l.DIA, l.HORA))) },
+      { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) }, { k: 'TENTATIVAS', rot: 'Tentativas', dir: 1 },
+      { k: 'EVENTO', rot: 'Evento' },
+      { rot: 'Retorno', fmt: l => { const r = String(l.RETORNO || '').trim();
+        return r ? `<span class="text-slate-600" title="${escapeHtml(r)}">${escapeHtml(r.length > 120 ? r.slice(0, 120) + '…' : r)}</span>` : '<span class="text-slate-400">—</span>'; } }],
+      abertas, 'Nenhuma mensagem aberta deste tipo.')}
+    <h5 class="text-[11px] font-semibold text-slate-600 uppercase mt-3 mb-1">Últimas mensagens (até 10 por mensagem)</h5>${intTabela([
+      { rot: 'Gerada', fmt: l => intHora(l.DIA, l.HORA) }, { k: 'MENSAGEM', rot: 'Mensagem' },
+      { rot: 'Status', fmt: l => intEaiSt(l.STATUS) }, { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+      { k: 'TENTATIVAS', rot: 'Tentativas', dir: 1 },
+      { rot: 'Processada', fmt: l => String(l.PROC_DIA || '').trim() ? intHora(l.PROC_DIA, l.PROC_HORA) : '<span class="text-slate-400">—</span>' },
+      { k: 'EVENTO', rot: 'Evento' }], ultimas, 'Nenhuma mensagem deste tipo na fila (pode ter sido limpa pelo FWEAICLEAR).')}`;
+  };
+  const linhas = pt.linhas || [];
+  const ths = ['Tipo de informação', 'Situação', 'Cadastro', 'Na fila', 'Com falha', 'Entregues sem retorno', 'Finalizadas', 'De-para (XXF)', 'Último envio'];
+  return `<div class="mb-4" data-eai-tipos><div class="flex items-center justify-between gap-2 mb-1 flex-wrap">
+      <h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide">Por tipo de informação</h4>
+      <span class="text-[11px] text-slate-500">clique no tipo para abrir · <button data-eai-tipo-todos class="underline">${integ.eaiTipos.size ? 'fechar todos' : 'abrir todos'}</button></span></div>
+    <div class="overflow-x-auto"><table class="w-full text-xs border border-slate-200 rounded">
+      <thead class="bg-slate-50 text-slate-600"><tr>${ths.map((h, k) => `<th class="px-2 py-1.5 font-semibold text-${k >= 2 ? 'right' : 'left'}">${h}</th>`).join('')}</tr></thead>
+      <tbody>${linhas.map(t => {
+        const aberto = integ.eaiTipos.has(t.TIPO);
+        const ent = t.ENTREGUES ? `${t.ENTREGUES}${t.IDADE_ENTREGUE_MIN != null ? ` <span class="text-slate-500">(há ${escapeHtml(intIdadeTxt(t.IDADE_ENTREGUE_MIN))})</span>` : ''}` : '0';
+        return `<tr class="border-t border-slate-100 cursor-pointer hover:bg-sky-50/50" data-eai-tipo="${escapeHtml(t.TIPO)}" aria-expanded="${aberto}">
+          <td class="px-2 py-1.5"><span class="font-semibold text-totvs-petroleo">${aberto ? '▾' : '▸'} ${escapeHtml(t.ROTULO)}</span>
+            <span class="block text-[11px] text-slate-500">${escapeHtml(t.MENSAGENS)} · ${escapeHtml(t.ALIAS)}</span></td>
+          <td class="px-2 py-1.5">${intPill(t.NIVEL)}<span class="block text-[11px] text-slate-600 mt-0.5 max-w-xs">${escapeHtml(t.TEXTO || '')}</span></td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${num(t.REGISTROS)}${t.ITENS != null ? `<span class="block text-[11px] text-slate-500">${escapeHtml(String(t.ITENS))} itens</span>` : ''}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${num(t.FILA)}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${t.FALHAS ? `<b class="text-rose-700">${t.FALHAS}</b>${t.ESGOTADAS ? `<span class="block text-[11px] text-rose-700">${t.ESGOTADAS} com 4+ tent.</span>` : ''}` : '0'}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${ent}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${num(t.FINALIZADAS)}</td>
+          <td class="px-2 py-1.5 text-right tabular-nums">${t.DEPARA === 0 && t.FILA ? '<b class="text-amber-800">0 · vazio</b>' : num(t.DEPARA)}</td>
+          <td class="px-2 py-1.5 text-right">${t.ULTIMA ? intData(t.ULTIMA) : '<span class="text-slate-400">nunca</span>'}</td></tr>
+          ${aberto ? `<tr class="bg-slate-50/60" data-eai-tipo-det="${escapeHtml(t.TIPO)}"><td colspan="9" class="px-3 py-3">${detalhe(t)}</td></tr>` : ''}`;
+      }).join('')}</tbody></table></div>
+    <p class="text-[11px] text-slate-500 mt-1">Cliente e fornecedor usam a mesma mensagem (CUSTOMERVENDOR): a fila vai para o tipo cujo adapter envia; a XXF separa pelo alias (SA1 × SA2). Filiais (SM0) não têm contagem por SQL.</p></div>`;
+}
+
+/** Agendamentos com o de/para empresa-filial (XX2) e as tarefas (SCHDTSK). */
+function intEaiAgendamentos(B) {
+  const emp = {};
+  (B.eai_agend_empfil?.ok ? B.eai_agend_empfil.linhas : []).forEach(x => {
+    (emp[x.CODIGO] = emp[x.CODIGO] || []).push(x.EMPFIL);
+  });
+  const tsk = {};
+  (B.eai_tarefas?.ok ? B.eai_tarefas.linhas : []).forEach(x => {
+    (tsk[x.CODIGO] = tsk[x.CODIGO] || []).push(`${x.QTD} · status ${x.STATUS}`);
+  });
+  return intSub('Agendamentos (XX1 · XX2 · SCHDTSK)', B.eai_agendamentos, (ls) => intTabela([
+    { k: 'CODIGO', rot: 'Código' },
+    { rot: 'Rotina', fmt: l => `${escapeHtml(l.ROTINA || '')}${l.EAI === 'S' ? ' <span class="text-[10px] px-1.5 rounded bg-sky-50 text-sky-800 font-semibold">EAI</span>' : ''}` },
+    { k: 'AMBIENTE', rot: 'Ambiente' },
+    { rot: 'Empresa/filial', fmt: l => escapeHtml((emp[l.CODIGO] || []).join(' · ') || '—') },
+    { rot: 'Recorrência', fmt: l => { const t = String(l.RECORR || '').trim();
+      return t ? `<span class="text-slate-600" title="${escapeHtml(t)}">${escapeHtml(t.length > 60 ? t.slice(0, 60) + '…' : t)}</span>` : '<span class="text-slate-400">—</span>'; } },
+    { rot: 'Início', fmt: l => intHora(l.INICIO, l.HORA) },
+    { rot: 'Última execução', fmt: l => String(l.ULTDIA || '').trim()
+      ? `${intHora(l.ULTDIA, l.ULTHOR)} <span class="text-slate-500">(há ${escapeHtml(intIdadeTxt(intIdadeMin(l.ULTDIA, l.ULTHOR)))})</span>`
+      : '<b class="text-rose-700">✕ nunca executou</b>' },
+    { rot: 'Tarefas (qtd · status)', fmt: l => escapeHtml((tsk[l.CODIGO] || []).join(' | ') || '—') }],
+    ls, 'Nenhum agendamento na XX1 desta base.'));
+}
+
+function intCaixaEai(B, d, nivel) {
+  const u = d.ultima || {};
+  const g = INT_GRUPO('eai');
+  return intCaixa('eai', 'EAI Protheus × Schedule — o cadastro saiu e voltou?', g.sub, nivel, () =>
+    intEaiFunilHtml(B) +
+    intEaiTipos(B) +
+    intDuasBasesGrupo(u, d, 'eai') +
+    intSub('Fila por mensagem, status e canal (XX3)', B.eai_status, (ls) => intTabela([
+      { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+      { rot: 'Sentido', fmt: l => escapeHtml(INT_EAI_TPTRAN[l.TPTRAN] || l.TPTRAN || '') },
+      { k: 'QTD', rot: 'Mensagens', dir: 1 }, { k: 'ESGOTADAS', rot: '4+ tentativas', dir: 1 },
+      { k: 'COM_DESTINO', rot: 'Com destino', dir: 1 },
+      { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGA) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
+      ls, 'Fila do EAI vazia.')) +
+    intSub('Mensagens abertas, das mais antigas (até 30 por mensagem)', B.eai_pendentes_lista, (ls) => intTabela([
+      { rot: 'Gerada', fmt: l => intHora(l.DIA, l.HORA) },
+      { rot: 'Idade', dir: 1, fmt: l => escapeHtml(intIdadeTxt(intIdadeMin(l.DIA, l.HORA))) },
+      { k: 'MENSAGEM', rot: 'Mensagem' }, { rot: 'Status', fmt: l => intEaiSt(l.STATUS) },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) },
+      { k: 'TENTATIVAS', rot: 'Tentativas', dir: 1 }, { k: 'EVENTO', rot: 'Evento' },
+      { rot: 'Destino', fmt: l => escapeHtml(l.COM_DESTINO === 'S' ? (l.WEBSERVICE ? `sim · ${l.WEBSERVICE}` : 'sim') : (l.WEBSERVICE || 'não')) },
+      ...(ls.some(l => 'RETORNO' in l) ? [{ rot: 'Retorno (XX3_RETURN)', fmt: l => {
+        const t = String(l.RETORNO || '').trim();
+        return t ? `<span class="text-slate-600" title="${escapeHtml(t)}">${escapeHtml(t.length > 140 ? t.slice(0, 140) + '…' : t)}</span>` : '<span class="text-slate-400">—</span>';
+      } }] : [])], ls, 'Nenhuma mensagem aberta.')) +
+    intSub('Adapters cadastrados (XX4)', B.eai_adapters, (ls) => intTabela([
+      { k: 'ROTINA', rot: 'Rotina' }, { k: 'MENSAGEM', rot: 'Mensagem' }, { k: 'DESCRICAO', rot: 'Descrição' },
+      { rot: 'Envia', fmt: l => escapeHtml(INT_EAI_SN[l.ENVIA] || l.ENVIA || '') },
+      { rot: 'Recebe', fmt: l => escapeHtml(INT_EAI_SN[l.RECEBE] || l.RECEBE || '') },
+      { rot: 'Método', fmt: l => escapeHtml(INT_EAI_METODO[l.METODO] || l.METODO || '') },
+      { rot: 'Canal', fmt: l => intCod(INT_EAI_CANAL, l.CANAL) }, { k: 'VERSAO', rot: 'Versão' },
+      { rot: 'Condição de envio', fmt: l => l.CONDICAO ? `<code class="text-[11px]">${escapeHtml(l.CONDICAO)}</code>` : '<span class="text-slate-400">—</span>' }],
+      ls, 'Nenhum adapter cadastrado.')) +
+    intSub('De-para gravado (XXF)', B.eai_depara, (ls) => intTabela([
+      { k: 'ALIAS', rot: 'Alias' }, { k: 'REFERENCIA', rot: 'Referência (produto)' }, { k: 'MENSAGEM', rot: 'Mensagem dona' },
+      { k: 'QTD', rot: 'Registros', dir: 1 }], ls,
+      'XXF vazia: nenhum retorno processado. O de-para (ID do outro sistema × código Protheus) nasce no processamento da ResponseMessage.')) +
+    intSub('Tamanho dos cadastros que sobem por Mensagem Única', B.eai_cadastros, (ls) => intTabela([
+      { k: 'ALIAS', rot: 'Tabela' }, { k: 'QTD', rot: 'Registros', dir: 1 }], ls, 'Sem cadastro.')) +
+    `<h4 class="text-xs font-semibold text-totvs-petroleo uppercase tracking-wide mt-5 mb-2 border-t border-slate-100 pt-3">Schedule</h4>` +
+    intEaiAgendamentos(B) +
+    intSub('Agents (XX0)', B.eai_agents, (ls) => intTabela([
+      { k: 'CODIGO', rot: 'Código' }, { k: 'DESCRICAO', rot: 'Descrição' }, { rot: 'Endereço', fmt: l => escapeHtml(`${l.IP || ''}:${l.PORTA || ''}`) },
+      { k: 'AMBIENTE', rot: 'Ambiente' }, { k: 'THREADS', rot: 'Threads', dir: 1 }, { k: 'STATUS', rot: 'Status' },
+      { rot: 'Último sinal', fmt: l => intHora(l.ULTDIA, l.ULTHOR) }], ls, 'Nenhum agent cadastrado.')) +
+    intSub('Parâmetros do EAI (SX6)', B.eai_config, (ls) => intTabela([
+      { k: 'PARAMETRO', rot: 'Parâmetro' }, { rot: 'Filial', fmt: l => escapeHtml(l.FILIAL || '(todas)') },
+      { k: 'CONTEUDO', rot: 'Conteúdo' }], ls, 'Nenhum dos parâmetros existe nesta base.')) +
+    intSub('De-para de empresa/filial (XXD)', B.eai_empresa, (ls) => intTabela([
+      { k: 'REFERENCIA', rot: 'Referência' }, { rot: 'Externo', fmt: l => escapeHtml(`${l.EMPRESA_EXT || ''} / ${l.FILIAL_EXT || ''}`) },
+      { rot: 'Protheus', fmt: l => escapeHtml(`${l.EMPRESA || ''} / ${l.FILIAL || ''}`) }], ls, 'Nenhum de-para de empresa.')) +
+    `<p class="text-xs text-slate-500">Caminho: evento no cadastro → adapter (<b>XX4</b>) → fila <b>XX3</b> → envio pelo canal do adapter
+       (3 = iPaaS) → o destino devolve a <b>ResponseMessage</b> → o <b>FWEAIRECE</b> (Schedule) processa, grava o de-para na
+       <b>XXF</b> e finaliza. Falha com 4 tentativas só volta pelo “tentar novamente” (SIGACFG › Schedule › EAI). O
+       <b>FWEAICLEAR</b> apaga as finalizadas, por isso o painel mede o que ficou aberto e o de-para. A URL do iPaaS (com a
+       api-key) e o conteúdo da mensagem não são lidos.</p>`);
+}
+
+/** ⚡ Produção + Teste: coleta nas duas bases, uma depois da outra. Liga na
+ *  outra base os grupos de comparação (CRM, EAI) que estiverem desligados lá
+ *  (pergunta antes). */
+async function coletaDuasBases() {
+  if (!integ.customer || integ.coletando) return;
+  const outra = integ.dados?.outra || {};
+  const bases = ['producao', 'teste'];
+  const semCad = !outra.cadastrada;
+  const meus = intGruposCfg().filter(g => INT_GRUPOS_DUAS.includes(g));
+  const faltam = semCad ? [] : meus.filter(g => !(outra.integ_grupos || []).includes(g));
+  const ligar = faltam.length > 0;
+  const nomes = meus.map(g => INT_GRUPO(g)?.rot || g).join(' e ');
+  const labO = (AMB[outra.ambiente] || AMB.teste).label;
+  if (!confirm(`Coletar ${nomes} na Base Produção e na Base de Testes?\n\nConsultas só de leitura pela REST de ` +
+               `cada base (TSCMONITREST), uma depois da outra — até ~50 s cada. Cada chamada usa licença no REST.` +
+               (semCad ? `\n\n${labO} não está cadastrada no ⚙ Ambiente: só esta base será coletada.` : '') +
+               (ligar ? `\n\n${faltam.map(g => INT_GRUPO(g)?.rot || g).join(' e ')} desligado(s) na ${labO}: será(ão) ligado(s) lá (os grupos que ela já monitora continuam).` : ''))) return;
+  integ.coletando = true; integ.erroColeta = null; integ.duas = { atual: null, falhas: [] };
+  renderIntegracoes();
+  const cli = encodeURIComponent(integ.customer);
+  try {
+    if (ligar) {
+      await api(`/api/integracoes/${cli}/grupos?ambiente=${outra.ambiente}`,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ grupos: [...(outra.integ_grupos || []), ...faltam] }) });
+    }
+    for (const amb of bases) {
+      if (amb !== integ.ambiente && semCad) continue;
+      integ.duas.atual = amb; renderIntegracoes();
+      try { await api(`/api/integracoes/${cli}/coletar?ambiente=${amb}`, { method: 'POST' }); }
+      catch (e) { integ.duas.falhas.push(`${(AMB[amb] || {}).label || amb}: ${e.message}`); }
+    }
+  } catch (e) {
+    integ.duas.falhas.push(e.message);
+  } finally {
+    integ.coletando = false;
+    integ.erroColeta = integ.duas.falhas.length ? integ.duas.falhas.join(' · ') : null;
+    integ.duas = null;
+    await carregaIntegracoes();
+  }
+}
+
 function ligaIntegracoes() {
   $$('#int-conteudo [data-int-caixa]').forEach(b => b.addEventListener('click', () => {
     const id = b.dataset.intCaixa;
@@ -12394,6 +12846,18 @@ function ligaIntegracoes() {
     renderIntegracoes();
   }));
   $$('#int-conteudo [data-int-amb]').forEach(b => b.addEventListener('click', abreAmbienteIntegracoes));
+  $$('#int-conteudo [data-int-duas-btn]').forEach(b => b.addEventListener('click', coletaDuasBases));
+  $$('#int-conteudo [data-eai-tipo]').forEach(tr => tr.addEventListener('click', () => {
+    const k = tr.dataset.eaiTipo;
+    integ.eaiTipos.has(k) ? integ.eaiTipos.delete(k) : integ.eaiTipos.add(k);
+    renderIntegracoes();
+  }));
+  $$('#int-conteudo [data-eai-tipo-todos]').forEach(b => b.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    const todos = (integ.dados?.ultima?.blocos?.eai_por_tipo?.linhas || []).map(t => t.TIPO);
+    integ.eaiTipos = integ.eaiTipos.size ? new Set() : new Set(todos);
+    renderIntegracoes();
+  }));
 }
 
 async function abreAmbienteIntegracoes() {
@@ -12431,6 +12895,7 @@ async function abreScriptsIntegracoes() {
 
 $('#int-coletar').addEventListener('click', coletaIntegracoes);
 $('#int-coletar-topo').addEventListener('click', coletaIntegracoes);
+$('#int-coletar-duas').addEventListener('click', coletaDuasBases);
 $('#int-scripts').addEventListener('click', abreScriptsIntegracoes);
 $('#int-ambiente').addEventListener('click', abreAmbienteIntegracoes);
 $('#int-reload').addEventListener('click', carregaIntegracoes);
