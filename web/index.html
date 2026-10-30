@@ -12955,6 +12955,8 @@ const TRIB_SIT = {
   iguais:   { rot: 'Igual', cls: 'bg-emerald-100 text-emerald-800', ico: '=' },
 };
 const TRIB_AMB = { p: 'Produção', t: 'Teste' };
+// Uma base só coletada: não há "só na Produção" — há "a outra base não foi lida".
+const tribUnica = (d) => !(d?.bases?.producao?.coleta && d?.bases?.teste?.coleta);
 const tribN = (v) => (v === null || v === undefined) ? '—' : Number(v).toLocaleString('pt-BR');
 const tribData = (s) => { const t = String(s || '').trim(); return /^\d{8}$/.test(t) ? `${t.slice(6, 8)}/${t.slice(4, 6)}/${t.slice(0, 4)}` : (t || '—'); };
 
@@ -13078,6 +13080,10 @@ function tribSit(s) {
 }
 
 function tribMigracao(d) {
+  if (tribUnica(d)) {
+    const falta = d.bases?.teste?.coleta ? 'Base Produção' : 'Base de Testes';
+    return `<p class="text-sm text-amber-800">A ${falta} ainda não foi coletada — sem ela não dá para dizer o que falta subir. Os achados da base lida estão em <b>Saúde das regras</b>.</p>`;
+  }
   const lst = d.migracao || [];
   const cmp = d.comparacao?.F2B;
   if (!cmp) return '<p class="text-sm text-slate-500">A Regra de Cálculo (F2B) ainda não foi lida nas duas bases.</p>';
@@ -13119,7 +13125,9 @@ function tribReforma(d) {
       Verde: a Produção já calcula. Amarelo: só o Teste tem. Vermelho: nenhuma das duas.</p>
     <div class="overflow-x-auto"><table class="text-sm border border-slate-200">
     <thead><tr class="bg-slate-50 text-xs text-slate-600"><th class="px-2 py-1.5 text-left">Tributo</th>${fils.map(f => `<th class="px-2 py-1.5">${escapeHtml(nomeFil(f))}</th>`).join('')}</tr></thead>
-    <tbody>${r.tributos.map(t => `<tr class="border-t border-slate-100"><td class="px-2 py-1.5 font-mono font-semibold">${escapeHtml(t)}</td>${fils.map(f => cel(t, f)).join('')}</tr>`).join('')}</tbody></table></div>`;
+    <tbody>${r.tributos.map(t => `<tr class="border-t border-slate-100"><td class="px-2 py-1.5 font-mono font-semibold">${escapeHtml(t)}</td>${fils.map(f => cel(t, f)).join('')}</tr>`).join('')}</tbody></table></div>
+    ${(r.sem_regra || []).length ? `<p class="text-xs text-slate-500 mt-2">Cadastrados no Cadastro de Tributo sem nenhuma regra vigente (informativo — em 2026 só a CBS e o IBS estadual têm alíquota de teste):
+      ${r.sem_regra.map(x => `<span class="font-mono" title="${escapeHtml(x.desc)}">${escapeHtml(x.trib)}</span>`).join(', ')}.</p>` : ''}`;
 }
 
 function tribSaude(d) {
@@ -13139,8 +13147,14 @@ function tribSaude(d) {
         : '<div class="text-xs text-emerald-700 mb-2">✓ Toda regra aponta para cadastros que existem.</div>'}
       ${k === 'p' && a.em_teste.length ? `<div class="text-xs font-semibold text-amber-800 mb-1">! ${a.em_teste.length} regra(s) vigente(s) com status de teste</div>
         <div class="text-xs text-slate-600 mb-2">${a.em_teste.slice(0, 50).map(x => `<span class="font-mono">${escapeHtml(x.regra)}</span> ${escapeHtml(x.trib)}`).join(' · ')}</div>` : ''}
+      ${(a.vence || []).length ? `<div class="text-xs font-semibold text-amber-800 mb-1">! ${a.vence.length} regra(s) vigente(s) terminando em breve</div>
+        <div class="text-xs text-slate-600 mb-2">${a.vence.map(x => `<span class="font-mono">${escapeHtml(x.regra)}</span> ${escapeHtml(x.trib)} até <b>${tribData(x.fim)}</b>`).join(' · ')}</div>` : ''}
+      ${(a.coerencia || []).length ? `<div class="text-xs font-semibold text-amber-800 mb-1">! ${a.coerencia.length} ponto(s) de coerência para conferir</div>
+        <table class="w-full text-xs mb-2"><tbody>${a.coerencia.slice(0, 200).map(x => `<tr class="border-b border-slate-100 align-top">
+          <td class="py-1 pr-2 font-mono whitespace-nowrap">${escapeHtml(x.regra)}</td>
+          <td class="pr-2">${escapeHtml(x.desc || '')}</td><td class="text-amber-800">${escapeHtml(x.texto)}</td></tr>`).join('')}</tbody></table>` : ''}
       ${a.orfaos.length ? `<details class="text-xs"><summary class="cursor-pointer text-slate-500">${a.orfaos.length} cadastro(s) que nenhuma regra usa (informativo)</summary>
-        <div class="mt-1 text-slate-600">${a.orfaos.slice(0, 300).map(x => `<span class="font-mono">${escapeHtml(x.tabela)} ${escapeHtml(x.codigo)}</span>${x.desc ? ` ${escapeHtml(x.desc)}` : ''}`).join(' · ')}</div></details>` : ''}
+        <div class="mt-1 text-slate-600">${a.orfaos.slice(0, 300).map(x => `<span class="font-mono">${escapeHtml(x.tabela)} ${escapeHtml(x.codigo)}</span>${x.tipo ? ` <span class="text-slate-400">(${escapeHtml(x.tipo)})</span>` : ''}${x.desc ? ` ${escapeHtml(x.desc)}` : ''}`).join(' · ')}</div></details>` : ''}
     </div>`;
   };
   return `<div class="grid md:grid-cols-2 gap-3">${bloco('p')}${bloco('t')}</div>`;
@@ -13152,7 +13166,9 @@ function tribQuantidades(d) {
   const delta = (q) => (q.p === null || q.p === undefined || q.t === null || q.t === undefined) ? '' : (q.t - q.p);
   const linha = (q) => {
     const dl = delta(q);
-    const naoExiste = (k) => q.existe[k] === false ? '<span class="text-slate-400" title="tabela não existe nesta base">não existe</span>' : tribN(q[k]);
+    const ant = q.anteriores || {};
+    const naoExiste = (k) => q.existe[k] === false ? '<span class="text-slate-400" title="tabela não existe nesta base">não existe</span>'
+      : tribN(q[k]) + (ant[k] ? ` <span class="text-[11px] text-slate-400" title="versões anteriores guardadas pelo FISA170 (campo *_ALTERA = foi alterado) — fora da comparação">(${ant[k]} ant.)</span>` : '');
     const modo = [q.modo.p, q.modo.t].filter(Boolean);
     const filTxt = (q.filiais || []).filter(f => f.fil).map(f => `${f.fil}: P ${tribN(f.p)} · T ${tribN(f.t)}`).join('\n');
     return `<tr class="border-b border-slate-100 ${q.tipo === 'mov' ? 'text-slate-500' : ''}">
@@ -13183,7 +13199,8 @@ function tribValor(cmp, col, v) {
 
 function tribRegistros(d, cod) {
   const cmp = d.comparacao[cod];
-  const f = trib.filtro[cod] || 'pend';
+  const unica = tribUnica(d);
+  const f = trib.filtro[cod] || (unica ? 'todos' : 'pend');
   const busca = (trib.busca[cod] || '').toLowerCase();
   let itens = cmp.itens.filter(i => f === 'todos' || (f === 'pend' ? i.sit !== 'iguais' : i.sit === f));
   if (busca) itens = itens.filter(i => JSON.stringify([i.p, i.t]).toLowerCase().includes(busca));
@@ -13211,7 +13228,7 @@ function tribRegistros(d, cod) {
       <tbody>${pedaco.map(i => {
         const r = i.t || i.p;
         return `<tr class="border-b border-slate-100 align-top">
-          <td class="py-1 pr-2">${tribSit(i.sit)}</td>
+          <td class="py-1 pr-2">${unica ? `<span class="text-slate-400">${i.p ? 'Produção' : 'Teste'}</span>` : tribSit(i.sit)}</td>
           ${mostrar.map(c => `<td class="pr-2 ${chave.includes(c) ? 'font-mono' : ''}">${escapeHtml(tribValor(cmp, c, r[c] ?? ''))}</td>`).join('')}
           <td class="pr-2">${i.difs.map(c => `<div><span class="text-slate-500">${escapeHtml(tit(c))}:</span> <span class="line-through text-rose-700">${escapeHtml(tribValor(cmp, c, i.p[c] ?? '') || '∅')}</span> → <span class="text-emerald-800">${escapeHtml(tribValor(cmp, c, i.t[c] ?? '') || '∅')}</span></div>`).join('')}
             ${i.par ? `<div class="text-sky-700">mesmo conteúdo, outro código: ${escapeHtml(i.par.join(' / '))}</div>` : ''}</td>
@@ -13226,8 +13243,9 @@ function tribComparacoes(d) {
   if (!qs.length) return '<p class="text-sm text-slate-500">Nenhuma tabela lida ainda.</p>';
   return qs.map(q => {
     const c = cmp[q.tab]; const r = c.resumo;
-    const chips = ['so_teste', 'so_prod', 'diverg'].filter(s => r[s]).map(s => `<span class="px-1.5 py-0.5 rounded text-[11px] font-semibold ${TRIB_SIT[s].cls}">${TRIB_SIT[s].ico} ${r[s]}</span>`).join('')
-      + `<span class="px-1.5 py-0.5 rounded text-[11px] ${TRIB_SIT.iguais.cls}">= ${r.iguais}</span>`;
+    const chips = tribUnica(d) ? `<span class="px-1.5 py-0.5 rounded text-[11px] bg-slate-100 text-slate-700">${r.so_prod + r.so_teste} registro(s)</span>`
+      : ['so_teste', 'so_prod', 'diverg'].filter(s => r[s]).map(s => `<span class="px-1.5 py-0.5 rounded text-[11px] font-semibold ${TRIB_SIT[s].cls}">${TRIB_SIT[s].ico} ${r[s]}</span>`).join('')
+        + `<span class="px-1.5 py-0.5 rounded text-[11px] ${TRIB_SIT.iguais.cls}">= ${r.iguais}</span>`;
     const lida = (!c.lida.p || !c.lida.t) ? `<span class="text-[11px] text-slate-400">${!c.lida.p ? 'Produção não lida' : 'Teste não lido'}</span>` : '';
     return tribCaixa(`cmp_${q.tab}`, `<span class="font-mono">${q.tab}</span> · ${escapeHtml(q.rotulo)}`, '', () => tribRegistros(d, q.tab), lida + chips);
   }).join('');

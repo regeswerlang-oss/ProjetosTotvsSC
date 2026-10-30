@@ -61,6 +61,33 @@ filial logada), *Cadastro de Perfis – Boas Práticas* e o artigo da Central
 10. **Memo pelas variantes de sempre** (`_integ_memo_exprs`: BLOB → CLOB → sem
     o campo), 1.000 bytes. É o caso das fórmulas (CIN).
 
+11. **Versão anterior fora da comparação.** O FISA170 não sobrescreve: alterar
+    base, alíquota ou regra grava a nova e deixa a antiga com `*_ALTERA = '1'`
+    (F27 000004 e F28 000019 na Produção da Dígitro). Vale o dado, não o
+    `X3_CBOX`: o da CIN diz "0=Foi alterado", mas na Dígitro as 398 fórmulas
+    vigentes têm '0' e as 3 antigas têm '1'. A tela mostra "(n ant.)".
+12. **Perfil com tipo.** A F20 guarda os quatro perfis com `F20_TIPO` (01
+    origem/destino, 02 participante, 03 operação, 04 produto) e o mesmo código
+    existe em tipos diferentes (TPP001 é participante e produto). A referência
+    da regra é conferida com o tipo certo; código que só existe em outro tipo é
+    "existe, mas com outro tipo de perfil".
+13. **`X3_CBOX` vem com espaço no lugar do `;`** pelo CSV da REST
+    ("1=Em Teste 2=Aprovada"). O corte é pelo `<código>=`.
+14. **Coerência (amarelo, para conferir):** descrição que fala de um tributo e
+    regra que calcula outro; percentual na descrição diferente da alíquota
+    amarrada; código fora do tamanho dos demais. E regra vigente que termina
+    em até 90 dias (a CBS/IBS da Dígitro vai até 31/12/2026).
+
+## Primeira leitura real — Produção da Dígitro, 30/10/2026 14:15
+
+Coleta completa em 9 s (22 tabelas lidas, memo da CIN pela 1ª variante).
+43 regras de cálculo, todas aprovadas e vigentes; nenhuma referência quebrada.
+Achados: A00101 (CBSFED) e A00102 (IBSEST) terminam em 31/12/2026 e usam base
+000003 e alíquota 000003 (zero, cClass 410999); as alíquotas TA001 (0,9%) e
+TA0002 (0,1%) existem e nenhuma regra usa. E00302 e S00104 dizem 1% e usam a
+alíquota 000016 (1,5%); E00307 diz "INSS 11%" e calcula ISS a 2,5%. A Base de
+Testes (10257) recusou o TLS (`unexpected eof`) — REST fora do ar no dia.
+
 ## Tela
 
 - Barra: cliente, **⚡ Coletar Produção + Teste** (só interno), **↻ Atualizar**;

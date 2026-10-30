@@ -11773,10 +11773,17 @@ TRIB_TABELAS = {
     "F2K": ("Resumo Analítico", "movimento", "mov"),
     "F2L": ("Títulos da Apuração", "movimento", "mov"),
     "F2M": ("Ajustes da Apuração", "movimento", "mov"),
+    # Classificação Tributária by Systax — alimenta perfis e regras (F2B_ORIGEM = 2)
+    "CJK": ("Enquadramento de Participante (Systax)", "classificador", "cad"),
+    "CJH": ("Natureza de Operação do Classificador", "classificador", "cad"),
+    "CJF": ("Natureza de Operação × CFOP (Classificador)", "classificador", "cad"),
+    "CJE": ("Configuração do Classificador", "classificador", "cad"),
+    "CIZ": ("Código de Serviço Federal", "classificador", "cad"),
 }
 TRIB_GRUPOS = (("tributos", "Tributos"), ("perfis", "Perfis"), ("regras", "Regras de cálculo"),
                ("ncm", "Regras por NCM"), ("iss", "ISS"), ("escrituracao", "Escrituração e CST"),
-               ("apuracao", "Apuração e guias"), ("movimento", "Uso (movimento)"))
+               ("apuracao", "Apuração e guias"), ("classificador", "Classificação Tributária (Systax)"),
+               ("movimento", "Uso (movimento)"))
 TRIB_LIMITE = 5000            # linhas por tabela; acima disso a lista vem parcial
 TRIB_MEMO_N = 1000            # bytes lidos de cada memo (fórmulas)
 TRIB_ITENS_MAX = 1500         # itens "iguais" devolvidos por tabela (os diferentes vão todos)
@@ -11785,6 +11792,8 @@ TRIB_HISTORICO = 6            # coletas guardadas por base
 # de base para base sem que a regra mude.
 _TRIB_TECNICAS = {"R_E_C_N_O_", "R_E_C_D_E_L_", "D_E_L_E_T_", "S_T_A_M_P_", "I_N_S_D_T_"}
 _TRIB_RE_LOG = re.compile(r"_USERG[IA]$|_USERL?G[IA]$|_USRLG[IA]$")
+# Carimbo de alteração e hash: mudam sem a regra mudar — fora da comparação.
+_TRIB_RE_CARIMBO = re.compile(r"_(DTALT|HRALT|CHVMD5)$")
 _TRIB_MEMO_TIPOS = {"BLOB", "CLOB", "NCLOB", "LONG", "LONG RAW", "IMAGE", "TEXT", "NTEXT",
                     "VARBINARY", "BYTEA"}
 # Chave de negócio preferida (quando as colunas existem). O SIX ordem 1 é o
@@ -11794,22 +11803,34 @@ TRIB_CHAVE = {
     "F27": ["CODIGO"], "F28": ["CODIGO"], "F29": ["CODIGO"], "CJ2": ["CODIGO"],
     "CIN": ["CODIGO"], "CJ8": ["CODIGO"], "CIS": ["CODIGO"], "CIX": ["CODIGO"],
     "CJ0": ["CODIGO"], "CJ5": ["CODIGO"], "CJ4": ["CODIGO"], "CJ9": ["CODIGO"],
-    "F2G": ["CODIGO"], "CIQ": ["CODIGO"],
+    "F2G": ["CODIGO"], "CIQ": ["CODIGO"], "CJK": ["CODIGO"], "CJH": ["COD"],
+    "CJE": ["PARAM"], "F2C": ["CODIGO"], "CJ1": ["CODCAB", "CST"], "CJK": ["CODIGO", "TIPO"],
 }
+TRIB_VENCE_DIAS = 90          # regra vigente que termina dentro deste prazo vira alerta
 # Referências da Regra de Cálculo (F2B) → cadastro que precisa existir.
-# Só são checadas quando as duas colunas existem na base.
+# Só são checadas quando as duas colunas existem na base. O 6º item filtra o
+# destino: o perfil é um só cadastro (F20) com o TIPO dizendo de quê — o mesmo
+# código TPP001 existe como participante (02) e como produto (04) na Dígitro.
 TRIB_REFS = (
-    ("F2B", "TRIB", "F2E", "TRIB", "Tributo"),
-    ("F2B", "RBASE", "F27", "CODIGO", "Regra de base"),
-    ("F2B", "RALIQ", "F28", "CODIGO", "Regra de alíquota"),
-    ("F2B", "PERFPR", "F20", "CODIGO", "Perfil de produto"),
-    ("F2B", "PERFPA", "F20", "CODIGO", "Perfil de participante"),
-    ("F2B", "PERFOP", "F20", "CODIGO", "Perfil de operação"),
-    ("F2B", "PEROD", "F20", "CODIGO", "Perfil origem/destino"),
-    ("F2B", "CODESC", "CJ2", "CODIGO", "Regra de escrituração"),
-    ("F2B", "TRBMAJ", "F2E", "TRIB", "Tributo de majoração"),
-    ("F2B", "TBCONF", "F2E", "TRIB", "Tributo para consulta"),
+    ("F2B", "TRIB", "F2E", "TRIB", "Tributo", None),
+    ("F2B", "RBASE", "F27", "CODIGO", "Regra de base", None),
+    ("F2B", "RBASES", "F27", "CODIGO", "Base auxiliar", None),
+    ("F2B", "RALIQ", "F28", "CODIGO", "Regra de alíquota", None),
+    ("F2B", "PEROD", "F20", "CODIGO", "Perfil origem/destino", ("F20_TIPO", "01")),
+    ("F2B", "PERFPA", "F20", "CODIGO", "Perfil de participante", ("F20_TIPO", "02")),
+    ("F2B", "PERFOP", "F20", "CODIGO", "Perfil de operação", ("F20_TIPO", "03")),
+    ("F2B", "PERFPR", "F20", "CODIGO", "Perfil de produto", ("F20_TIPO", "04")),
+    ("F2B", "CODESC", "CJ2", "CODIGO", "Regra de escrituração", None),
+    ("F2B", "RAPUR", "F2G", "CODIGO", "Regra de apuração", None),
+    ("F2B", "TRBMAJ", "F2E", "TRIB", "Tributo de majoração", None),
+    ("F2B", "TBCONF", "F2E", "TRIB", "Tributo para consulta", None),
 )
+# Família do tributo pela 1ª palavra da descrição da regra — para achar regra
+# cuja descrição fala de um tributo e calcula outro.
+TRIB_FAMILIA = {"IR": {"IRF", "IR", "IRRF"}, "IRRF": {"IRF", "IR", "IRRF"}, "CSLL": {"CSL", "CSLL"},
+                "PIS": {"PIS", "PISRET"}, "COFINS": {"COF", "COFRET", "COFINS"}, "INSS": {"INSS"},
+                "ISS": {"ISS"}, "ICMS": {"ICMS", "CRDPRE", "ICMSST", "DIFAL"}, "IPI": {"IPI"},
+                "CBSFED": {"CBSFED"}, "IBSEST": {"IBSEST"}, "IBSMUN": {"IBSMUN"}}
 TRIB_RE_REFORMA = re.compile(r"^(CBS|IBS)")
 
 
@@ -11933,15 +11954,16 @@ def _trib_six_chave(chave, cod):
 
 def _trib_cbox(txt):
     """'1=Em teste;2=Aprovado' → {'1': 'Em teste', '2': 'Aprovado'}. Combo com
-    função (#...) não se decodifica aqui."""
+    função (#...) não se decodifica aqui. ARMADILHA: o CSV do TSCMONITREST usa
+    ';' como separador e devolve o X3_CBOX com ESPAÇO no lugar do ';'
+    ("1=Em Teste 2=Aprovada") — o corte é pelo "<código>=" e não pelo ';'."""
     t = (txt or "").strip()
     if not t or t.startswith("#"):
         return {}
+    partes = re.split(r"(?:^|[;\s]+)([0-9A-Za-z]{1,3})=", t)
     out = {}
-    for item in t.split(";"):
-        if "=" in item:
-            k, v = item.split("=", 1)
-            out[k.strip()] = v.strip()
+    for i in range(1, len(partes) - 1, 2):
+        out[partes[i]] = partes[i + 1].strip(" ;")
     return out
 
 
@@ -12103,7 +12125,7 @@ def _trib_chave(cod, t):
 
 
 def _trib_eh_id(col):
-    return bool(re.search(r"_ID[A-Z0-9]*$", col)) and not col.endswith("_IDTRIB")
+    return bool(re.search(r"_ID(_?[A-Z0-9]+)?$", col)) and not col.endswith("_IDTRIB")
 
 
 def _trib_guarda_leitura(customer):
@@ -12202,12 +12224,33 @@ def api_tributos_coletar(customer):
 
 
 # ── comparação e análises (puro Python — testável sem base) ────────────────
-def _trib_registros(meta_t, dado):
-    """Linhas da tabela como dicts, com os campos ignorados já marcados."""
-    if not dado or not dado.get("ok"):
+def _trib_alterado(cod, meta_t):
+    """(coluna, valor) que marca a VERSÃO ANTERIOR de um registro. O FISA170
+    não sobrescreve: alterar uma base/alíquota/regra grava a nova e deixa a
+    antiga com *_ALTERA = '1'. Sem esse corte o mesmo código aparece duas vezes
+    (F27 000004 e F28 000019 na Produção da Dígitro, 30/10/2026).
+    ARMADILHA: o X3_CBOX da CIN diz "0=Foi alterado", mas os dados dizem o
+    contrário — na Dígitro 398 fórmulas vigentes têm '0' e as 3 antigas (as
+    fórmulas das versões anteriores da F27/F28) têm '1'. Vale o dado: '1'."""
+    col = f"{cod}_ALTERA"
+    if col not in ((meta_t or {}).get("colunas") or []):
         return None
+    return col, "1"
+
+
+def _trib_registros(meta_t, dado, cod=None):
+    """Linhas da tabela como dicts — só a versão VIGENTE de cada registro.
+    Devolve (registros, n_versoes_anteriores)."""
+    if not dado or not dado.get("ok"):
+        return None, 0
     cols = dado.get("cols") or []
-    return [dict(zip(cols, ln)) for ln in dado.get("linhas") or []]
+    regs = [dict(zip(cols, ln)) for ln in dado.get("linhas") or []]
+    alt = _trib_alterado(cod, meta_t) if cod else None
+    if not alt:
+        return regs, 0
+    col, val = alt
+    atuais = [r for r in regs if (r.get(col) or "").strip() != val]
+    return atuais, len(regs) - len(atuais)
 
 
 def _trib_ignorar(cod, regs_p, regs_t):
@@ -12216,7 +12259,7 @@ def _trib_ignorar(cod, regs_p, regs_t):
     for regs in (regs_p or [], regs_t or []):
         for r in regs[:1]:
             cols.update(r)
-    return sorted(c for c in cols if _trib_eh_id(c))
+    return sorted(c for c in cols if _trib_eh_id(c) or _TRIB_RE_CARIMBO.search(c) or c.endswith("_ALTERA"))
 
 
 def _trib_assinatura(reg, ignorar):
@@ -12297,16 +12340,72 @@ def _trib_filial_casa(fil_ref, fil_src):
     return not a or b.startswith(a) or a.startswith(b)
 
 
+def _trib_num(v):
+    try:
+        return float(str(v).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _trib_coerencia(regs):
+    """Achados de coerência da Regra de Cálculo, só sobre o que a base já tem:
+    - a descrição fala de um tributo e a regra calcula outro;
+    - a descrição traz um percentual e a alíquota amarrada é outra;
+    - código fora do tamanho dos demais da mesma tabela (TA001 × TA0002)."""
+    out = []
+    f2b = regs.get("F2B") or []
+    aliq = {(d.get("F28_CODIGO") or "").strip(): _trib_num(d.get("F28_ALIQ")) for d in regs.get("F28") or []}
+    for r in f2b:
+        desc = (r.get("F2B_DESC") or "").strip()
+        trib = (r.get("F2B_TRIB") or "").strip()
+        base = {"filial": r.get("F2B_FILIAL", ""), "regra": r.get("F2B_REGRA", ""), "trib": trib, "desc": desc}
+        m = re.match(r"([A-Za-z]+)", _integ_norm(desc).upper())
+        fam = TRIB_FAMILIA.get(m.group(1)) if m else None
+        if fam and trib and trib not in fam:
+            out.append({**base, "tipo": "tributo",
+                        "texto": f"a descrição fala de {m.group(1)} e a regra calcula {trib}"})
+        pct = re.findall(r"(\d+(?:[.,]\d+)?)\s*%", desc)
+        cod = (r.get("F2B_RALIQ") or "").strip()
+        a = aliq.get(cod)
+        if pct and a is not None and cod:
+            vals = {round(_trib_num(x), 4) for x in pct if _trib_num(x) is not None}
+            if vals and round(a, 4) not in vals:
+                out.append({**base, "tipo": "aliquota",
+                            "texto": f"a descrição diz {', '.join(p + '%' for p in pct)} e a alíquota {cod} é {a:g}%"})
+    for tab, col in (("F27", "F27_CODIGO"), ("F28", "F28_CODIGO"), ("F2B", "F2B_REGRA"), ("CJ2", "CJ2_CODIGO")):
+        cods = sorted({(d.get(col) or "").strip() for d in regs.get(tab) or []} - {""})
+        if len(cods) < 3:
+            continue
+        from collections import Counter
+        tam = Counter(len(c) for c in cods).most_common(1)[0][0]
+        for c in cods:
+            if len(c) != tam:
+                out.append({"filial": "", "regra": c, "trib": "", "desc": "", "tipo": "codigo", "tabela": tab,
+                            "texto": f"{tab}: código {c} com {len(c)} posições (os demais têm {tam})"})
+    return out
+
+
 def _trib_analisa_base(meta, regs, hoje_s):
-    """Achados de UMA base: referência quebrada, vigência, status, órfãos."""
+    """Achados de UMA base: referência quebrada, vigência, status, órfãos,
+    coerência. `regs` já vem só com a versão vigente de cada registro."""
     out = {"refs": [], "vig": {"vigente": 0, "futura": 0, "encerrada": 0}, "status": {},
-           "em_teste": [], "orfaos": [], "regras": 0}
+           "em_teste": [], "orfaos": [], "regras": 0, "coerencia": [], "versoes": {}}
     f2b = regs.get("F2B") or []
     out["regras"] = len(f2b)
-    cbox = ((meta.get("tabelas") or {}).get("F2B") or {}).get("cbox") or {}
+    tabs = meta.get("tabelas") or {}
+    cbox = (tabs.get("F2B") or {}).get("cbox") or {}
+    try:
+        limite = (datetime.strptime(hoje_s, "%Y%m%d") + timedelta(days=TRIB_VENCE_DIAS)).strftime("%Y%m%d")
+    except ValueError:
+        limite = hoje_s
+    out["vence"] = []
     for r in f2b:
         v = _trib_vigencia(r.get("F2B_VIGINI"), r.get("F2B_VIGFIM"), hoje_s)
         out["vig"][v] += 1
+        fim = (r.get("F2B_VIGFIM") or "").strip()
+        if v == "vigente" and fim and fim <= limite:
+            out["vence"].append({"filial": r.get("F2B_FILIAL", ""), "regra": r.get("F2B_REGRA", ""),
+                                 "trib": r.get("F2B_TRIB", ""), "desc": r.get("F2B_DESC", ""), "fim": fim})
         st = r.get("F2B_STATUS")
         if st is not None:
             rot = (cbox.get("F2B_STATUS") or {}).get(st, st or "(vazio)")
@@ -12315,40 +12414,51 @@ def _trib_analisa_base(meta, regs, hoje_s):
                 out["em_teste"].append({"filial": r.get("F2B_FILIAL", ""), "regra": r.get("F2B_REGRA", ""),
                                         "trib": r.get("F2B_TRIB", ""), "desc": r.get("F2B_DESC", ""),
                                         "status": rot})
-    usados = {}
-    for src, csrc, dst, cdst, rot in TRIB_REFS:
+    usados = set()
+    for src, csrc, dst, cdst, rot, filtro in TRIB_REFS:
         col_s, col_d = f"{src}_{csrc}", f"{dst}_{cdst}"
         lst_s, lst_d = regs.get(src), regs.get(dst)
         if lst_s is None or not lst_s or col_s not in lst_s[0]:
             continue
         if lst_d is None or (lst_d and col_d not in lst_d[0]):
             continue
+        if filtro and lst_d and filtro[0] not in lst_d[0]:
+            filtro = None
         fd = f"{dst}_FILIAL"
         idx = {}
         for d in lst_d:
+            if filtro and (d.get(filtro[0]) or "").strip() != filtro[1]:
+                continue
             idx.setdefault((d.get(col_d) or "").strip(), []).append(d.get(fd, ""))
         for r in lst_s:
             cod = (r.get(col_s) or "").strip()
             if not cod:
                 continue
-            usados.setdefault(dst, set()).add(cod)
+            usados.add((dst, filtro[1] if filtro else "", cod))
             fils = idx.get(cod)
             if not fils or not any(_trib_filial_casa(f, r.get(f"{src}_FILIAL", "")) for f in fils):
+                motivo = "não existe" if not fils else "existe em outra filial"
+                if not fils and filtro and any((d.get(col_d) or "").strip() == cod for d in lst_d):
+                    motivo = "existe, mas com outro tipo de perfil"
                 out["refs"].append({"filial": r.get(f"{src}_FILIAL", ""), "regra": r.get("F2B_REGRA", ""),
                                     "trib": r.get("F2B_TRIB", ""), "campo": col_s, "rotulo": rot,
-                                    "valor": cod, "destino": dst,
-                                    "motivo": "não existe" if not fils else "existe em outra filial"})
-    for dst, colc in (("F20", "F20_CODIGO"), ("F27", "F27_CODIGO"), ("F28", "F28_CODIGO"), ("CJ2", "CJ2_CODIGO")):
+                                    "valor": cod, "destino": dst, "motivo": motivo})
+    tipos_f20 = ((tabs.get("F20") or {}).get("cbox") or {}).get("F20_TIPO") or {}
+    for dst, colc in (("F20", "F20_CODIGO"), ("F27", "F27_CODIGO"), ("F28", "F28_CODIGO"),
+                      ("CJ2", "CJ2_CODIGO"), ("F2G", "F2G_CODIGO")):
         lst = regs.get(dst)
         if not f2b or not lst or colc not in lst[0]:
             continue
         vistos = set()
         for d in lst:
             cod = (d.get(colc) or "").strip()
-            if cod and cod not in usados.get(dst, set()) and (dst, cod) not in vistos:
-                vistos.add((dst, cod))
+            tipo = (d.get("F20_TIPO") or "").strip() if dst == "F20" else ""
+            if cod and (dst, tipo, cod) not in usados and (dst, tipo, cod) not in vistos:
+                vistos.add((dst, tipo, cod))
                 out["orfaos"].append({"tabela": dst, "codigo": cod,
+                                      "tipo": tipos_f20.get(tipo, tipo) if tipo else "",
                                       "desc": d.get(f"{dst}_DESC") or d.get(f"{dst}_DESCRI") or ""})
+    out["coerencia"] = _trib_coerencia(regs)
     return out
 
 
@@ -12389,7 +12499,7 @@ def _trib_migracao(itens_f2b, regs_t, regs_p):
             continue
         r = it["t"]
         deps = []
-        for src, csrc, dst, cdst, rot in TRIB_REFS:
+        for src, csrc, dst, cdst, rot, _f in TRIB_REFS:
             if src != "F2B":
                 continue
             cod = (r.get(f"F2B_{csrc}") or "").strip()
@@ -12415,8 +12525,11 @@ def _trib_monta(col_p, col_t, hoje_s):
     dad_p = (col_p or {}).get("dados") or {}
     dad_t = (col_t or {}).get("dados") or {}
     tp, tt = meta_p.get("tabelas") or {}, meta_t.get("tabelas") or {}
-    regs_p = {c: _trib_registros(tp.get(c), dad_p.get(c)) for c in TRIB_TABELAS}
-    regs_t = {c: _trib_registros(tt.get(c), dad_t.get(c)) for c in TRIB_TABELAS}
+    regs_p, regs_t, ver = {}, {}, {}
+    for c in TRIB_TABELAS:
+        regs_p[c], vp = _trib_registros(tp.get(c), dad_p.get(c), c)
+        regs_t[c], vt = _trib_registros(tt.get(c), dad_t.get(c), c)
+        ver[c] = {"p": vp, "t": vt}
     # tabela que existe mas veio vazia (total 0) = lista vazia, não "não lida"
     for c in TRIB_TABELAS:
         if regs_p[c] is None and (tp.get(c) or {}).get("existe") and (tp.get(c) or {}).get("total") == 0:
@@ -12433,6 +12546,7 @@ def _trib_monta(col_p, col_t, hoje_s):
             "existe": {"p": a.get("existe"), "t": b.get("existe")},
             "modo": {"p": a.get("modo"), "t": b.get("modo")},
             "p": a.get("total"), "t": b.get("total"),
+            "anteriores": ver[cod],
             "filiais": [{"fil": f, "p": (a.get("por_filial") or {}).get(f), "t": (b.get("por_filial") or {}).get(f)}
                         for f in fil]})
         if tipo != "cad" or (regs_p[cod] is None and regs_t[cod] is None):
@@ -12462,6 +12576,12 @@ def _trib_monta(col_p, col_t, hoje_s):
     an_t = _trib_analisa_base(meta_t, {k: v or [] for k, v in regs_t.items() if v is not None}, hoje_s) if col_t else None
     filiais = meta_p.get("filiais") or meta_t.get("filiais") or []
     reforma = _trib_reforma(regs_p.get("F2B"), regs_t.get("F2B"), filiais, hoje_s)
+    # Tributos da Reforma CADASTRADOS (F2E) sem nenhuma regra vigente: informativo
+    # — em 2026 só CBS e IBS estadual têm alíquota de teste; o resto é cadastro.
+    cad = {(r.get("F2E_TRIB") or "").strip(): (r.get("F2E_DESC") or "").strip()
+           for regs in (regs_p.get("F2E") or [], regs_t.get("F2E") or []) for r in regs}
+    reforma["sem_regra"] = [{"trib": t, "desc": d} for t, d in sorted(cad.items())
+                            if TRIB_RE_REFORMA.match(t) and t not in reforma["tributos"]]
     mig = _trib_migracao((comparacao.get("F2B") or {}).get("itens") or [],
                          {k: v or [] for k, v in regs_t.items()}, {k: v or [] for k, v in regs_p.items()})
     # indicadores
@@ -12490,6 +12610,16 @@ def _trib_monta(col_p, col_t, hoje_s):
         inds.append(_trib_ind(f"refs_{amb}", f"Referências quebradas ({sfx})", n,
                               "verde" if not n else "vermelho",
                               "Regra apontando para tributo, perfil, base, alíquota ou escrituração que não existe."))
+    an_v = an_p or an_t
+    if an_v:
+        vence = an_v.get("vence") or []
+        n = len(vence)
+        inds.append(_trib_ind("vence", f"Regras que vencem em até {TRIB_VENCE_DIAS} dias"
+                              + (" (Produção)" if an_p else " (Teste)"), n, "verde" if not n else "amarelo",
+                              (f"{n} regra(s) vigente(s) com data final até "
+                               f"{max(v['fim'] for v in vence)[6:8]}/{max(v['fim'] for v in vence)[4:6]}/"
+                               f"{max(v['fim'] for v in vence)[:4]} — sem a regra do período seguinte, o "
+                               f"tributo deixa de ser calculado." if n else "Nenhuma regra vigente perto do fim.")))
     if an_p:
         n = len(an_p["em_teste"])
         inds.append(_trib_ind("em_teste_prod", "Regras 'em teste' vigentes na Produção", n,

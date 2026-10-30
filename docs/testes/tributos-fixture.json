@@ -16,6 +16,10 @@
    },
    "p": 3,
    "t": 3,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": [
     {
      "fil": "",
@@ -40,6 +44,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -58,6 +66,10 @@
    },
    "p": 2,
    "t": 3,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": [
     {
      "fil": "01",
@@ -82,6 +94,10 @@
    },
    "p": 1,
    "t": 2,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": [
     {
      "fil": "01",
@@ -106,6 +122,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -124,6 +144,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -142,6 +166,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -160,6 +188,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -178,6 +210,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -196,6 +232,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -214,6 +254,10 @@
    },
    "p": 1,
    "t": 1,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": [
     {
      "fil": "",
@@ -238,6 +282,10 @@
    },
    "p": 3,
    "t": 5,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": [
     {
      "fil": "",
@@ -262,6 +310,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -280,6 +332,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -298,6 +354,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -316,6 +376,10 @@
    },
    "p": 5,
    "t": 7,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": [
     {
      "fil": "01",
@@ -345,6 +409,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -363,6 +431,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -381,6 +453,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -399,6 +475,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -417,6 +497,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -435,6 +519,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -453,6 +541,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -471,6 +563,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -489,6 +585,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -507,6 +607,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -525,6 +629,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -543,6 +651,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -561,6 +673,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -579,6 +695,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -597,6 +717,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -615,6 +739,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -633,6 +761,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -651,6 +783,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -669,6 +805,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -687,6 +827,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -705,6 +849,10 @@
    },
    "p": 1500,
    "t": 1500,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": [
     {
      "fil": "01",
@@ -729,6 +877,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -747,6 +899,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -765,6 +921,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -783,6 +943,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -801,6 +965,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -819,6 +987,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -837,6 +1009,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -855,6 +1031,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -873,6 +1053,10 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   },
   {
@@ -891,6 +1075,120 @@
    },
    "p": null,
    "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
+   "filiais": []
+  },
+  {
+   "tab": "CJK",
+   "rotulo": "Enquadramento de Participante (Systax)",
+   "grupo": "classificador",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
+   "filiais": []
+  },
+  {
+   "tab": "CJH",
+   "rotulo": "Natureza de Operação do Classificador",
+   "grupo": "classificador",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
+   "filiais": []
+  },
+  {
+   "tab": "CJF",
+   "rotulo": "Natureza de Operação × CFOP (Classificador)",
+   "grupo": "classificador",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
+   "filiais": []
+  },
+  {
+   "tab": "CJE",
+   "rotulo": "Configuração do Classificador",
+   "grupo": "classificador",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
+   "filiais": []
+  },
+  {
+   "tab": "CIZ",
+   "rotulo": "Código de Serviço Federal",
+   "grupo": "classificador",
+   "tipo": "cad",
+   "nome_sx2": null,
+   "existe": {
+    "p": false,
+    "t": false
+   },
+   "modo": {
+    "p": null,
+    "t": null
+   },
+   "p": null,
+   "t": null,
+   "anteriores": {
+    "p": 0,
+    "t": 0
+   },
    "filiais": []
   }
  ],
@@ -1033,14 +1331,14 @@
      "k": [
       "01",
       "TPP009",
-      "01"
+      "04"
      ],
      "sit": "so_teste",
      "p": null,
      "t": {
       "F20_FILIAL": "01",
       "F20_CODIGO": "TPP009",
-      "F20_TIPO": "01",
+      "F20_TIPO": "04",
       "F20_DESC": "serviços"
      },
      "difs": []
@@ -1049,19 +1347,19 @@
      "k": [
       "01",
       "000051",
-      "02"
+      "03"
      ],
      "sit": "iguais",
      "p": {
       "F20_FILIAL": "01",
       "F20_CODIGO": "000051",
-      "F20_TIPO": "02",
+      "F20_TIPO": "03",
       "F20_DESC": "todos os CFOPs"
      },
      "t": {
       "F20_FILIAL": "01",
       "F20_CODIGO": "000051",
-      "F20_TIPO": "02",
+      "F20_TIPO": "03",
       "F20_DESC": "todos os CFOPs"
      },
      "difs": []
@@ -1070,19 +1368,19 @@
      "k": [
       "01",
       "TPP001",
-      "01"
+      "04"
      ],
      "sit": "iguais",
      "p": {
       "F20_FILIAL": "01",
       "F20_CODIGO": "TPP001",
-      "F20_TIPO": "01",
+      "F20_TIPO": "04",
       "F20_DESC": "todos"
      },
      "t": {
       "F20_FILIAL": "01",
       "F20_CODIGO": "TPP001",
-      "F20_TIPO": "01",
+      "F20_TIPO": "04",
       "F20_DESC": "todos"
      },
      "difs": []
@@ -1706,10 +2004,14 @@
     {
      "tabela": "F20",
      "codigo": "000051",
+     "tipo": "03",
      "desc": "todos os CFOPs"
     }
    ],
-   "regras": 5
+   "regras": 5,
+   "coerencia": [],
+   "versoes": {},
+   "vence": []
   },
   "teste": {
    "refs": [
@@ -1746,15 +2048,20 @@
     {
      "tabela": "F20",
      "codigo": "000051",
+     "tipo": "03",
      "desc": "todos os CFOPs"
     },
     {
      "tabela": "F28",
      "codigo": "TA0002",
+     "tipo": "",
      "desc": "0,1%"
     }
    ],
-   "regras": 7
+   "regras": 7,
+   "coerencia": [],
+   "versoes": {},
+   "vence": []
   }
  },
  "reforma": {
@@ -1790,7 +2097,8 @@
    "IBSMUN": {
     "01": 2
    }
-  }
+  },
+  "sem_regra": []
  },
  "migracao": [
   {
@@ -1909,6 +2217,13 @@
    "texto": "Regra apontando para tributo, perfil, base, alíquota ou escrituração que não existe."
   },
   {
+   "chave": "vence",
+   "rotulo": "Regras que vencem em até 90 dias (Produção)",
+   "valor": 0,
+   "nivel": "verde",
+   "texto": "Nenhuma regra vigente perto do fim."
+  },
+  {
    "chave": "em_teste_prod",
    "rotulo": "Regras 'em teste' vigentes na Produção",
    "valor": 1,
@@ -1963,6 +2278,10 @@
   {
    "id": "apuracao",
    "rotulo": "Apuração e guias"
+  },
+  {
+   "id": "classificador",
+   "rotulo": "Classificação Tributária (Systax)"
   },
   {
    "id": "movimento",
