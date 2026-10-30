@@ -436,6 +436,7 @@
           <button id="mov-sql"      data-interno class="rail-btn">🗄 Script SQL</button>
           <button id="mov-ambiente" data-interno class="rail-btn">⚙ Ambiente</button>
           <button id="mov-coletar"  data-interno class="rail-btn">⚡ Coletar agora</button>
+          <button id="mov-perfil"   data-interno class="rail-btn">🧩 Perfil de coleta</button>
           <button id="mov-cenarios" data-interno class="rail-btn">🎯 Cenários</button>
           <label id="mov-upload-wrap" data-interno class="rail-btn rail-btn-cta">
             ⬆ Importar movimentos<span class="rail-sub">.csv / .json</span>
@@ -502,6 +503,8 @@
         </div>
 
         <div data-rail="cob" class="rail-grupo hidden">
+          <button id="cob-atualizar" data-interno class="rail-btn rail-btn-cta">⚡ Atualizar pela REST<span class="rail-sub">testes + produção</span></button>
+          <button id="cob-perfil" data-interno class="rail-btn">🧩 Perfil de coleta<span class="rail-sub">o que cada base mede</span></button>
           <button id="cob-cenarios" data-interno class="rail-btn">🎯 Cenários</button>
           <label id="cob-upload-wrap" data-interno class="rail-btn rail-btn-cta">
             ⬆ Importar análise<span class="rail-sub">.csv / .json</span>
@@ -5000,6 +5003,8 @@ const TIPODOC = {
 const ST_MOV = {
   COBERTO:  { cls: 'bg-emerald-100 text-emerald-800', rot: 'Coberto' },
   FALTANTE: { cls: 'bg-rose-100 text-rose-800',       rot: 'Faltante' },
+  // A coleta não perguntou essa análise à base — não é "não aconteceu".
+  NAO_MEDIDO: { cls: 'bg-sky-50 text-sky-800 ring-1 ring-sky-200', rot: 'Não medido' },
   OPCIONAL: { cls: 'bg-slate-100 text-slate-600',     rot: 'Opcional' },
 };
 
@@ -5071,6 +5076,7 @@ async function carregaEvolucaoMov() {
 const MOV_STATUS = {
   COBERTO: { rot: 'coberto', cls: 'text-emerald-700' },
   FALTANTE: { rot: 'faltante', cls: 'text-rose-600 font-medium' },
+  NAO_MEDIDO: { rot: 'não medido', cls: 'text-sky-700' },
   OPCIONAL: { rot: 'opcional', cls: 'text-slate-400' },
 };
 
@@ -5149,12 +5155,14 @@ function pintaEvolucaoMov() {
   });
   const matriz = [...porAnalise.entries()].map(([analise, itens]) => {
     const faltam = itens.filter(c => ((c.serie || {})[ultima] || {}).status === 'FALTANTE').length;
+    const naoMed = itens.filter(c => ((c.serie || {})[ultima] || {}).status === 'NAO_MEDIDO').length;
     return `
     <details class="border border-slate-200 rounded-lg mb-2" ${faltam ? 'open' : ''}>
       <summary class="cursor-pointer select-none px-4 py-2 flex items-center gap-2 text-sm">
         <span class="font-semibold text-totvs-petroleo">${escapeHtml(analise)}</span>
         <span class="text-slate-400 text-xs">${itens.length} cenário(s)</span>
         ${faltam ? `<span class="ml-auto text-xs text-rose-600 font-medium">${faltam} faltante(s)</span>`
+                 : naoMed ? `<span class="ml-auto text-xs text-sky-700">${naoMed} não medido(s)</span>`
                  : '<span class="ml-auto text-xs text-emerald-700">tudo coberto</span>'}
       </summary>
       <div class="overflow-x-auto px-4 pb-3">
@@ -5357,7 +5365,9 @@ function desenhaMovimentos(j) {
   $('#mov-kpis').classList.remove('hidden');
   $('#mov-kpis').innerHTML =
     kpi('Cenários cobertos', cob.length ? `${cobertos}/${cob.length}` : '—',
-        cob.length ? `${faltantes.length} faltante(s)` : 'nenhum cenário combinado',
+        cob.length ? `${faltantes.length} faltante(s)` + (cob.some(c => c.status === 'NAO_MEDIDO')
+          ? ` · ${cob.filter(c => c.status === 'NAO_MEDIDO').length} não medido(s)` : '')
+          : 'nenhum cenário combinado',
         faltantes.length ? 'bg-rose-600 text-white' : 'bg-totvs-petroleo text-white') +
     kpi('Movimentos', fmtNum(total), `${dims.length} combinação(ões) medida(s)`,
         'bg-totvs-blue text-totvs-petroleo') +
@@ -5655,6 +5665,7 @@ const ST_COB = {
   COBERTO:      { cls: 'bg-emerald-100 text-emerald-800', rot: 'Coberto',      cor: '#047857' },
   SO_TESTE:     { cls: 'bg-amber-100 text-amber-900',     rot: 'Só em teste',  cor: '#B45309' },
   FALTANTE:     { cls: 'bg-rose-100 text-rose-800',       rot: 'Faltante',     cor: '#BE123C' },
+  NAO_MEDIDO:   { cls: 'bg-sky-50 text-sky-800 ring-1 ring-sky-200', rot: 'Não medido', cor: '#0369A1' },
   OPCIONAL:     { cls: 'bg-slate-100 text-slate-600',     rot: 'Opcional',     cor: '#64748B' },
 };
 
@@ -5701,15 +5712,26 @@ function consolidaCobertura() {
     (j.cobertura || []).forEach(c => m.set(chaveCen(c), Number(c.qtde || 0)));
     return m;
   };
-  const mp = qtdePor(p), mt = qtdePor(t);
+  // Medido = a análise foi perguntada à base. Base sem medição nenhuma também
+  // não mediu nada. NÃO MEDIDO só quando NENHUMA das duas perguntou: se uma
+  // perguntou e não achou, é faltante de verdade.
+  const mediu = (j) => {
+    if (j.vazio !== false) return () => false;
+    const s = new Set((j.analises_medidas || []).map(a => String(a).trim().toUpperCase()));
+    if (!s.size) (j.analises || []).forEach(a => s.add(String(a.analise).trim().toUpperCase()));
+    return (an) => s.has(String(an || '').trim().toUpperCase());
+  };
+  const mp = qtdePor(p), mt = qtdePor(t), medP = mediu(p), medT = mediu(t);
   return cenarios.map(c => {
     const k = chaveCen(c);
     const qp = mp.get(k) || 0, qt = mt.get(k) || 0;
     let status;
     if (qp > 0) status = 'COBERTO';
     else if (qt > 0) status = 'SO_TESTE';
+    else if (!medP(c.analise) && !medT(c.analise)) status = 'NAO_MEDIDO';
     else status = c.esperado === false ? 'OPCIONAL' : 'FALTANTE';
-    return { ...c, qtde_prod: qp, qtde_teste: qt, status };
+    return { ...c, qtde_prod: qp, qtde_teste: qt, status,
+             medido_prod: medP(c.analise), medido_teste: medT(c.analise) };
   });
 }
 
@@ -5735,6 +5757,7 @@ function desenhaCobertura() {
 
   const cont = (s) => linhas.filter(l => l.status === s).length;
   const faltantes = cont('FALTANTE'), soTeste = cont('SO_TESTE'), cobertos = cont('COBERTO');
+  const naoMedidos = cont('NAO_MEDIDO');
   const naoPrev = [
     ...(p.nao_previstos || []).map(x => ({ ...x, base: 'Produção' })),
     ...(t.nao_previstos || []).map(x => ({ ...x, base: 'Testes' })),
@@ -5747,36 +5770,58 @@ function desenhaCobertura() {
   const kpi = (rot, val, sub, cls) => `
     <div class="rounded-lg p-4 ${cls}"><p class="text-xs opacity-80">${rot}</p>
       <p class="text-2xl font-totvs mt-1">${val}</p><p class="text-xs opacity-80 mt-0.5">${sub}</p></div>`;
+  const quando = (j) => j.vazio === false
+    ? `${fmtData(String(j.ultima_medicao || ''))}${j.hora_medicao ? ' ' + String(j.hora_medicao).slice(0, 5) : ''}`
+      + (j.origem === 'coleta' ? ' · REST' : j.origem ? ' · arquivo' : '')
+    : '—';
   $('#cob-kpis').classList.remove('hidden');
+  $('#cob-kpis').className = `grid grid-cols-2 ${naoMedidos ? 'md:grid-cols-5' : 'md:grid-cols-4'} gap-3 mb-4`;
   $('#cob-kpis').innerHTML =
     kpi('Cobertos em produção', `${cobertos}/${linhas.length}`,
         `${linhas.length} cenário(s) combinados`,
         faltantes ? 'bg-rose-600 text-white' : 'bg-totvs-petroleo text-white') +
     kpi('Só em teste', String(soTeste), 'rodou em homologação, não em produção',
         soTeste ? 'bg-amber-500 text-white' : 'bg-totvs-blue text-totvs-petroleo') +
-    kpi('Faltantes', String(faltantes), 'sem movimento em nenhuma base',
+    kpi('Faltantes', String(faltantes), 'medido e sem movimento',
         'bg-totvs-purple text-white') +
-    kpi('Últimas medições',
-        p.vazio === false ? fmtData(String(p.ultima_medicao || '')) : '—',
-        `testes: ${t.vazio === false ? fmtData(String(t.ultima_medicao || '')) : '—'}`,
+    (naoMedidos ? kpi('Não medidos', String(naoMedidos),
+        'análise fora da coleta — ative no 🧩 Perfil', 'bg-sky-700 text-white') : '') +
+    kpi('Últimas medições', p.vazio === false ? quando(p) : '—',
+        `testes: ${quando(t)}`,
         'bg-white border border-slate-200 text-totvs-petroleo');
 
   const partes = [];
+
+  // Medição gravada "assim mesmo" (trava contornada) ou com bloco que falhou:
+  // o número vale, mas quem lê precisa saber de onde veio.
+  [['Produção', p], ['Testes', t]].forEach(([rot, j]) => {
+    if (j.vazio !== false || !(j.coleta_parcial || j.coleta_forcada)) return;
+    const falhos = (j.coleta_blocos || []).filter(b => !b.ok && !b.nao_se_aplica);
+    partes.push(`<div class="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 mb-3 text-xs text-amber-900">
+      <b>${rot}:</b> ${j.coleta_forcada ? 'medição gravada apesar da trava (nenhuma análise com cenário). ' : ''}
+      ${j.coleta_parcial ? `gravada sem ${falhos.length} bloco(s): ${escapeHtml(falhos.map(b => b.nome).join(', '))}.` : ''}</div>`);
+  });
+  if (naoMedidos) {
+    const ans = [...new Set(linhas.filter(l => l.status === 'NAO_MEDIDO').map(l => l.analise))];
+    partes.push(`<div class="bg-sky-50 border border-sky-200 rounded-lg px-4 py-3 mb-3 text-xs text-sky-900">
+      <b>${naoMedidos} cenário(s) não medido(s)</b> — ${escapeHtml(ans.join(', '))}: nenhuma base
+      perguntou essa análise. Não é "não aconteceu": falta o bloco no <b>🧩 Perfil de coleta</b>.</div>`);
+  }
 
   if (semMedicao) {
     partes.push(`
       <div class="bg-amber-50 border border-amber-200 rounded-lg p-5 mb-4 text-sm">
         <p class="font-semibold text-amber-900">Cenários combinados, mas nenhuma medição importada.</p>
         <p class="text-amber-800 mt-1">Todo cenário aparece como faltante porque ainda não há com
-          o que comparar. Rode o script da sub-aba Movimentos (🗄 Script SQL) e suba o CSV em
-          <b>⬆ Importar análise</b>.</p>
+          o que comparar. Use <b>⚡ Atualizar pela REST</b> — ou rode o script da sub-aba
+          Movimentos (🗄 Script SQL) e suba o CSV em <b>⬆ Importar análise</b>.</p>
       </div>`);
   }
 
   // ── Cobertura consolidada, por análise ──────────────────────────────────
   const porAnalise = new Map();
   linhas.forEach(l => porAnalise.set(l.analise, (porAnalise.get(l.analise) || []).concat([l])));
-  const ordem = { FALTANTE: 0, SO_TESTE: 1, COBERTO: 2, OPCIONAL: 3 };
+  const ordem = { FALTANTE: 0, SO_TESTE: 1, NAO_MEDIDO: 2, COBERTO: 3, OPCIONAL: 4 };
 
   partes.push(`
     <div class="bg-white rounded-lg border border-slate-200 p-5 mb-4">
@@ -5892,13 +5937,14 @@ function relatorioCoberturaHTML() {
   const kpis = kpi('Cobertos em produção', `${cont('COBERTO')}/${linhas.length}`,
                    'cenários combinados', C.petroleo, '#fff')
     + kpi('Só em teste', String(cont('SO_TESTE')), 'não rodou em produção', '#B45309', '#fff')
-    + kpi('Faltantes', String(cont('FALTANTE')), 'sem movimento em nenhuma base', C.roxo, '#fff')
+    + kpi('Faltantes', String(cont('FALTANTE')), 'medido e sem movimento', C.roxo, '#fff')
+    + (cont('NAO_MEDIDO') ? kpi('Não medidos', String(cont('NAO_MEDIDO')), 'análise fora da coleta', '#0369A1', '#fff') : '')
     + kpi('Última medição',
           p.vazio === false ? fmtData(String(p.ultima_medicao || '')) : '—',
           `testes: ${t.vazio === false ? fmtData(String(t.ultima_medicao || '')) : '—'}`,
           '#fff', C.cinza);
 
-  const ordem = { FALTANTE: 0, SO_TESTE: 1, COBERTO: 2, OPCIONAL: 3 };
+  const ordem = { FALTANTE: 0, SO_TESTE: 1, NAO_MEDIDO: 2, COBERTO: 3, OPCIONAL: 4 };
   const porAnalise = new Map();
   linhas.forEach(l => porAnalise.set(l.analise, (porAnalise.get(l.analise) || []).concat([l])));
 
@@ -5974,6 +6020,384 @@ $('#cob-cenarios').addEventListener('click', () => abreModalCenarios(() => {
 $('#cob-file').addEventListener('change', (ev) => enviaMovimentos(ev, () => {
   cob.customer = null; mov.customer = null; initCobertura();
 }));
+
+// ============================================================================
+//  PERFIL DE COLETA DE MOVIMENTOS + ⚡ ATUALIZAR PELA REST (30/10/2026)
+//  Cada cliente mede outra coisa: a Dígitro o fluxo de contratos, a Olim fiscal
+//  + financeiro + compras. O perfil diz O QUE roda (script salvo + blocos) e a
+//  coleta vira um LOTE por base, bloco a bloco — cada bloco é uma chamada
+//  própria (60 s da Vercel cada), bloco com tabela inexistente "não se aplica"
+//  em vez de derrubar o resto, e a medição registra quais análises foram
+//  medidas: é isso que separa FALTANTE (medido, sem movimento) de NÃO MEDIDO.
+//  Spec: docs/specs/2026-10-30-perfil-coleta-movimentos.md
+// ============================================================================
+const DIALETO_ROT = { oracle: 'Oracle', mssql: 'SQL Server', postgres: 'PostgreSQL' };
+const MOV_CATALOGO_ROT = {
+  SD2_FISCAL: 'Itens de NF de saída — UF × contribuinte × NCM × CFOP',
+  SE5_BANCARIO: 'Movimento bancário — operação × sentido × tipo doc. × tipo título',
+};
+
+/** Bloco do catálogo com placeholders: o MESMO SQL serve teste e produção,
+ *  porque sufixo e janela são trocados no servidor, com o cadastro da base. */
+function blocoCatalogoMov(analise, dialeto) {
+  const p = pecasMovD5('{{SUFIXO}}', dialeto, '{{DT_INI}}', '{{DT_FIM}}', '{{PERIODO}}');
+  const corpo = analise === 'SD2_FISCAL' ? p.sd2 : p.se5;
+  return `-- ===========================================================================
+-- BLOCO DO CATÁLOGO · ${analise} · ${DIALETO_ROT[dialeto] || dialeto}
+-- ${MOV_CATALOGO_ROT[analise] || ''}
+-- Gerado pela Gestão de Projetos TOTVS SC em ${new Date().toLocaleString('pt-BR')}
+-- {{SUFIXO}}, {{DT_INI}}, {{DT_FIM}} e {{PERIODO}} são trocados na hora da
+-- coleta pelo ⚙ Ambiente da base e pela janela do 🧩 Perfil de coleta.
+-- ===========================================================================
+${corpo}`;
+}
+
+/** fetch que devolve o corpo também no erro — a recusa da trava vem num 409
+ *  com {recusa: true}, e o api() só repassa a mensagem. */
+async function apiCorpo(path, opts) {
+  const r = await fetch(path, opts);
+  if (r.status === 401) { location.href = '/login'; throw new Error('Sessão expirada'); }
+  let body = {};
+  try { body = await r.json(); } catch (_) { /* corpo não-JSON */ }
+  return { status: r.status, ok: r.ok, body };
+}
+
+const larguraModal = (m, cls) => {
+  const caixa = m.el.querySelector('.max-w-lg');
+  if (caixa) { caixa.classList.remove('max-w-lg'); caixa.classList.add(cls); }
+};
+
+// ── ⚡ Atualizar pela REST ────────────────────────────────────────────────
+async function atualizaMovimentosREST(ambs, depois) {
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de coletar.'); return; }
+  const enc = encodeURIComponent(cli);
+  let info;
+  try { info = await api(`/api/monitmov/${enc}/perfil-coleta`); }
+  catch (e) { alert('Não consegui ler o perfil de coleta: ' + e.message); return; }
+
+  const cad = new Map((info.ambientes || []).map(a => [a.ambiente, a]));
+  const bases = ambs.filter(a => cad.has(a) && cad.get(a).ativo && cad.get(a).tem_token);
+  const fora = ambs.filter(a => !bases.includes(a)).map(a => {
+    const c = cad.get(a);
+    return `${AMB[a].label}: ${!c ? 'sem cadastro no ⚙ Ambiente' : !c.ativo ? 'inativa' : 'sem token'}`;
+  });
+  if (!bases.length) {
+    alert('Nenhuma base pronta para coletar.\n\n' + fora.join('\n') +
+          '\n\nCadastre a REST no ⚙ Ambiente (sub-aba Movimentos).');
+    return;
+  }
+  const ativos = (info.blocos || []).filter(b => b.ativo);
+  if (!ativos.length) {
+    alert('O perfil de coleta deste cliente não tem bloco ativo. Abra o 🧩 Perfil de coleta.');
+    return;
+  }
+
+  const m = modal(`⚡ Atualizar pela REST · ${bases.map(a => AMB[a].label).join(' + ')}`,
+    `<p class="text-xs text-slate-500">Roda o <b>perfil de coleta</b> deste cliente em cada base,
+       um bloco por vez, e grava <b>uma medição por base</b> pelo importador de sempre. Bloco
+       com tabela que não existe na base fica como <i>não se aplica</i> e não trava o resto.
+       Janela: <b>${escapeHtml(info.janela === 'total' ? 'base inteira' : info.janela)}</b>.</p>
+     ${fora.length ? `<p class="text-xs text-amber-700">Fora desta rodada — ${escapeHtml(fora.join(' · '))}.</p>` : ''}
+     <div id="lt-lista" class="space-y-3"></div>`, 'Atualizar');
+  larguraModal(m, 'max-w-2xl');
+
+  const est = {};            // amb -> {lote, blocos, res, fim}
+  let fase = 'pronto', gravou = false;
+  const ic = (r) => !r ? '<span class="text-slate-300">·</span>'
+    : r.rodando ? '<span class="text-totvs-blue">⏳</span>'
+    : r.ok ? '<span class="text-emerald-600">✓</span>'
+    : r.nao_se_aplica ? '<span class="text-slate-400">–</span>'
+    : '<span class="text-rose-600">✕</span>';
+
+  const desenha = () => {
+    m.campo('lt-lista').innerHTML = bases.map(a => {
+      const e = est[a] || {}, f = e.fim;
+      const blocos = e.blocos || ativos.map(b => ({ id: b.id, nome: b.nome, analises: b.analises }));
+      const linhas = blocos.map(b => {
+        const r = (e.res || {})[b.id];
+        const det = !r || r.rodando ? '' : r.ok
+          ? `${fmtNum(r.linhas || 0)} linha(s) · ${((r.ms || 0) / 1000).toFixed(1)} s`
+          : escapeHtml(String(r.erro || '').slice(0, 220));
+        return `<li class="flex gap-2 items-start">
+          <span class="w-4 shrink-0 text-center">${ic(r)}</span>
+          <span class="min-w-0"><b class="font-medium">${escapeHtml(b.nome)}</b>
+            <span class="text-slate-400"> · ${escapeHtml((b.analises || []).join(', ') || '—')}</span>
+            ${det ? `<br><span class="${r && !r.ok && !r.nao_se_aplica ? 'text-rose-600' : 'text-slate-500'}">${det}</span>` : ''}</span></li>`;
+      }).join('');
+      let rodape = '';
+      if (f && f.ok) {
+        rodape = `<p class="text-emerald-700 mt-2">✓ Gravada a medição de ${fmtData(String(f.ultima_medicao || ''))}
+          — ${fmtNum(f.dimensoes || 0)} combinação(ões), ${(f.medidas || []).length} análise(s) medida(s).</p>
+          ${(f.avisos || []).map(x => `<p class="text-amber-700">⚠ ${escapeHtml(x)}</p>`).join('')}`;
+      } else if (f && f.recusa) {
+        rodape = `<p class="text-rose-700 mt-2">${escapeHtml(f.error)}</p>
+          <button data-forcar="${a}" class="mt-1 px-2 py-1 rounded-md border border-rose-300 bg-rose-50 hover:bg-rose-100">Gravar mesmo assim</button>`;
+      } else if (f && f.error) {
+        const nFalha = (f.falhos || []).length + (f.pendentes || []).length;
+        rodape = `<p class="text-rose-700 mt-2">${escapeHtml(f.error)}</p>
+          <div class="flex gap-2 mt-1">
+            ${e.lote ? `<button data-repete="${a}" class="px-2 py-1 rounded-md border border-slate-300 hover:bg-slate-50">Tentar de novo${nFalha ? ` (${nFalha})` : ''}</button>` : ''}
+            ${e.lote && Object.values(e.res || {}).some(r => r.ok)
+              ? `<button data-parcial="${a}" class="px-2 py-1 rounded-md border border-amber-300 bg-amber-50 hover:bg-amber-100">Gravar só o que rodou</button>` : ''}
+          </div>`;
+      }
+      return `<div class="border border-slate-200 rounded-lg p-3 text-xs">
+        <p class="mb-2"><span class="px-2 py-0.5 rounded-full font-semibold ${AMB[a].cls}">${AMB[a].label}</span>
+          <span class="text-slate-400 ml-1">${escapeHtml(cad.get(a).environment || '')} · ${escapeHtml(DIALETO_ROT[cad.get(a).banco] || cad.get(a).banco || '?')} · sufixo ${escapeHtml(cad.get(a).sufixo || '010')}</span></p>
+        <ul class="space-y-1">${linhas}</ul>${rodape}</div>`;
+    }).join('');
+    // "Gravar mesmo assim" mantém o "só o que rodou" se a recusa veio dele.
+    m.el.querySelectorAll('[data-forcar]').forEach(b => b.addEventListener('click', () =>
+      executa(async () => fecha(b.dataset.forcar,
+        ((est[b.dataset.forcar] || {}).qs ? est[b.dataset.forcar].qs + '&' : '?') + 'forcar=1'))));
+    m.el.querySelectorAll('[data-parcial]').forEach(b => b.addEventListener('click', () =>
+      executa(async () => fecha(b.dataset.parcial, '?parcial=1'))));
+    m.el.querySelectorAll('[data-repete]').forEach(b => b.addEventListener('click', () =>
+      executa(async () => rodaBase(b.dataset.repete))));
+  };
+
+  const fecha = async (a, qs = '') => {
+    const e = est[a];
+    e.qs = qs.replace(/[?&]forcar=1/, '');
+    const r = await apiCorpo(`/api/monitmov/${enc}/lote/${e.lote}/fechar${qs}`, { method: 'POST' });
+    e.fim = r.ok ? { ok: true, ...r.body } : { ok: false, ...r.body, error: r.body.error || `HTTP ${r.status}` };
+    if (r.ok) { gravou = true; e.lote = null; }
+    desenha();
+  };
+
+  const rodaBase = async (a) => {
+    const e = est[a] = est[a] || { res: {} };
+    e.fim = null;
+    if (!e.lote) {
+      const r = await apiCorpo(`/api/monitmov/${enc}/lote?ambiente=${a}`, { method: 'POST' });
+      if (!r.ok) { e.fim = { ok: false, error: r.body.error || `HTTP ${r.status}` }; desenha(); return; }
+      Object.assign(e, { lote: r.body.lote_id, blocos: r.body.blocos, res: r.body.resultados || {} });
+    }
+    for (const b of e.blocos) {
+      const atual = e.res[b.id];
+      if (atual && (atual.ok || atual.nao_se_aplica)) continue;
+      e.res[b.id] = { rodando: true };
+      desenha();
+      const r = await apiCorpo(`/api/monitmov/${enc}/lote/${e.lote}/bloco/${encodeURIComponent(b.id)}`,
+                               { method: 'POST' });
+      e.res[b.id] = r.ok ? r.body : { ok: false, erro: r.body.error || `HTTP ${r.status}` };
+      desenha();
+    }
+    await fecha(a);
+  };
+
+  const executa = async (fn) => {
+    if (fase === 'rodando') return;
+    fase = 'rodando'; m.erro(''); m.ocupado(true, 'Coletando…');
+    try { await fn(); } catch (e) { m.erro(e.message); }
+    fase = 'fim'; m.ocupado(false, 'Fechar');
+  };
+
+  // Fechar pelo × também recarrega a tela se alguma base gravou.
+  m.el.querySelectorAll('[data-fechar]').forEach(b => b.addEventListener('click', () => {
+    if (gravou && depois) depois();
+  }));
+  m.aoConfirmar(() => {
+    if (fase === 'fim') { m.fecha(); if (gravou && depois) depois(); return; }
+    executa(async () => { for (const a of bases) await rodaBase(a); });
+  });
+  desenha();
+}
+
+// ── 🧩 Perfil de coleta ──────────────────────────────────────────────────
+async function abrePerfilColeta(depois) {
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes.'); return; }
+  const enc = encodeURIComponent(cli);
+  let info;
+  try { info = await api(`/api/monitmov/${enc}/perfil-coleta`); }
+  catch (e) { alert('Não consegui ler o perfil de coleta: ' + e.message); return; }
+  const p = info.perfil || {}, blocos = info.blocos || [], ambs = info.ambientes || [];
+  const bancos = [...new Set(ambs.map(a => a.banco).filter(Boolean))];
+  const dialetoPadrao = bancos[0] || 'oracle';
+  const reabre = () => { m.fecha(); abrePerfilColeta(depois); };
+
+  const selo = (a) => `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${AMB[a.ambiente].cls}">${AMB[a.ambiente].label}</span>
+      <span class="text-slate-500">${escapeHtml(DIALETO_ROT[a.banco] || a.banco || 'banco ?')} · sufixo ${escapeHtml(a.sufixo || '010')}
+      · ${escapeHtml(a.empresa || '01')}/${escapeHtml(a.filial || '01')}
+      ${a.tem_token ? '' : ' · <span class="text-rose-600">sem token</span>'}${a.ativo ? '' : ' · <span class="text-rose-600">inativa</span>'}</span>`;
+
+  const cenRows = (info.cenarios || []).map(c => `
+    <tr class="border-t border-slate-100">
+      <td class="py-1.5 pr-3 font-mono">${escapeHtml(c.analise)}</td>
+      <td class="py-1.5 pr-3 text-right tabular-nums">${c.cenarios}</td>
+      <td class="py-1.5">${c.medida ? '<span class="text-emerald-700">✓ medida por bloco ativo</span>'
+        : `<span class="text-amber-700">⚠ nenhum bloco ativo mede — aparece como <b>Não medido</b></span>
+           ${c.no_catalogo ? ` <button data-cat="${escapeHtml(c.analise)}" class="ml-1 px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50">+ do catálogo</button>` : ''}`}</td>
+    </tr>`).join('');
+
+  const blocoRows = blocos.map(b => `
+    <tr class="border-t border-slate-100 align-top">
+      <td class="py-1.5 pr-2"><input type="checkbox" data-ativo="${escapeHtml(b.id)}" ${b.ativo ? 'checked' : ''} class="accent-totvs-blue"></td>
+      <td class="py-1.5 pr-3"><b class="font-medium">${escapeHtml(b.nome)}</b>
+        <span class="ml-1 text-[10px] uppercase tracking-wide text-slate-400">${b.origem === 'script' ? 'script salvo' : b.origem === 'catalogo' ? 'catálogo' : 'próprio'}</span>
+        <div class="text-slate-400">${escapeHtml((b.analises || []).join(', ') || 'nenhuma análise declarada')}</div></td>
+      <td class="py-1.5 pr-3">${b.ambientes === '*' ? 'as duas' : escapeHtml(AMB[b.ambientes]?.label || b.ambientes)}</td>
+      <td class="py-1.5 pr-3">${escapeHtml(DIALETO_ROT[b.dialeto] || b.dialeto || '—')}</td>
+      <td class="py-1.5 pr-3 text-right tabular-nums">${(b.bytes / 1024).toFixed(1)} KB</td>
+      <td class="py-1.5 whitespace-nowrap">${b.origem === 'script'
+        ? '<span class="text-slate-400">edite no 🗄 Script SQL</span>'
+        : `<button data-edita="${escapeHtml(b.id)}" class="px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50">Editar</button>
+           <button data-remove="${escapeHtml(b.id)}" class="px-2 py-0.5 rounded border border-rose-200 text-rose-700 hover:bg-rose-50">Remover</button>`}</td>
+    </tr>`).join('');
+
+  const lotes = (info.lotes || []).map(l => {
+    const r = l.resumo || {};
+    const st = { gravado: 'text-emerald-700', recusado: 'text-rose-700', falhou: 'text-rose-700',
+                 aberto: 'text-amber-700', abandonado: 'text-slate-400' }[l.status] || '';
+    return `<li><span class="${st} font-medium">${escapeHtml(l.status)}</span> · ${AMB[l.ambiente]?.label || l.ambiente}
+      · ${escapeHtml(String(l.iniciado_em).slice(0, 16).replace('T', ' '))} · ${escapeHtml(l.disparado_por || '—')}
+      ${r.erro || r.error ? ` · <span class="text-rose-600">${escapeHtml(String(r.erro || r.error).slice(0, 140))}</span>` : ''}
+      ${(r.avisos || []).length ? ` · <span class="text-amber-700">${escapeHtml(r.avisos.join(' ').slice(0, 160))}</span>` : ''}</li>`;
+  }).join('');
+
+  const m = modal('🧩 Perfil de coleta · movimentos', `
+    <p class="text-xs text-slate-500">O que a coleta pela REST pergunta à base <b>deste cliente</b>.
+      O <b>script salvo</b> continua sendo o primeiro bloco; os demais entram do catálogo ou
+      colados. Sufixo, empresa/filial e janela vêm de cada base na hora de rodar
+      (<code>{{SUFIXO}}</code>, <code>{{DT_INI}}</code>, <code>{{DT_FIM}}</code>,
+      <code>{{PERIODO}}</code>, <code>{{EMPRESA}}</code>, <code>{{FILIAL}}</code>).</p>
+    <div class="space-y-1 text-xs">${ambs.length ? ambs.map(a => `<div>${selo(a)}</div>`).join('')
+      : '<p class="text-rose-600">Nenhuma base cadastrada — use o ⚙ Ambiente na sub-aba Movimentos.</p>'}</div>
+
+    ${cenRows ? `<div><p class="text-xs font-semibold text-slate-600 mb-1">Análises com cenário combinado</p>
+      <table class="w-full text-xs"><thead><tr class="text-slate-500 text-left">
+        <th class="pb-1 pr-3">Análise</th><th class="pb-1 pr-3 text-right">Cenários</th><th class="pb-1">Coleta</th>
+      </tr></thead><tbody>${cenRows}</tbody></table></div>` : ''}
+
+    <div><p class="text-xs font-semibold text-slate-600 mb-1">Blocos de coleta <span class="font-normal text-slate-400">· ☑ = roda na coleta</span></p>
+      ${blocos.length ? `<table class="w-full text-xs"><thead><tr class="text-slate-500 text-left">
+        <th class="pb-1"></th><th class="pb-1 pr-3">Bloco · análises</th><th class="pb-1 pr-3">Bases</th>
+        <th class="pb-1 pr-3">Dialeto</th><th class="pb-1 pr-3 text-right">Tamanho</th><th class="pb-1"></th>
+      </tr></thead><tbody>${blocoRows}</tbody></table>`
+      : '<p class="text-xs text-slate-400">Nenhum bloco ainda.</p>'}
+      <div class="flex flex-wrap gap-2 mt-2 items-center text-xs">
+        <select id="pf-cat" class="px-2 py-1 border border-slate-300 rounded-md">
+          ${(info.catalogo || []).map(a => `<option value="${a}">${a}</option>`).join('')}</select>
+        <select id="pf-cat-dial" class="px-2 py-1 border border-slate-300 rounded-md">
+          ${Object.entries(DIALETO_ROT).map(([k, v]) => `<option value="${k}" ${k === dialetoPadrao ? 'selected' : ''}>${v}</option>`).join('')}</select>
+        <button id="pf-add-cat" class="px-2 py-1 rounded-md border border-slate-300 hover:bg-slate-50">+ Bloco do catálogo</button>
+        <button id="pf-add-proprio" class="px-2 py-1 rounded-md border border-slate-300 hover:bg-slate-50">+ Bloco próprio</button>
+      </div></div>
+
+    <div class="grid grid-cols-3 gap-3">
+      ${campo('pf-janela', 'Janela (dias)', String(p.janela_dias || 0), 'number', '0 = base inteira')}
+      <label class="block"><span class="text-xs text-slate-500">Coleta agendada</span>
+        <select id="pf-agenda" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+          <option value="off">Desligada</option><option value="diaria">Diária (madrugada)</option>
+          <option value="semanal">Semanal</option></select>
+        <span class="text-xs text-slate-400">roda sozinha, sem a tela aberta</span></label>
+      <label class="block"><span class="text-xs text-slate-500">Bases da agenda</span>
+        <select id="pf-agenda-amb" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+          <option value="*">As duas</option><option value="producao">Só Produção</option>
+          <option value="teste">Só Testes</option></select></label>
+    </div>
+    ${lotes ? `<div class="text-xs text-slate-500 border-t border-slate-200 pt-2"><b>Últimas coletas</b>
+      <ul class="mt-1 space-y-0.5">${lotes}</ul></div>` : ''}`, 'Salvar perfil');
+  larguraModal(m, 'max-w-3xl');
+  m.campo('pf-agenda').value = p.agenda || 'off';
+  m.campo('pf-agenda-amb').value = p.agenda_ambientes || '*';
+
+  const salvaBloco = async (corpo) => api(`/api/monitmov/${enc}/blocos`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+  const salvaPerfil = async (extra = {}) => api(`/api/monitmov/${enc}/perfil-coleta`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      usar_script_salvo: p.usar_script_salvo !== false,
+      janela_dias: Number(m.campo('pf-janela').value || 0),
+      agenda: m.campo('pf-agenda').value,
+      agenda_ambientes: m.campo('pf-agenda-amb').value, ...extra }) });
+  const addCatalogo = async (analise, dialeto) => {
+    try {
+      await salvaBloco({ nome: `${analise} · catálogo ${DIALETO_ROT[dialeto]}`, origem: 'catalogo',
+                         catalogo: analise, dialeto, ambientes: '*', ativo: true, ordem: 50,
+                         sql: blocoCatalogoMov(analise, dialeto), analises: [analise] });
+      reabre();
+    } catch (e) { m.erro(e.message); }
+  };
+
+  m.el.querySelectorAll('[data-cat]').forEach(b => b.addEventListener('click', () =>
+    addCatalogo(b.dataset.cat, dialetoPadrao)));
+  m.campo('pf-add-cat').addEventListener('click', () =>
+    addCatalogo(m.campo('pf-cat').value, m.campo('pf-cat-dial').value));
+  m.campo('pf-add-proprio').addEventListener('click', () => editaBlocoMov(null, dialetoPadrao, salvaBloco, reabre));
+  m.el.querySelectorAll('[data-edita]').forEach(b => b.addEventListener('click', () =>
+    editaBlocoMov(blocos.find(x => x.id === b.dataset.edita), dialetoPadrao, salvaBloco, reabre)));
+  m.el.querySelectorAll('[data-remove]').forEach(b => b.addEventListener('click', async () => {
+    const x = blocos.find(y => y.id === b.dataset.remove);
+    if (!confirm(`Remover o bloco "${x.nome}"? As análises dele deixam de ser medidas.`)) return;
+    try { await api(`/api/monitmov/${enc}/blocos/${x.id}`, { method: 'DELETE' }); reabre(); }
+    catch (e) { m.erro(e.message); }
+  }));
+  m.el.querySelectorAll('[data-ativo]').forEach(ch => ch.addEventListener('change', async () => {
+    const x = blocos.find(y => y.id === ch.dataset.ativo);
+    try {
+      if (x.origem === 'script') { p.usar_script_salvo = ch.checked; await salvaPerfil(); }
+      else await salvaBloco({ ...x, ativo: ch.checked });
+      reabre();
+    } catch (e) { ch.checked = !ch.checked; m.erro(e.message); }
+  }));
+  m.aoConfirmar(async () => {
+    m.erro(''); m.ocupado(true, 'Salvando…');
+    try { await salvaPerfil(); m.fecha(); if (depois) depois(); }
+    catch (e) { m.ocupado(false, 'Salvar perfil'); m.erro(e.message); }
+  });
+}
+
+function editaBlocoMov(b, dialetoPadrao, salvaBloco, depois) {
+  const novo = !b;
+  b = b || { nome: '', ambientes: '*', dialeto: dialetoPadrao, sql: '', analises: [], ativo: true, ordem: 100 };
+  const m = modal(novo ? '+ Bloco próprio' : `Editar bloco · ${escapeHtml(b.nome)}`, `
+    <p class="text-xs text-slate-500">Uma consulta <b>só de leitura</b> no layout do D5
+      (<code>ANALISE; DESCRICAO; DIM1_NOME; DIM1 … DIM4; PERIODO; DT_LEITURA; SEMANA; QTDE; QTD_DOC</code>).
+      Use <code>{{SUFIXO}}</code> no lugar do 010 para o bloco servir às duas bases.</p>
+    ${campo('bl-nome', 'Nome', b.nome)}
+    <div class="grid grid-cols-3 gap-3">
+      <label class="block"><span class="text-xs text-slate-500">Bases</span>
+        <select id="bl-amb" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+          <option value="*">As duas</option><option value="producao">Só Produção</option><option value="teste">Só Testes</option></select></label>
+      <label class="block"><span class="text-xs text-slate-500">Dialeto</span>
+        <select id="bl-dial" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+          ${Object.entries(DIALETO_ROT).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
+      ${campo('bl-ordem', 'Ordem', String(b.ordem ?? 100), 'number')}
+    </div>
+    ${campo('bl-analises', 'Análises que o bloco mede', (b.analises || []).join(', '), 'text',
+            'vazio = lido do SQL (\'XXX_YYY\' AS ANALISE)')}
+    <label class="block"><span class="text-xs text-slate-500">SQL</span>
+      <textarea id="bl-sql" rows="14" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md font-mono text-xs">${escapeHtml(b.sql || '')}</textarea></label>`,
+    'Salvar bloco');
+  larguraModal(m, 'max-w-3xl');
+  m.campo('bl-amb').value = b.ambientes || '*';
+  m.campo('bl-dial').value = b.dialeto || dialetoPadrao;
+  m.aoConfirmar(async () => {
+    m.erro(''); m.ocupado(true, 'Salvando…');
+    try {
+      await salvaBloco({
+        id: novo ? undefined : b.id, nome: m.campo('bl-nome').value.trim(),
+        origem: b.origem === 'catalogo' ? 'catalogo' : 'custom', catalogo: b.catalogo,
+        ambientes: m.campo('bl-amb').value, dialeto: m.campo('bl-dial').value,
+        ordem: Number(m.campo('bl-ordem').value || 100), ativo: b.ativo !== false,
+        analises: m.campo('bl-analises').value.split(/[,;\s]+/).filter(Boolean),
+        sql: m.campo('bl-sql').value });
+      m.fecha(); depois();
+    } catch (e) { m.ocupado(false, 'Salvar bloco'); m.erro(e.message); }
+  });
+}
+
+const recarregaCobMov = () => {
+  cob.customer = null; mov.customer = null;
+  if (state.tab === 'cobertura') initCobertura(); else initMovimentos(mov.ambiente);
+};
+$('#cob-atualizar').addEventListener('click', () =>
+  atualizaMovimentosREST(['teste', 'producao'], recarregaCobMov));
+$('#cob-perfil').addEventListener('click', () => abrePerfilColeta(recarregaCobMov));
+$('#mov-perfil').addEventListener('click', () => abrePerfilColeta(recarregaCobMov));
 
 // ============================================================================
 //  ABA TRANSIÇÃO — painel de status entregue ao cliente
@@ -7332,22 +7756,27 @@ const sqlTxt = (s) => `'${String(s ?? '').replace(/'/g, "''")}'`;
 // derruba a query) está em _entregas/MONITCAD_D5_movimentos_dimensoes_ORACLE.sql
 // do projeto MONITCAD. Esta aqui é a legível, nos dois bancos: quem quiser a
 // outra cola no textarea e salva — o modal aceita script colado.
-function scriptMovimentosD5(sufixo, dialeto, ini, fim) {
-  const ora = dialeto === 'oracle';
-  const cat = (...p) => p.join(ora ? ' || ' : ' + ');
-  // Oracle: TRIM de brancos vira NULL. SQL Server: vira ''. Por isso o
-  // "campo vazio" é escrito diferente nos dois — e não dá para unificar com
+/** As duas consultas do D5 (SD2 e SE5) separadas — o "🗄 Script SQL" junta
+ *  as duas num UNION ALL; o 🧩 Perfil de coleta usa cada uma como um bloco.
+ *  Três dialetos: Oracle, SQL Server e PostgreSQL (TFDPHR00 roda em Postgres). */
+function pecasMovD5(sufixo, dialeto, ini, fim, periodoTxt) {
+  const ora = dialeto === 'oracle', pg = dialeto === 'postgres';
+  const cat = (...p) => p.join(ora || pg ? ' || ' : ' + ');
+  // Oracle: TRIM de brancos vira NULL. SQL Server e Postgres: vira ''. Por isso
+  // o "campo vazio" é escrito diferente — e não dá para unificar com
   // NULLIF(...,'') porque no Oracle '' É NULL e o NULLIF quebra.
-  const vazio = (c, txt) => ora
-    ? `NVL(TRIM(${c}),'${txt}')`
+  const vazio = (c, txt) => ora ? `NVL(TRIM(${c}),'${txt}')`
+    : pg ? `COALESCE(NULLIF(TRIM(${c}),''),'${txt}')`
     : `COALESCE(NULLIF(LTRIM(RTRIM(${c})),''),'${txt}')`;
-  const tr = (c) => ora ? `TRIM(${c})` : `LTRIM(RTRIM(${c}))`;
+  const tr = (c) => ora || pg ? `TRIM(${c})` : `LTRIM(RTRIM(${c}))`;
   const agora = ora ? `TO_CHAR(SYSDATE,'DD/MM/YYYY HH24:MI')`
-                    : `CONVERT(varchar(16), GETDATE(), 120)`;
+              : pg ? `TO_CHAR(NOW(),'DD/MM/YYYY HH24:MI')`
+              : `CONVERT(varchar(16), GETDATE(), 120)`;
   const semana = ora ? `TO_CHAR(SYSDATE,'IYYY')||'-W'||TO_CHAR(SYSDATE,'IW')`
-                     : `CONCAT(DATEPART(year, GETDATE()), '-W', FORMAT(DATEPART(ISO_WEEK, GETDATE()), '00'))`;
+               : pg ? `TO_CHAR(NOW(),'IYYY')||'-W'||TO_CHAR(NOW(),'IW')`
+               : `CONCAT(DATEPART(year, GETDATE()), '-W', FORMAT(DATEPART(ISO_WEEK, GETDATE()), '00'))`;
   const p1 = (ini || '').replace(/-/g, ''), p2 = (fim || '').replace(/-/g, '');
-  const periodo = p1 && p2 ? `${p1}-${p2}` : 'total';
+  const periodo = periodoTxt || (p1 && p2 ? `${p1}-${p2}` : 'total');
   const janela = (col) => p1 && p2 ? `\n   AND ${col} BETWEEN '${p1}' AND '${p2}'` : '';
 
   // SD2 — UF e contribuinte vêm do cadastro do cliente, NCM do cadastro de
@@ -7417,13 +7846,20 @@ function scriptMovimentosD5(sufixo, dialeto, ini, fim) {
           ${tipodoc},
           ${tipotit},
           ${detalhe}`;
+  return { sd2, se5 };
+}
+
+function scriptMovimentosD5(sufixo, dialeto, ini, fim) {
+  const ora = dialeto === 'oracle', pg = dialeto === 'postgres';
+  const p1 = (ini || '').replace(/-/g, ''), p2 = (fim || '').replace(/-/g, '');
+  const { sd2, se5 } = pecasMovD5(sufixo, dialeto, ini, fim);
 
   return `-- ===========================================================================
 -- MOVIMENTOS · quebra por cenário (SD2 fiscal + SE5 bancário)
 -- Ambiente de destino: ${AMB[mov.ambiente].label.toUpperCase()}
 -- Gerado pela Gestão de Projetos TOTVS SC em ${new Date().toLocaleString('pt-BR')}
 --
--- Rode no banco do Protheus (${ora ? 'Oracle' : 'SQL Server'}), exporte em CSV e
+-- Rode no banco do Protheus (${ora ? 'Oracle' : pg ? 'PostgreSQL' : 'SQL Server'}), exporte em CSV e
 -- suba em "⬆ Importar movimentos". O painel cruza com os cenários combinados
 -- com o cliente ("🎯 Cenários") e mostra coberto / faltante / não previsto.
 --
@@ -7442,7 +7878,7 @@ ${p1 && p2 ? `-- Período: ${p1} a ${p2} (data do documento, char AAAAMMDD).`
 ${sd2}
 UNION ALL
 ${se5}
-ORDER BY 1, 14 DESC${ora ? '' : ';'}
+ORDER BY 1, 14 DESC${ora || pg ? '' : ';'}
 `;
 }
 
@@ -8160,7 +8596,11 @@ async function coletaAgora(tipo) {
 $('#cad-ambiente').addEventListener('click', () => abreModalAmbiente(cad.ambiente));
 $('#mov-ambiente').addEventListener('click', () => abreModalAmbiente(mov.ambiente));
 $('#cad-coletar').addEventListener('click', () => coletaAgora('cadastros'));
-$('#mov-coletar').addEventListener('click', () => coletaAgora('movimentos'));
+// Movimentos passa pelo 🧩 Perfil de coleta (lote por blocos + trava), só na
+// base da sub-aba aberta. Cadastros segue no /coletar de sempre.
+$('#mov-coletar').addEventListener('click', () => atualizaMovimentosREST([mov.ambiente], () => {
+  mov.customer = null; cob.customer = null; initMovimentos(mov.ambiente);
+}));
 
 // ============================================================================
 //  EMPRESAS E COMPARTILHAMENTO (MONITEMP)
