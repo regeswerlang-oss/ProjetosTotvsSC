@@ -2397,9 +2397,34 @@ def _casa_cenario(cen, obs):
     return True
 
 
-def _cobertura(dimensoes, cenarios):
+def _payload_dict(v):
+    if isinstance(v, dict):
+        return v
+    try:
+        d = json.loads(v) if v else {}
+        return d if isinstance(d, dict) else {}
+    except (TypeError, ValueError):
+        return {}
+
+
+def _medidas_da_medicao(payload, dimensoes):
+    """Análises que a medição PERGUNTOU à base. A coleta por perfil grava isso no
+    payload (analises_medidas); medição antiga ou subida à mão não tem, e aí vale
+    o que veio no arquivo — análise ausente do arquivo não foi medida."""
+    pl = _payload_dict(payload)
+    if isinstance(pl.get("analises_medidas"), list):
+        return {_norm_dim(a) for a in pl["analises_medidas"]}
+    return {_norm_dim(d.get("analise")) for d in dimensoes}
+
+
+def _cobertura(dimensoes, cenarios, medidas=None):
     """Cruza esperado × observado. Devolve a lista de cenários com status e a
     lista do que foi observado sem cenário que case.
+
+    `medidas` = análises que a medição perguntou à base. Cenário de análise que
+    ficou de fora é NAO_MEDIDO, não FALTANTE: "não aconteceu" e "ninguém
+    perguntou" pedem ações diferentes (operar × ligar o bloco no perfil).
+    Sem `medidas` o comportamento é o de antes.
 
     NÃO PREVISTO não é erro: numa base de produção é o normal enquanto a lista
     de cenários não está fechada. Vira sinal depois que o cliente combinou tudo.
@@ -2416,6 +2441,8 @@ def _cobertura(dimensoes, cenarios):
             "qtd_doc": sum(float(o.get("qtd_doc") or 0) for o in achou),
             "ocorrencias": len(achou),
             "status": ("COBERTO" if qtde > 0
+                       else "NAO_MEDIDO" if (medidas is not None
+                                             and _norm_dim(c["analise"]) not in medidas)
                        else ("FALTANTE" if c.get("esperado", True) else "OPCIONAL")),
         })
     # Só faz sentido apontar "não previsto" para a análise que já tem cenário
@@ -2425,7 +2452,7 @@ def _cobertura(dimensoes, cenarios):
                      if id(o) not in casados
                      and _norm_dim(o.get("analise")) in com_cenario
                      and float(o.get("qtde") or 0) > 0]
-    ordem = {"FALTANTE": 0, "COBERTO": 1, "OPCIONAL": 2}
+    ordem = {"FALTANTE": 0, "NAO_MEDIDO": 1, "COBERTO": 2, "OPCIONAL": 3}
     cobertura.sort(key=lambda c: (ordem.get(c["status"], 9), c["analise"],
                                   c.get("descricao") or ""))
     nao_previstos.sort(key=lambda o: -float(o.get("qtde") or 0))
@@ -2482,7 +2509,7 @@ def api_monitmov_evolucao(customer):
     amb = _ambiente()
     f_sql, f_par, f_de, f_ate = _periodo_req()
     meds = q(f"""select id, data_medicao, semana, hora_medicao,
-                       periodo_ini, periodo_fim, origem
+                       periodo_ini, periodo_fim, origem, payload
                   from cockpit.monitmov_medicoes
                  where customer=%s and ambiente=%s{f_sql} order by data_medicao, id""",
              (customer, amb) + f_par)
@@ -2508,9 +2535,10 @@ def api_monitmov_evolucao(customer):
     serie, matriz, analises, fora = [], {}, {}, {}
     for m in meds:
         ds = por_med.get(m["id"], [])
-        cob, nao_prev = _cobertura(ds, cenarios)
+        cob, nao_prev = _cobertura(ds, cenarios, _medidas_da_medicao(m.get("payload"), ds))
         cobertos = sum(1 for c in cob if c["status"] == "COBERTO")
         faltantes = sum(1 for c in cob if c["status"] == "FALTANTE")
+        nao_medidos = sum(1 for c in cob if c["status"] == "NAO_MEDIDO")
         data = str(m["data_medicao"])
 
         # ── por análise: vale para TODAS, tenham cenário ou não ──────────────
@@ -2552,7 +2580,7 @@ def api_monitmov_evolucao(customer):
             "documentos": sum(float(d["qtd_doc"] or 0) for d in ds),
             "combinacoes": len(ds),
             "analises": len({_norm_dim(d["analise"]) for d in ds}),
-            "cobertos": cobertos, "faltantes": faltantes,
+            "cobertos": cobertos, "faltantes": faltantes, "nao_medidos": nao_medidos,
             "cenarios": len(cob), "nao_previstos": len(nao_prev),
         })
         # A chave da matriz é o id do cenário: descrição repete entre análises.
@@ -2564,7 +2592,7 @@ def api_monitmov_evolucao(customer):
             linha["serie"][data] = {"qtde": c["qtde"], "status": c["status"]}
 
     # Faltante primeiro: é o que precisa de ação. Depois o que tem menos volume.
-    ordem = {"FALTANTE": 0, "COBERTO": 1, "OPCIONAL": 2}
+    ordem = {"FALTANTE": 0, "NAO_MEDIDO": 1, "COBERTO": 2, "OPCIONAL": 3}
     ultima = str(meds[-1]["data_medicao"])
     linhas = sorted(matriz.values(),
                     key=lambda l: (ordem.get((l["serie"].get(ultima) or {}).get("status"), 9),
@@ -2593,7 +2621,8 @@ def api_monitmov(customer):
     # do período, e a série/total de medições também respeitam o recorte.
     f_sql, f_par, f_de, f_ate = _periodo_req()
     f_sql_m = f_sql.replace("data_medicao", "m.data_medicao")
-    meds = q(f"""select id, data_medicao, semana, periodo_ini, periodo_fim, origem
+    meds = q(f"""select id, data_medicao, semana, hora_medicao, periodo_ini, periodo_fim,
+                       origem, payload, created_at
                   from cockpit.monitmov_medicoes
                  where customer=%s and ambiente=%s{f_sql} order by data_medicao""",
              (customer, amb) + f_par)
@@ -2636,7 +2665,9 @@ def api_monitmov(customer):
                            sum(qtde) as qtde, sum(qtd_doc) as qtd_doc
                       from cockpit.monitmov_dimensoes where medicao_id=%s
                      group by analise order by analise""", (ult["id"],))
-    cobertura, nao_previstos = _cobertura(dimensoes, cenarios)
+    pl = _payload_dict(ult.get("payload"))
+    medidas = _medidas_da_medicao(pl, dimensoes)
+    cobertura, nao_previstos = _cobertura(dimensoes, cenarios, medidas)
     # Fila de trabalho do consultor: o que o de-para bancário ainda não sabe ler
     a_classificar = [d for d in dimensoes if _norm_dim(d.get("dim1")) == "(A CLASSIFICAR)"]
     return _json({"ok": True, "customer": customer, "ambiente": amb, "vazio": False,
@@ -2645,7 +2676,14 @@ def api_monitmov(customer):
                   "itens": itens, "modulos": modulos, "serie": serie,
                   "dimensoes": dimensoes, "analises": analises, "cenarios": cenarios,
                   "cobertura": cobertura, "nao_previstos": nao_previstos,
-                  "a_classificar": a_classificar, "filtro_de": f_de, "filtro_ate": f_ate})
+                  "a_classificar": a_classificar, "filtro_de": f_de, "filtro_ate": f_ate,
+                  "hora_medicao": ult.get("hora_medicao"), "origem": ult.get("origem"),
+                  "gravada_em": ult.get("created_at"),
+                  "analises_medidas": sorted(medidas),
+                  "nao_se_aplica": pl.get("nao_se_aplica") or [],
+                  "coleta_blocos": pl.get("blocos") or [],
+                  "coleta_parcial": bool(pl.get("parcial")),
+                  "coleta_forcada": bool(pl.get("forcado"))})
 
 
 def _gravar_movimentos(customer, amb, body, origem="upload"):
@@ -2873,7 +2911,7 @@ def _log_coleta(customer, ambiente, tipo, ini, ok, **kw):
                 (customer, ambiente, tipo, ini, int((time.time() - ini) * 1000), ok,
                  kw.get("http_status"), kw.get("linhas"), kw.get("medicoes"),
                  kw.get("itens"), kw.get("bytes"), kw.get("data_medicao"),
-                 (kw.get("erro") or "")[:2000] or None, current_user()))
+                 (kw.get("erro") or "")[:2000] or None, kw.get("por") or current_user()))
     except Exception:
         pass          # log não pode derrubar a coleta
 
@@ -3301,6 +3339,19 @@ def api_protheus_coletar(customer, ambiente):
         res = _gravar_empresas(customer, amb, body, origem="coleta")
         itens = res.get("itens")
     elif tipo == "movimentos":
+        # Mesma trava e mesmo registro do lote por perfil (🧩): o caminho antigo
+        # não pode ser a porta por onde o script errado ainda grava.
+        medidas = set(_mov_analises_sql(script["sql"])) | {
+            (d.get("analise") or "").strip().upper()
+            for m in body["medicoes"] for d in m.get("dimensoes") or []}
+        medidas.discard("")
+        if (msg := _mov_trava(customer, medidas, request.args.get("forcar") == "1")):
+            _log_coleta(customer, amb, tipo, ini, False, http_status=r.status_code,
+                        linhas=dados.get("linhas"), erro=msg)
+            return _json({"ok": False, "recusa": True, "error": msg,
+                          "medidas": sorted(medidas)}, 409)
+        for m in body["medicoes"]:
+            m["analises_medidas"] = sorted(medidas)
         res = _gravar_movimentos(customer, amb, body, origem="coleta")
         itens = res.get("dimensoes")
     else:
@@ -3316,6 +3367,641 @@ def api_protheus_coletar(customer, ambiente):
                   "tempo_base_ms": dados.get("tempo_ms"), **res})
 
 
+
+
+# ── PERFIL DE COLETA DE MOVIMENTOS — particularidades de cada cliente ───────
+# 30/10/2026. Até aqui a coleta de movimentos era UM script por cliente, o mesmo
+# nas duas bases, rodado de uma vez. Três coisas deram errado com isso:
+#
+# 1. Cada cliente mede outra coisa. A Dígitro mede o fluxo de contratos (D10,
+#    14 análises), a Olim mede fiscal + financeiro + compras. Um cenário cuja
+#    análise não está no script (os 11 SE5_BANCARIO da Dígitro) aparecia como
+#    FALTANTE: parecia operação que não aconteceu, quando era pergunta que
+#    ninguém fez à base.
+# 2. Um script de outra coisa salvo como "movimentos" (um diagnóstico de campos
+#    GCT, 22/10/2026) gravou a medição de PRODUÇÃO da Dígitro sem erro nenhum. A
+#    Cobertura passou a mostrar 0/41 e parecia base parada.
+# 3. Tabela de módulo não implantado (ORA-00942) derruba a consulta inteira, e o
+#    teto de ~146 KB / 60 s vale para o script todo.
+#
+# A saída: a coleta vira um LOTE de BLOCOS. O script salvo continua sendo o
+# primeiro bloco (nada do que funciona hoje muda), e o perfil do cliente
+# acrescenta blocos — do catálogo (SD2_FISCAL, SE5_BANCARIO, gerados pela tela
+# no dialeto da base) ou próprios. Cada bloco é uma chamada ao /tscmonit/query;
+# o lote junta tudo e grava UMA medição pelo _gravar_movimentos de sempre.
+#
+# Particularidade por base sai dos placeholders, trocados na hora de rodar com o
+# cadastro do ⚙ Ambiente: {{SUFIXO}}, {{EMPRESA}}, {{FILIAL}} e a janela do
+# perfil {{DT_INI}}, {{DT_FIM}}, {{PERIODO}}. O mesmo bloco serve teste e
+# produção mesmo quando o sufixo ou a filial mudam.
+#
+# A medição passa a guardar QUAIS análises foram medidas (payload
+# analises_medidas). É isso que separa "medido e sem movimento" (FALTANTE) de
+# "ninguém perguntou" (NAO_MEDIDO).
+#
+# Quem orquestra é o navegador (cada bloco = uma invocação da Vercel, com os
+# seus 60 s) ou o cron (/api/cron/coleta-movimentos), que retoma o lote aberto
+# na chamada seguinte quando o orçamento acaba. As duas portas usam as MESMAS
+# funções _mov_lote_*.
+# Spec: docs/specs/2026-10-30-perfil-coleta-movimentos.md
+
+MOV_PH_RE = re.compile(r"\{\{\s*(SUFIXO|DT_INI|DT_FIM|PERIODO|EMPRESA|FILIAL)\s*\}\}", re.I)
+# 'CN9_CONTRATO' AS ANALISE — o jeito que todo script do layout D5 declara a
+# análise. Lido do SQL, e não do resultado, para saber o que o bloco PERGUNTA
+# mesmo quando a resposta volta vazia.
+MOV_RE_ANALISE = re.compile(r"'([A-Z][A-Z0-9]{1,3}_[A-Z0-9_]+)'\s+AS\s+\"?ANALISE\b", re.I)
+# Tabela que não existe na base = módulo não implantado. O bloco "não se aplica"
+# — não é falha, e não pode travar o lote. Coluna inexistente (ORA-00904) NÃO
+# entra aqui: é script errado, e tem que aparecer como erro.
+MOV_RE_NAO_EXISTE = re.compile(
+    r"ORA-00942|Invalid object name|relation \S+ does not exist|42P01", re.I)
+MOV_CATALOGO = ("SD2_FISCAL", "SE5_BANCARIO")
+MOV_AGENDAS = ("off", "diaria", "semanal")
+MOV_AGENDA_HORAS = {"diaria": 20, "semanal": 24 * 6.5}
+MOV_CRON_ORCAMENTO_S = 48          # a função morre em 60 s
+MOV_CRON_FOLGA_S = 12              # abaixo disso não começa bloco novo
+MOV_CRON_ESPERA_H = 6              # lote do cron que falhou não é refeito antes disso
+
+
+def _mov_analises_sql(sql):
+    return sorted({m.group(1).upper() for m in MOV_RE_ANALISE.finditer(sql or "")})
+
+
+def _mov_perfil(customer):
+    p = q("select * from cockpit.monitmov_perfil where customer=%s", (customer,), one=True)
+    return dict(p) if p else {"customer": customer, "usar_script_salvo": True,
+                              "janela_dias": 0, "agenda": "off", "agenda_ambientes": "*"}
+
+
+def _mov_blocos(customer, amb=None, so_ativos=True, com_sql=True):
+    """O que uma coleta roda, em ordem: o script salvo (🗄 Script SQL) e os
+    blocos do perfil. O script salvo NÃO é copiado para a tabela de blocos: duas
+    cópias divergiriam no primeiro "Salvar" do modal."""
+    perfil = _mov_perfil(customer)
+    out = []
+    s = q("""select sql, dialeto, updated_by, updated_at from cockpit.monitcad_scripts
+              where customer=%s and tipo='movimentos'""", (customer,), one=True)
+    if s and (s.get("sql") or "").strip():
+        out.append({"id": "script", "nome": "Script salvo (🗄 Script SQL)", "origem": "script",
+                    "catalogo": None, "ambientes": "*", "dialeto": s.get("dialeto"),
+                    "sql": s["sql"], "ativo": bool(perfil.get("usar_script_salvo", True)),
+                    "ordem": 0, "analises": _mov_analises_sql(s["sql"]),
+                    "updated_by": s.get("updated_by"), "updated_at": s.get("updated_at")})
+    for b in q("""select * from cockpit.monitmov_blocos where customer=%s
+                   order by ordem, id""", (customer,)):
+        b = dict(b)
+        b["id"] = str(b["id"])
+        b["analises"] = list(b.get("analises") or []) or _mov_analises_sql(b["sql"])
+        out.append(b)
+    if so_ativos:
+        out = [b for b in out if b.get("ativo")]
+    if amb:
+        out = [b for b in out if (b.get("ambientes") or "*") in ("*", amb)]
+    for b in out:
+        b["bytes"] = len((b.get("sql") or "").encode("utf-8"))
+        if not com_sql:
+            b.pop("sql", None)
+    return perfil, out
+
+
+def _mov_janela(perfil, hoje=None):
+    hoje = hoje or datetime.now(TZ_SP).date()
+    dias = int(perfil.get("janela_dias") or 0)
+    if dias > 0:
+        ini, fim = (hoje - timedelta(days=dias)).strftime("%Y%m%d"), hoje.strftime("%Y%m%d")
+        return ini, fim, f"{ini}-{fim}"
+    # '19000101', e não '': no Oracle '' é NULL e o BETWEEN NULL não traz nada.
+    return "19000101", "20991231", "total"
+
+
+def _mov_sql_bloco(sql, cfg, perfil, hoje=None):
+    """Troca os placeholders pelo cadastro DESTA base. Script sem placeholder
+    (os antigos, com 010 fixo) passa intacto."""
+    ini, fim, per = _mov_janela(perfil, hoje)
+    vals = {"SUFIXO": (cfg.get("sufixo") or "010").strip(), "DT_INI": ini, "DT_FIM": fim,
+            "PERIODO": per, "EMPRESA": (cfg.get("empresa") or "01").strip(),
+            "FILIAL": (cfg.get("filial") or "").strip()}
+    return MOV_PH_RE.sub(lambda m: vals[m.group(1).upper()], sql or "")
+
+
+def _mov_roda_sql(cfg, customer, amb, sql, timeout=None):
+    """Uma chamada ao /tscmonit/query. Nunca levanta exceção: devolve o resultado
+    num dict, que é o que vai para o lote (e para a tela) do jeito que veio."""
+    ini = time.time()
+    fim = lambda **kw: {"ms": int((time.time() - ini) * 1000), **kw}  # noqa: E731
+    try:
+        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+    except RuntimeError as e:
+        return fim(ok=False, erro=str(e))
+    if not tok:
+        return fim(ok=False, erro="Sem token cadastrado para esta base — a REST recusa a "
+                                  "chamada sem o X-TSC-Token (⚙ Ambiente).")
+    sql_exec = _sql_execucao(sql)
+    if not sql_exec:
+        return fim(ok=False, erro="O bloco só tem comentários.")
+    tam = len(sql_exec.encode("utf-8"))
+    if tam > FASE_SQL_TETO:
+        return fim(ok=False, erro=f"Bloco com {tam // 1024} KB, acima do teto de "
+                                  f"{FASE_SQL_TETO // 1024} KB — divida em dois blocos.")
+    if timeout:
+        tmo = max(5, min(tmo, int(timeout)))
+    try:
+        r = requests.post(f"{cfg['url_rest']}/query",
+                          json={"token": tok, "tipo": "movimentos", "sql": sql_exec,
+                                "limite": int(cfg.get("limite_linhas") or 50000)},
+                          headers=heads, auth=auth,
+                          params={"empresa": cfg.get("empresa") or "01",
+                                  "filial": cfg.get("filial") or "01"},
+                          timeout=tmo, verify=_verifica_tls(cfg))
+        dados = _json_da_resposta(r)
+    except requests.RequestException as e:
+        return fim(ok=False, erro=f"Falha ao chamar a base: {_motivo_rede(e)} "
+                                  f"(timeout do bloco = {tmo}s).")
+    if r.status_code >= 400 or not dados.get("ok"):
+        msg = dados.get("erro") or f"HTTP {r.status_code}: {_trecho(r)}"
+        if r.status_code == 404 and not dados.get("erro"):
+            msg = ("HTTP 404: a rota /tscmonit/query não existe neste servidor — fonte "
+                   "TSCMONITREST não compilado neste RPO ou REST não reiniciado depois.")
+        return fim(ok=False, erro=msg, http_status=r.status_code,
+                   nao_se_aplica=bool(MOV_RE_NAO_EXISTE.search(msg)))
+    if dados.get("truncado"):
+        return fim(ok=False, http_status=r.status_code, linhas=dados.get("linhas"),
+                   erro=f"Bateu o limite de {cfg.get('limite_linhas') or 50000} linha(s) — "
+                        "medição truncada é medição errada. Suba o limite no ⚙ Ambiente "
+                        "ou reduza a janela do perfil.")
+    return fim(ok=True, csv=dados.get("csv") or "", linhas=dados.get("linhas") or 0,
+               http_status=r.status_code, environment=dados.get("environment"),
+               banco=dados.get("banco"))
+
+
+def _mov_cfg_valida(customer, amb):
+    """(cfg, erro). As mesmas recusas do /coletar, num lugar só."""
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return None, f"{AMB_ROT.get(amb, amb)} ainda não cadastrada para {customer} (⚙ Ambiente)."
+    if not cfg.get("ativo"):
+        return None, f"{AMB_ROT.get(amb, amb)} está inativa — reative no ⚙ Ambiente."
+    if not cfg.get("token_enc"):
+        return None, f"{AMB_ROT.get(amb, amb)} sem token cadastrado (⚙ Ambiente)."
+    return cfg, None
+
+
+AMB_ROT = {"producao": "Base Produção", "teste": "Base de Testes"}
+
+
+def _mov_lote(lote_id, customer=None):
+    row = q("select * from cockpit.monitmov_lotes where id=%s", (lote_id,), one=True)
+    if row and customer and row["customer"] != customer:
+        return None
+    return row
+
+
+def _mov_lote_abre(customer, amb, quem):
+    """Cria o lote com o PLANO (blocos e análises). Devolve (lote, erro)."""
+    cfg, erro = _mov_cfg_valida(customer, amb)
+    if erro:
+        return None, erro
+    perfil, blocos = _mov_blocos(customer, amb, com_sql=False)
+    plano, pulados = [], {}
+    for b in blocos:
+        p = {"id": b["id"], "nome": b["nome"], "analises": b["analises"],
+             "bytes": b["bytes"]}
+        # Bloco do catálogo é gerado num dialeto. Rodar SQL de Oracle numa base
+        # Postgres só devolveria erro de sintaxe — melhor dizer o porquê.
+        if cfg.get("banco") and b.get("dialeto") and b["dialeto"] != cfg["banco"]:
+            pulados[b["id"]] = {"ok": False, "nao_se_aplica": True, "pulado": True, "ms": 0,
+                                "erro": f"Bloco em {b['dialeto']}, base em {cfg['banco']}."}
+        plano.append(p)
+    if not plano:
+        return None, ("Nenhum bloco de coleta ativo para esta base. Salve o 🗄 Script SQL "
+                      "de movimentos ou adicione um bloco no 🧩 Perfil de coleta.")
+    if len(pulados) == len(plano):
+        return None, "Todos os blocos estão em outro dialeto que o banco desta base."
+    # Lote aberto antigo da mesma base é abandonado: dois lotes gravando a mesma
+    # data se atropelariam.
+    execute("""update cockpit.monitmov_lotes set status='abandonado', fechado_em=now()
+                where customer=%s and ambiente=%s and status='aberto'""", (customer, amb))
+    lote = q("""insert into cockpit.monitmov_lotes
+                  (customer, ambiente, disparado_por, blocos, resultados, janela)
+                values (%s,%s,%s,%s::jsonb,%s::jsonb,%s) returning *""",
+             (customer, amb, quem, json.dumps(plano), json.dumps(pulados),
+              _mov_janela(perfil)[2]), one=True)
+    return lote, None
+
+
+def _mov_lote_bloco(lote, bloco_id, timeout=None):
+    """Roda UM bloco do lote e guarda o resultado (CSV incluso) no próprio lote."""
+    plano = {p["id"]: p for p in (lote["blocos"] or [])}
+    if bloco_id not in plano:
+        return {"ok": False, "erro": f"Bloco {bloco_id} não faz parte deste lote."}
+    if lote["status"] != "aberto":
+        return {"ok": False, "erro": f"Lote {lote['id']} já está {lote['status']}."}
+    customer, amb = lote["customer"], lote["ambiente"]
+    cfg, erro = _mov_cfg_valida(customer, amb)
+    if erro:
+        res = {"ok": False, "erro": erro, "ms": 0}
+    else:
+        perfil, blocos = _mov_blocos(customer, amb, so_ativos=False)
+        b = next((x for x in blocos if x["id"] == bloco_id), None)
+        if not b:
+            res = {"ok": False, "erro": "Bloco removido do perfil depois que o lote abriu.", "ms": 0}
+        else:
+            res = _mov_roda_sql(cfg, customer, amb, _mov_sql_bloco(b["sql"], cfg, perfil),
+                                timeout=timeout)
+    execute("""update cockpit.monitmov_lotes
+                  set resultados = coalesce(resultados,'{}'::jsonb) || %s::jsonb
+                where id=%s""", (json.dumps({bloco_id: res}), lote["id"]))
+    return res
+
+
+def _mov_trava(customer, medidas, forcar=False):
+    """Recusa gravar uma coleta que não mede NADA do que foi combinado. É o caso
+    da produção da Dígitro em 22/10/2026: um script de dicionário (GCT_CAMPO,
+    GCT_TABELA) salvo como movimentos — o número chega, plausível, e apaga a
+    medição boa. Cliente sem cenário passa: ainda está montando a lista."""
+    if forcar:
+        return None
+    cen = {(r["analise"] or "").strip().upper() for r in q(
+        "select distinct analise from cockpit.monitmov_cenarios where customer=%s", (customer,))}
+    cen.discard("")
+    if cen and not (set(medidas) & cen):
+        return (f"Nada foi gravado: esta coleta mediu {', '.join(sorted(medidas)) or 'nenhuma análise'}"
+                f" e nenhuma delas tem cenário combinado ({', '.join(sorted(cen))}). Confira se "
+                f"o script salvo é mesmo o de movimentos — ou grave assim mesmo.")
+    return None
+
+
+def _mov_lote_fecha(lote, forcar=False, parcial=False, quem=None):
+    """Junta os blocos e grava UMA medição. Devolve (status_http, dict)."""
+    plano = lote["blocos"] or []
+    res = lote["resultados"] or {}
+    customer, amb = lote["customer"], lote["ambiente"]
+    if lote["status"] != "aberto":
+        return 409, {"ok": False, "error": f"Lote {lote['id']} já está {lote['status']}."}
+    pend = [p["nome"] for p in plano if p["id"] not in res]
+    falhos = [{"id": p["id"], "nome": p["nome"], "erro": res[p["id"]].get("erro")}
+              for p in plano if p["id"] in res
+              and not res[p["id"]].get("ok") and not res[p["id"]].get("nao_se_aplica")]
+    if (pend or falhos) and not parcial:
+        return 409, {"ok": False, "pendentes": pend, "falhos": falhos,
+                     "error": "Há bloco que não rodou — tente de novo ou grave só o que rodou."}
+    rodaram = [p for p in plano if res.get(p["id"], {}).get("ok")]
+    if not rodaram:
+        return 409, {"ok": False, "falhos": falhos,
+                     "error": "Nenhum bloco rodou com sucesso — nada para gravar."}
+
+    dims, datas = [], []
+    for p in rodaram:
+        txt = res[p["id"]].get("csv") or ""
+        if not txt.strip():
+            continue                # bloco rodou e não achou movimento: medido, zero
+        try:
+            body = _csv_movimentos(txt)
+        except Exception as e:
+            return 422, {"ok": False, "error": f"Bloco '{p['nome']}' devolveu CSV inválido: {e}"}
+        for m in body["medicoes"]:
+            datas.append(m)
+            dims.extend(m["dimensoes"])
+
+    retornadas = {(d.get("analise") or "").strip().upper() for d in dims} - {""}
+    declaradas = {a for p in plano for a in (p.get("analises") or [])}
+    medidas = set(retornadas)
+    for p in rodaram:
+        medidas |= set(p.get("analises") or [])
+    nao_aplica = sorted({a for p in plano if res.get(p["id"], {}).get("nao_se_aplica")
+                         for a in (p.get("analises") or [])} - medidas)
+    sem_medir = sorted({a for p in plano if p["nome"] in pend
+                        or any(f["id"] == p["id"] for f in falhos)
+                        for a in (p.get("analises") or [])} - medidas)
+
+    if (msg := _mov_trava(customer, medidas, forcar)):
+        # O lote fica ABERTO: na tela, "Gravar mesmo assim" fecha este mesmo lote
+        # com forcar=1, sem rodar a base de novo. O cron é quem encerra o dele.
+        _log_coleta(customer, amb, "movimentos", lote["iniciado_em"].timestamp(), False,
+                    erro=msg, por=quem)
+        return 409, {"ok": False, "recusa": True, "error": msg,
+                     "medidas": sorted(medidas)}
+
+    if datas:
+        ult = max(datas, key=lambda m: (m["data_iso"], m.get("hora_medicao") or ""))
+    else:
+        agora = datetime.now(TZ_SP)
+        ult = {"data_iso": agora.date().isoformat(), "hora_medicao": agora.strftime("%H:%M"),
+               "semana": int(agora.strftime("%V")), "periodo": lote.get("janela") or ""}
+    linhas = sum(int(res[p["id"]].get("linhas") or 0) for p in rodaram)
+    med = {"data_iso": ult["data_iso"], "hora_medicao": ult.get("hora_medicao"),
+           "semana": ult.get("semana"), "periodo": ult.get("periodo") or lote.get("janela") or "",
+           "dimensoes": dims,
+           "analises_medidas": sorted(medidas), "nao_se_aplica": nao_aplica,
+           "sem_medir": sem_medir, "lote_id": lote["id"], "forcado": bool(forcar),
+           "parcial": bool(pend or falhos),
+           "blocos": [{"nome": p["nome"], "ok": bool(res.get(p["id"], {}).get("ok")),
+                       "nao_se_aplica": bool(res.get(p["id"], {}).get("nao_se_aplica")),
+                       "linhas": res.get(p["id"], {}).get("linhas"),
+                       "ms": res.get(p["id"], {}).get("ms"),
+                       "erro": res.get(p["id"], {}).get("erro")} for p in plano]}
+    g = _gravar_movimentos(customer, amb, {"medicoes": [med]}, origem="coleta")
+    avisos = []
+    if (alheias := sorted(retornadas - declaradas)):
+        avisos.append("Análise(s) que nenhum bloco declara: " + ", ".join(alheias) + ".")
+    if nao_aplica:
+        avisos.append("Não se aplica nesta base (tabela inexistente ou outro dialeto): "
+                      + ", ".join(nao_aplica) + ".")
+    if sem_medir:
+        avisos.append("Gravado sem: " + ", ".join(sem_medir) + " (bloco falhou).")
+    resumo = {"medidas": sorted(medidas), "nao_se_aplica": nao_aplica, "sem_medir": sem_medir,
+              "linhas": linhas, "avisos": avisos, **g}
+    # O CSV só servia para juntar. Fica o resumo de cada bloco.
+    limpos = {k: {kk: vv for kk, vv in v.items() if kk != "csv"} for k, v in res.items()}
+    execute("""update cockpit.monitmov_lotes set status='gravado', fechado_em=now(),
+                     resultados=%s::jsonb, resumo=%s::jsonb where id=%s""",
+            (json.dumps(limpos), json.dumps(resumo, default=str), lote["id"]))
+    _log_coleta(customer, amb, "movimentos", lote["iniciado_em"].timestamp(), True,
+                http_status=200, linhas=linhas, medicoes=g.get("medicoes"),
+                itens=g.get("dimensoes"), data_medicao=g.get("ultima_medicao"), por=quem,
+                erro=" ".join(avisos) or None)
+    return 200, {"ok": True, "customer": customer, "ambiente": amb, "lote_id": lote["id"],
+                 **resumo}
+
+
+# ── rotas do perfil ────────────────────────────────────────────────────────
+def _guarda_mov(customer, escrita=False):
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    if escrita and effective_user() != current_user():
+        return _err(409, "Saia da simulação ('ver como') antes de alterar a coleta.")
+    return None
+
+
+@app.get("/api/monitmov/<customer>/perfil-coleta")
+def api_monitmov_perfil(customer):
+    """Tudo o que a tela do 🧩 Perfil precisa: perfil, blocos (com SQL, para
+    editar), as duas bases, a cobertura das análises com cenário e os últimos
+    lotes. Segredo nenhum sai daqui."""
+    if (g := _guarda_mov(customer)):
+        return g
+    perfil, blocos = _mov_blocos(customer, so_ativos=False)
+    ambs = q("""select ambiente, url_rest, environment, banco, sufixo, empresa, filial, ativo,
+                       (token_enc is not null) as tem_token
+                  from cockpit.protheus_ambientes where customer=%s order by ambiente""",
+             (customer,))
+    cen = q("""select analise, count(*) as cenarios, count(*) filter (where esperado) as esperados
+                 from cockpit.monitmov_cenarios where customer=%s group by analise
+                order by analise""", (customer,))
+    ativas = {a for b in blocos if b.get("ativo") for a in b["analises"]}
+    for c in cen:
+        c["medida"] = (c["analise"] or "").upper() in ativas
+        c["no_catalogo"] = (c["analise"] or "").upper() in MOV_CATALOGO
+    lotes = q("""select id, ambiente, iniciado_em, fechado_em, status, disparado_por, resumo
+                   from cockpit.monitmov_lotes where customer=%s
+                  order by iniciado_em desc limit 8""", (customer,))
+    return _json({"ok": True, "customer": customer, "perfil": perfil, "blocos": blocos,
+                  "ambientes": ambs, "cenarios": cen, "lotes": lotes,
+                  "catalogo": list(MOV_CATALOGO), "janela": _mov_janela(perfil)[2]})
+
+
+@app.post("/api/monitmov/<customer>/perfil-coleta")
+def api_monitmov_perfil_salvar(customer):
+    if (g := _guarda_mov(customer, escrita=True)):
+        return g
+    b = request.get_json(silent=True) or {}
+    agenda = (b.get("agenda") or "off").strip().lower()
+    if agenda not in MOV_AGENDAS:
+        return _err(400, "Agenda inválida — off, diaria ou semanal.")
+    agamb = (b.get("agenda_ambientes") or "*").strip().lower()
+    if agamb not in ("*",) + AMBIENTES:
+        return _err(400, "Bases da agenda: *, producao ou teste.")
+    try:
+        janela = max(0, min(int(b.get("janela_dias") or 0), 3650))
+    except (TypeError, ValueError):
+        return _err(400, "Janela em dias precisa ser um número (0 = base inteira).")
+    execute("""insert into cockpit.monitmov_perfil
+                 (customer, usar_script_salvo, janela_dias, agenda, agenda_ambientes,
+                  updated_by, updated_at)
+               values (%s,%s,%s,%s,%s,%s, now())
+               on conflict (customer) do update set
+                 usar_script_salvo=excluded.usar_script_salvo, janela_dias=excluded.janela_dias,
+                 agenda=excluded.agenda, agenda_ambientes=excluded.agenda_ambientes,
+                 updated_by=excluded.updated_by, updated_at=now()""",
+            (customer, b.get("usar_script_salvo") is not False, janela, agenda, agamb,
+             current_user()))
+    return _json({"ok": True, "perfil": _mov_perfil(customer)})
+
+
+@app.post("/api/monitmov/<customer>/blocos")
+def api_monitmov_bloco_salvar(customer):
+    """Cria (sem id) ou altera (com id) um bloco do perfil."""
+    if (g := _guarda_mov(customer, escrita=True)):
+        return g
+    b = request.get_json(silent=True) or {}
+    nome = (b.get("nome") or "").strip()[:80]
+    sql = (b.get("sql") or "").strip()
+    if not nome:
+        return _err(400, "Dê um nome ao bloco.")
+    if not re.search(r"\bselect\b", sql, re.I):
+        return _err(400, "O bloco precisa conter um SELECT.")
+    # A trava de escrita do /fase, menos o DBMS_: a contagem blindada (DBMS_XMLGEN)
+    # é leitura e a base aceita — o script salvo da Olim roda assim desde 09/2026.
+    if (m := _fase_sql_erro(_sql_execucao(sql),
+                                  tuple(x for x in FASE_PROIBIDO if x != "DBMS_"))):
+        return _err(400, m)
+    amb = (b.get("ambientes") or "*").strip().lower()
+    if amb not in ("*",) + AMBIENTES:
+        return _err(400, "Bases: *, producao ou teste.")
+    dialeto = (b.get("dialeto") or "").strip().lower() or None
+    if dialeto and dialeto not in BANCOS:
+        return _err(400, "Dialeto: oracle, mssql ou postgres.")
+    if dialeto == "oracle":
+        sql = re.sub(r"(\s*;)+\s*$", "", sql)
+    origem = "catalogo" if (b.get("origem") == "catalogo") else "custom"
+    catalogo = (b.get("catalogo") or "").strip().upper() or None
+    analises = [a.strip().upper() for a in (b.get("analises") or []) if a and a.strip()] \
+        or _mov_analises_sql(sql)
+    if not analises:
+        return _err(400, "Não achei nenhuma análise no bloco ('XXX_YYY' AS ANALISE). "
+                         "Informe as análises que ele mede.")
+    campos = (nome, origem, catalogo, amb, dialeto, sql, b.get("ativo") is not False,
+              int(b.get("ordem") or 100), analises, current_user())
+    try:
+        if b.get("id"):
+            row = q("""update cockpit.monitmov_blocos set nome=%s, origem=%s, catalogo=%s,
+                          ambientes=%s, dialeto=%s, sql=%s, ativo=%s, ordem=%s, analises=%s,
+                          updated_by=%s, updated_at=now()
+                        where id=%s and customer=%s returning id""",
+                    campos + (int(b["id"]), customer), one=True)
+            if not row:
+                return _err(404, "Bloco não encontrado neste cliente.")
+        else:
+            row = q("""insert into cockpit.monitmov_blocos
+                         (nome, origem, catalogo, ambientes, dialeto, sql, ativo, ordem,
+                          analises, updated_by, customer)
+                       values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) returning id""",
+                    campos + (customer,), one=True)
+    except psycopg2.IntegrityError:
+        return _err(409, f"Já existe um bloco chamado '{nome}' neste cliente.")
+    return _json({"ok": True, "id": str(row["id"]), "analises": analises})
+
+
+@app.delete("/api/monitmov/<customer>/blocos/<int:bid>")
+def api_monitmov_bloco_remover(customer, bid):
+    if (g := _guarda_mov(customer, escrita=True)):
+        return g
+    execute("delete from cockpit.monitmov_blocos where id=%s and customer=%s", (bid, customer))
+    return _json({"ok": True, "removido": bid})
+
+
+@app.post("/api/monitmov/<customer>/lote")
+def api_monitmov_lote_abrir(customer):
+    """Abre o lote de UMA base. O navegador roda os blocos um a um e fecha."""
+    if (g := _guarda_mov(customer, escrita=True)):
+        return g
+    amb = _amb_path(request.args.get("ambiente"))
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    lote, erro = _mov_lote_abre(customer, amb, current_user())
+    if erro:
+        return _err(409, erro)
+    return _json({"ok": True, "lote_id": lote["id"], "ambiente": amb,
+                  "janela": lote.get("janela"), "blocos": lote["blocos"],
+                  "resultados": lote["resultados"]})
+
+
+@app.post("/api/monitmov/<customer>/lote/<int:lote_id>/bloco/<bloco_id>")
+def api_monitmov_lote_bloco(customer, lote_id, bloco_id):
+    if (g := _guarda_mov(customer, escrita=True)):
+        return g
+    lote = _mov_lote(lote_id, customer)
+    if not lote:
+        return _err(404, "Lote não encontrado neste cliente.")
+    res = _mov_lote_bloco(lote, bloco_id)
+    # O CSV fica no lote; a tela só precisa do resumo.
+    return _json({"bloco": bloco_id, **{k: v for k, v in res.items() if k != "csv"}})
+
+
+@app.post("/api/monitmov/<customer>/lote/<int:lote_id>/fechar")
+def api_monitmov_lote_fechar(customer, lote_id):
+    if (g := _guarda_mov(customer, escrita=True)):
+        return g
+    lote = _mov_lote(lote_id, customer)
+    if not lote:
+        return _err(404, "Lote não encontrado neste cliente.")
+    if not q("select 1 from cockpit.clientes where customer=%s", (customer,), one=True):
+        return _err(409, f"Cliente {customer} não cadastrado em cockpit.clientes.")
+    st, corpo = _mov_lote_fecha(lote, forcar=request.args.get("forcar") == "1",
+                                parcial=request.args.get("parcial") == "1",
+                                quem=current_user())
+    return _json(corpo, st)
+
+
+# ── cron: coleta agendada ────────────────────────────────────────────────────
+def _mov_cron_proximo(customer=None, ambiente=None):
+    """Próxima base a coletar: primeiro um lote do cron que ficou aberto (o
+    orçamento acabou no meio); depois a base agendada há mais tempo sem coleta.
+    customer= força (teste manual): ignora agenda e espera."""
+    filtro, par = "", []
+    if customer:
+        filtro += " and l.customer=%s"
+        par.append(customer)
+    if ambiente:
+        filtro += " and l.ambiente=%s"
+        par.append(ambiente)
+    aberto = q(f"""select l.* from cockpit.monitmov_lotes l
+                   where l.status='aberto' and l.disparado_por='cron'
+                     and l.iniciado_em > now() - interval '{MOV_CRON_ESPERA_H} hours' {filtro}
+                   order by l.iniciado_em limit 1""", tuple(par), one=True)
+    if aberto:
+        return {"lote": aberto, "customer": aberto["customer"], "ambiente": aberto["ambiente"]}
+
+    if customer:
+        cands = q("""select a.customer, a.ambiente from cockpit.protheus_ambientes a
+                      where a.customer=%s and a.ativo and a.token_enc is not null
+                        and (%s::text is null or a.ambiente=%s)
+                      order by a.ambiente""", (customer, ambiente, ambiente))
+        return {"customer": cands[0]["customer"], "ambiente": cands[0]["ambiente"]} if cands else None
+
+    cands = q(f"""
+        select a.customer, a.ambiente, p.agenda,
+               (select max(l.fechado_em) from cockpit.monitmov_lotes l
+                 where l.customer=a.customer and l.ambiente=a.ambiente
+                   and l.status='gravado') as ult_ok,
+               (select max(l.iniciado_em) from cockpit.monitmov_lotes l
+                 where l.customer=a.customer and l.ambiente=a.ambiente
+                   and l.disparado_por='cron') as ult_cron
+          from cockpit.monitmov_perfil p
+          join cockpit.protheus_ambientes a on a.customer=p.customer
+         where p.agenda in ('diaria','semanal') and a.ativo and a.token_enc is not null
+           and p.agenda_ambientes in ('*', a.ambiente)
+         order by 4 nulls first""")
+    agora = datetime.now(timezone.utc)
+    for c in cands:
+        horas = MOV_AGENDA_HORAS[c["agenda"]]
+        if c["ult_ok"] and (agora - c["ult_ok"]).total_seconds() < horas * 3600:
+            continue
+        if c["ult_cron"] and (agora - c["ult_cron"]).total_seconds() < MOV_CRON_ESPERA_H * 3600:
+            continue
+        return {"customer": c["customer"], "ambiente": c["ambiente"]}
+    return None
+
+
+def _mov_cron_executa(alvo, ini):
+    """Roda o que couber no orçamento. Lote que não terminou fica aberto e a
+    próxima chamada do cron retoma de onde parou."""
+    lote = alvo.get("lote")
+    if not lote:
+        lote, erro = _mov_lote_abre(alvo["customer"], alvo["ambiente"], "cron")
+        if erro:
+            _log_coleta(alvo["customer"], alvo["ambiente"], "movimentos", time.time(), False,
+                        erro=f"[agenda] {erro}", por="cron")
+            return {**alvo, "ok": False, "erro": erro, "concluido": True}
+    feitos = []
+    for p in lote["blocos"]:
+        if p["id"] in (lote["resultados"] or {}):
+            continue
+        resta = MOV_CRON_ORCAMENTO_S - (time.time() - ini)
+        if resta < MOV_CRON_FOLGA_S:
+            return {**alvo, "lote_id": lote["id"], "ok": True, "concluido": False,
+                    "rodados": feitos, "retoma": True}
+        r = _mov_lote_bloco(lote, p["id"], timeout=resta - 4)
+        feitos.append({"bloco": p["nome"], "ok": r.get("ok"), "erro": r.get("erro")})
+        lote = _mov_lote(lote["id"])
+    st, corpo = _mov_lote_fecha(lote, quem="cron")
+    if st != 200:
+        execute("""update cockpit.monitmov_lotes set status=%s, fechado_em=now(),
+                         resumo=%s::jsonb where id=%s and status='aberto'""",
+                ("recusado" if corpo.get("recusa") else "falhou",
+                 json.dumps(corpo, default=str), lote["id"]))
+    if st != 200 and not corpo.get("recusa"):
+        _log_coleta(lote["customer"], lote["ambiente"], "movimentos",
+                    lote["iniciado_em"].timestamp(), False, por="cron",
+                    erro="[agenda] " + (corpo.get("error") or "falhou") + " " +
+                         "; ".join(f"{f['nome']}: {f.get('erro')}" for f in corpo.get("falhos") or []))
+    return {**alvo, "lote_id": lote["id"], "ok": st == 200, "concluido": True,
+            "rodados": feitos, "resultado": {k: v for k, v in corpo.items() if k != "dimensoes"}}
+
+
+@app.route("/api/cron/coleta-movimentos", methods=["GET", "POST"])
+def api_cron_coleta_movimentos():
+    """pg_cron (madrugada, de 10 em 10 min): coleta as bases com agenda ligada no
+    🧩 Perfil de coleta. Uma base por vez, retomando lote aberto. Não exige
+    login — exige o Bearer CRON_SECRET. ?customer=&ambiente= força uma base."""
+    if not _cron_autorizado():
+        return _err(401, "CRON_SECRET inválido ou ausente.")
+    ini = time.time()
+    forca_c = (request.args.get("customer") or "").strip() or None
+    forca_a = _amb_path(request.args.get("ambiente")) if request.args.get("ambiente") else None
+    feitos = []
+    while time.time() - ini < MOV_CRON_ORCAMENTO_S - 2 * MOV_CRON_FOLGA_S:
+        alvo = _mov_cron_proximo(forca_c, forca_a)
+        if not alvo:
+            break
+        r = _mov_cron_executa(alvo, ini)
+        feitos.append(r)
+        if forca_c or not r.get("concluido"):
+            break
+    return _json({"ok": True, "duracao_ms": int((time.time() - ini) * 1000),
+                  "bases": feitos})
 
 
 CEN_CAMPOS = ("analise", "dim1", "dim2", "dim3", "dim4", "descricao",
@@ -6337,7 +7023,7 @@ FASE_PROIBIDO = ("INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "CREATE", "ALTER
 FASE_SEP = set(" \t\r\n(),.;=<>+-*/|")
 
 
-def _fase_sql_erro(sql):
+def _fase_sql_erro(sql, proibido=None):
     """Mesma regra do SqlSeguro do TSCMONITREST, repetida aqui de propósito. A
     base já recusaria — mas o SQL desta rota vem do navegador, e uma segunda
     porta trancada custa quinze linhas."""
@@ -6348,7 +7034,7 @@ def _fase_sql_erro(sql):
         return "A fase precisa começar com SELECT ou WITH (somente leitura)."
     if ";" in limpo[:-1]:
         return "Envie um único comando — remova o ';' do meio da fase."
-    for palavra in FASE_PROIBIDO:
+    for palavra in (proibido or FASE_PROIBIDO):
         for m in re.finditer(re.escape(palavra), limpo):
             ant = limpo[m.start() - 1] if m.start() else " "
             dep = limpo[m.end()] if m.end() < len(limpo) else ""
