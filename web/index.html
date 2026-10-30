@@ -895,7 +895,7 @@
               <option value="producao">Base Produção</option>
               <option value="teste">Base de Testes</option>
             </select>
-            <label class="flex items-center gap-1.5 text-xs text-slate-500" title="Só entram movimentos a partir desta data (fila Quírons, Ahgora e eSocial). Vale para esta base.">
+            <label class="flex items-center gap-1.5 text-xs text-slate-500" title="Só entram movimentos a partir desta data (fila Quírons, Ahgora, eSocial, XML do Transmite e propostas recebidas do CRM). Vale para esta base.">
               A partir de
               <input id="int-desde" type="date" class="px-2 py-1 border border-slate-300 rounded-md bg-white text-sm text-slate-800">
             </label>
@@ -903,8 +903,10 @@
               Monitorar
               <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="rh"> RH</label>
               <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="transmite"> TOTVS Transmite</label>
+              <label class="flex items-center gap-1 text-slate-700" title="Propostas do TOTVS CRM via iPaaS → Painel de Projetos → contrato → medição, e os cadastros que sobem ao CRM"><input type="checkbox" data-int-grupo="crm"> CRM × iPaaS</label>
             </span>
             <button id="int-coletar-topo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde disabled:opacity-50">⚡ Coletar agora</button>
+            <button id="int-coletar-duas" class="hidden px-3 py-1.5 rounded-md border border-totvs-blue text-totvs-petroleo font-semibold hover:bg-sky-50 disabled:opacity-50" title="Coleta na Base Produção e na Base de Testes, uma depois da outra">⚡ Produção + Teste</button>
             <button id="int-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
           </div>
           <div id="int-conteudo"></div>
@@ -11905,7 +11907,8 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 // ============================================================================
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
-                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite']) };
+                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm']),
+                duas: null };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
 const INT_NIVEL = {
@@ -11919,9 +11922,36 @@ const INT_GRUPOS = [
   { id: 'ahgora',  rot: 'Ahgora PontoWeb', sub: 'funcionários e afastamentos · JOB GPEM943 / tela GPEM929 · fila RUM' },
   { id: 'esocial', rot: 'eSocial SST (Middleware)', sub: 'S-2210, S-2220 e S-2240 vindos do Quírons · fila RJE' },
   { id: 'transmite', rot: 'TOTVS Transmite', sub: 'XML de entrada · Importador (COMXCOL / IMPTRATOOL) · CKOCOL, SDS e SF1' },
+  { id: 'crm', rot: 'CRM × iPaaS · Painel de Projetos', sub: 'propostas do CRM (ZA3) → projetos (ZA0) → contrato (CN9) → medição (CND) · produtos e tabelas de preço para o CRM' },
 ];
+const INT_GRUPO = (id) => INT_GRUPOS.find(g => g.id === id);
 // Grupos da base (⚙ protheus_ambientes.integ_grupos). Nulo = só RH.
-const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'] };
+const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'], crm: ['crm'] };
+// CRM × iPaaS (Dígitro): domínios da especificação do Painel (§10.4, §4.2) e do SIGAGCT.
+const INT_CRM_STG1 = { R: 'Recebido', P: 'Processando', L: 'Liberado', E: 'Erro' };
+const INT_CRM_STG2 = { N: 'Não liberado', A: 'Aguardando', P: 'Processando', S: 'Sucesso', E: 'Erro' };
+const INT_CRM_STIPA = { N: 'Não disponível', A: 'Aguardando', P: 'Enviando', S: 'Sucesso', E: 'Erro' };
+const INT_CRM_ZA0 = { 1: 'Em Implantação', 2: 'Vigente', 3: 'Não Vigente', 4: 'Cancelado', 5: 'Devolvida',
+                      6: 'Em Produção', 7: 'Em Devolução', 8: 'Suspensa', 9: 'Migrada' };
+const INT_CRM_TPPROD = { 1: 'Físico', 2: 'Virtual' };
+const INT_CN9_SIT = { '01': 'Cancelado', '02': 'Em elaboração', '03': 'Emitido', '04': 'Em aprovação',
+                      '05': 'Vigente', '06': 'Paralisado', '07': 'Sol. finalização', '08': 'Finalizado',
+                      '09': 'Em revisão', '10': 'Revisado (revisão antiga)', A: 'Revisão em aprovação' };
+const INT_CND_SIT = { E: 'Encerrada' };
+// Causa do erro da ZA3 = QUEM resolve. Mesmas chaves de CRM_CAUSAS (api).
+const INT_CRM_CAUSA = {
+  duplicidade:   { rot: 'Duplicidade', ico: '♊', quem: 'CRM/iPaaS reenviou — ver P2/P12' },
+  tabela:        { rot: 'Tabela de preço', ico: '💲', quem: 'DA0/DA1 no Protheus' },
+  cliente:       { rot: 'Cliente', ico: '🏢', quem: 'cadastro de clientes (SA1)' },
+  vendedor:      { rot: 'Vendedor', ico: '🧑‍💼', quem: 'vendedores/representantes (SA3)' },
+  produto:       { rot: 'Produto', ico: '📦', quem: 'cadastro de produtos (SB1)' },
+  condicao:      { rot: 'Condição de pagamento', ico: '📅', quem: 'condições (SE4)' },
+  tipo_contrato: { rot: 'Tipo de contrato', ico: '📄', quem: 'tipos de contrato (CN1/CNL)' },
+  mensagem:      { rot: 'Mensagem (JSON)', ico: '🧾', quem: 'conteúdo enviado pelo CRM' },
+  ambiente:      { rot: 'Ambiente', ico: '🔌', quem: 'infraestrutura, token, licença' },
+  outros:        { rot: 'Outros', ico: '❔', quem: 'não reconhecido — ver a mensagem' },
+  sem_texto:     { rot: 'Sem texto', ico: '–', quem: 'ZA3_ERRO vazio ou não lido' },
+};
 const intGruposCfg = () => integ.dados?.ambiente_cfg?.integ_grupos || ['rh'];
 // Transmite: só o 4 é documentado (Classificada); o resto aparece cru.
 const INT_TRA_STRAN = { '4': 'Classificada' };
@@ -12000,6 +12030,8 @@ const INT_HIST = [
   ['ahgora_nao_enviados', 'Ahgora não env.'], ['sst_pendentes', 'SST pend.'],
   ['tra_sem_retorno', 'Transm. sem retorno'], ['tra_prazo', 'Transm. prazo'],
   ['tra_hora_futura', 'Hora futura'], ['tra_revisao', 'Revisão (B)'],
+  ['crm_recebidas', 'CRM recebidas'], ['crm_erros', 'CRM erros'], ['crm_fila', 'CRM fila'],
+  ['crm_contratos', 'CRM contratos'], ['crm_medicoes', 'CRM medidos'], ['crm_cad_produtos', 'Prod. c/ preço'],
 ];
 
 const intData = (s) => {
@@ -12043,7 +12075,8 @@ async function coletaIntegracoes() {
   const base = (AMB[integ.ambiente] || AMB.producao).label;
   const g = intGruposCfg();
   const oque = [g.includes('rh') ? 'filas de RH + healthcheck da Quírons' : '',
-                g.includes('transmite') ? 'TOTVS Transmite (CKOCOL, SDS, SF1)' : ''].filter(Boolean).join(' e ');
+                g.includes('transmite') ? 'TOTVS Transmite (CKOCOL, SDS, SF1)' : '',
+                g.includes('crm') ? 'CRM × iPaaS (ZA3, ZA0, CN9, CND, SB1, DA0/DA1)' : ''].filter(Boolean).join(' e ');
   if (!confirm(`Coletar agora na ${base}?\n\nConsultas só de leitura pela REST da base ` +
                `(TSCMONITREST): ${oque}. Cada chamada usa licença no REST.`)) return;
   integ.coletando = true; integ.erroColeta = null; renderIntegracoes();
@@ -12064,7 +12097,7 @@ function intEstado(d) {
   const btnAmb = `<button data-int-amb class="ml-2 underline font-semibold">⚙ Ambiente</button>`;
   if (integ.coletando) {
     return barra('border-sky-200 bg-sky-50 text-sky-900',
-      `<span class="inline-block animate-spin mr-2">⟳</span><b>Coletando na base…</b>
+      `<span class="inline-block animate-spin mr-2">⟳</span><b>Coletando na ${integ.duas?.atual ? escapeHtml((AMB[integ.duas.atual] || {}).label || integ.duas.atual) : 'base'}…</b>${integ.duas ? ' (Produção + Teste)' : ''}
        Consultas só de leitura${intGruposCfg().includes('rh') ? ' e o healthcheck' : ''}. Pode levar até 50 s.`);
   }
   const cfg = d?.ambiente_cfg;
@@ -12190,6 +12223,11 @@ function renderIntegracoes() {
   const box = $('#int-conteudo');
   if (!box) return;
   $('#int-coletar-topo').disabled = integ.coletando || !integ.customer;
+  const bDuas = $('#int-coletar-duas');
+  if (bDuas) {
+    bDuas.classList.toggle('hidden', !intGruposCfg().includes('crm'));
+    bDuas.disabled = integ.coletando || !integ.customer;
+  }
   const inpDesde = $('#int-desde');
   if (inpDesde && document.activeElement !== inpDesde) {
     inpDesde.value = (integ.dados?.ambiente_cfg?.integ_desde || '').slice(0, 10);
@@ -12290,6 +12328,7 @@ function renderIntegracoes() {
     });
     }
     if (gU.includes('transmite')) html += intCaixaTransmite(B, d.hoje, nivelGrupo('transmite'));
+    if (gU.includes('crm')) html += intCaixaCrm(B, d, nivelGrupo('crm'));
   }
   const serie = (d.serie || []).slice().reverse();
   if (serie.length || (d.coletas || []).length) {
@@ -12387,6 +12426,191 @@ function intCaixaTransmite(B, hoje, nivel) {
        A ciência/confirmação em si fica no portal do Transmite — o painel lê só o lado Protheus.</p>`);
 }
 
+// ── Grupo CRM × iPaaS (Dígitro, 30/10/2026) ─────────────────────────────────
+// A pergunta: "a proposta que o comercial ganhou no CRM virou projeto,
+// contrato e medição — e o que parou no caminho?". O funil segue a CHAVE do
+// contrato gravada na ZA3 (ZA3_CONTRA), nunca o número da proposta (P10).
+const intCod = (mapa, v) => intNw(v ? `${v}${mapa[v] ? ' · ' + mapa[v] : ''}` : '(vazio)');
+const intCausaChip = (c) => {
+  const k = INT_CRM_CAUSA[c] || INT_CRM_CAUSA.outros;
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap bg-indigo-50 text-indigo-800" title="${escapeHtml(k.quem)}">${k.ico} ${escapeHtml(k.rot)}</span>`;
+};
+const intHora = (d, h) => `${intData(d)} ${escapeHtml(String(h || '').slice(0, 5))}`;
+
+/** Os números do funil, tirados dos blocos (null = bloco não lido). */
+function intCrmFunil(B) {
+  const um = (b) => (b && b.ok ? (b.linhas || [])[0] || {} : null);
+  const soma = (b, k, filtro = () => true) => (b && b.ok ? (b.linhas || []).filter(filtro)
+    .reduce((t, x) => t + (parseInt(x[k], 10) || 0), 0) : null);
+  const t = um(B.crm_totais);
+  const rast = B.crm_rastreio_lista;
+  const medidos = rast && rast.ok && !rast.truncado
+    ? new Set(rast.linhas.filter(x => parseInt(x.MEDICOES, 10) > 0).map(x => x.CONTRATO)).size
+    : soma(B.crm_medicoes, 'CONTRATOS');
+  return [
+    { k: 'recebidas', rot: 'Propostas recebidas', v: t ? +t.PROPOSTAS || 0 : null, sub: t ? `${+t.MENSAGENS || 0} mensagem(ns) do iPaaS` : 'ZA3' },
+    { k: 'liberadas', rot: 'Liberadas (Etapa 1)', v: t ? +t.LIBERADAS || 0 : null, sub: 'STG1 = L', vs: 'recebidas', alerta: true },
+    { k: 'tratadas', rot: 'Tratadas (Etapa 2)', v: t ? +t.TRATADAS || 0 : null, sub: 'STG2 = S', vs: 'liberadas', alerta: true },
+    { k: 'projetos', rot: 'Projetos gerados', v: soma(B.crm_projetos, 'QTD'), sub: 'ZA0 · 1 por OV' },
+    // Contrato é 1 por PROPOSTA: compara com as tratadas, não com os projetos (1 por OV).
+    { k: 'contratos', rot: 'Contratos gerados', v: soma(B.crm_contratos, 'CONTRATOS', x => x.SITUAC !== '10'), sub: 'CN9 · 1 por proposta', vs: 'tratadas', alerta: true },
+    // A medição vem depois, pelo cronograma: "x de N", sem cor de alerta.
+    { k: 'medidos', rot: 'Contratos medidos', v: medidos, sub: `${soma(B.crm_medicoes, 'QTD') ?? '—'} medição(ões) · CND`, vs: 'contratos' },
+    { k: 'retorno', rot: 'Retorno ao CRM', v: t ? +t.RETORNADAS || 0 : null, sub: 'ZA3_STIPA · não implementado (P11)' },
+  ];
+}
+
+function intCrmFunilHtml(B) {
+  const f = intCrmFunil(B);
+  const val = Object.fromEntries(f.map(x => [x.k, x.v]));
+  return `<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-2 mb-4" aria-label="Funil da integração">${f.map((x, k) => {
+    const ant = x.vs ? val[x.vs] : null;
+    const queda = x.alerta && ant != null && x.v != null && x.v < ant;
+    const de = !x.alerta && ant != null && x.v != null ? ` · de ${ant}` : '';
+    return `<div class="rounded-lg border ${queda ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-white'} px-3 py-2" data-int-funil="${x.k}">
+      <p class="text-[11px] font-semibold text-slate-600 leading-tight">${k ? '→ ' : ''}${escapeHtml(x.rot)}</p>
+      <p class="text-xl font-totvs text-totvs-petroleo tabular-nums mt-0.5">${x.v == null ? '—' : x.v}</p>
+      <p class="text-[11px] text-slate-500 leading-snug">${escapeHtml(x.sub)}${escapeHtml(de)}${queda ? ` · <b class="text-amber-800">! ${ant - x.v} a menos que ${escapeHtml(f.find(y => y.k === x.vs).rot.toLowerCase())}</b>` : ''}</p></div>`;
+  }).join('')}</div>`;
+}
+
+/** Produção × Teste: os indicadores do grupo nas duas bases, lado a lado. */
+function intCrmDuasBases(u, d) {
+  const outra = d.outra || {};
+  const labA = (AMB[integ.ambiente] || AMB.producao).label;
+  const labB = (AMB[outra.ambiente] || AMB.teste).label;
+  const indsA = (u.indicadores || []).filter(i => i.grupo === 'crm');
+  const ouU = outra.ultima;
+  const indsB = (ouU?.indicadores || []).filter(i => i.grupo === 'crm');
+  let aviso = '';
+  if (!outra.cadastrada) aviso = `${labB} não cadastrada no ⚙ Ambiente.`;
+  else if (!ouU) aviso = `${labB} ainda sem coleta.`;
+  else if (!indsB.length) aviso = `A última coleta da ${labB} não leu o grupo CRM${(outra.integ_grupos || []).includes('crm') ? '' : ' (grupo desligado lá)'}.`;
+  const cel = (i) => i ? `<div class="flex items-center gap-2 justify-end"><span class="tabular-nums">${escapeHtml(String(i.valor ?? '—'))}</span>${intPill(i.nivel)}</div>`
+                       : '<span class="text-slate-400">—</span>';
+  const linhas = indsA.map(a => ({ a, b: indsB.find(x => x.chave === a.chave) }));
+  return `<div class="mb-4" data-int-duas>
+    <div class="flex items-center justify-between gap-2 mb-1 flex-wrap">
+      <h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide">${escapeHtml(labA)} × ${escapeHtml(labB)}</h4>
+      <button data-int-duas-btn class="px-2.5 py-1 rounded-md border border-totvs-blue text-xs font-semibold text-totvs-petroleo hover:bg-sky-50 disabled:opacity-50" ${integ.coletando ? 'disabled' : ''}>⚡ Coletar nas duas bases</button></div>
+    ${intTabela([{ rot: 'Indicador', fmt: x => escapeHtml(x.a.rotulo) },
+                 { rot: `${labA} · ${intQuando(u.coletado_em)}`, dir: 1, fmt: x => cel(x.a) },
+                 { rot: `${labB}${ouU ? ' · ' + intQuando(ouU.coletado_em) : ''}`, dir: 1, fmt: x => cel(x.b) }],
+                linhas, 'Sem indicadores do grupo nesta coleta.')}
+    ${aviso ? `<p class="text-xs text-amber-800 mt-1">${escapeHtml(aviso)}</p>` : ''}
+    <p class="text-xs text-slate-500 mt-1">Decisão de 27/10: a integração roda plugada na produção do CRM e do Protheus. A Base de
+       Testes mostra o que foi exercitado nos protótipos; a Produção, a prontidão dos cadastros e o fluxo real.</p></div>`;
+}
+
+function intCaixaCrm(B, d, nivel) {
+  const u = d.ultima || {};
+  const g = INT_GRUPO('crm');
+  return intCaixa('crm', 'CRM × iPaaS — da proposta ao contrato e à medição', g.sub, nivel, () =>
+    intCrmFunilHtml(B) +
+    intCrmDuasBases(u, d) +
+    intSub('Propostas com erro ou paradas na fila (ZA3)', B.crm_pendentes_lista, (ls) => intTabela([
+      { rot: 'Entrada', fmt: l => intHora(l.DTINC, l.HRINC) },
+      { k: 'IDCRM', rot: 'ID oportunidade (CRM)' },
+      { rot: 'Etapa 1', fmt: l => intCod(INT_CRM_STG1, l.STG1) }, { rot: 'Etapa 2', fmt: l => intCod(INT_CRM_STG2, l.STG2) },
+      { k: 'ETAPA', rot: 'Último passo' },
+      { rot: 'Causa', fmt: l => l.CAUSA ? intCausaChip(l.CAUSA) : '<span class="text-slate-400">na fila</span>' },
+      { rot: 'Já com sucesso depois?', fmt: l => escapeHtml(l.JA_OK === 'S' ? 'sim (erro antigo)' : 'não') },
+      ...(ls.some(l => 'ERRO' in l) ? [{ rot: 'Erro (ZA3_ERRO)', fmt: l => {
+        const t = String(l.ERRO || '').trim();
+        return t ? `<span class="text-slate-600" title="${escapeHtml(t)}">${escapeHtml(t.length > 160 ? t.slice(0, 160) + '…' : t)}</span>` : '<span class="text-slate-400">—</span>';
+      } }] : [])], ls, 'Nenhuma proposta com erro ou parada.') +
+      (B.crm_pendentes_lista?.aviso_variante && !ls.some(l => 'ERRO' in l)
+        ? `<p class="text-xs text-amber-800 mt-1">A base não devolveu o texto do erro (ZA3_ERRO): ${escapeHtml(B.crm_pendentes_lista.aviso_variante)}</p>` : '')) +
+    intSub('Rastreio: proposta → projetos → contrato → medições', B.crm_rastreio_lista, (ls) => intTabela([
+      { rot: 'Entrada', fmt: l => intHora(l.DTINC, l.HRINC) }, { rot: 'Gerado', fmt: l => intHora(l.DTFIM, l.HRFIM) },
+      { k: 'IDCRM', rot: 'ID oportunidade' }, { k: 'PROPOSTA', rot: 'Proposta (ZA0_PROPOS)' },
+      { k: 'PROJETOS', rot: 'Projetos', dir: 1 }, { k: 'CONTRATO', rot: 'Contrato' },
+      { rot: 'Situação do contrato', fmt: l => l.SITUAC ? intCod(INT_CN9_SIT, l.SITUAC) : '<b class="text-rose-700">✕ não está na CN9</b>' },
+      { k: 'MEDICOES', rot: 'Medições', dir: 1 },
+      { rot: 'Retorno CRM', fmt: l => intCod(INT_CRM_STIPA, l.STIPA) }], ls, 'Nenhuma proposta gerou contrato ainda.')) +
+    intSub('Registros por etapa (ZA3)', B.crm_situacao, (ls) => intTabela([
+      { rot: 'Etapa 1', fmt: l => intCod(INT_CRM_STG1, l.STG1) }, { rot: 'Etapa 2', fmt: l => intCod(INT_CRM_STG2, l.STG2) },
+      { rot: 'Retorno', fmt: l => intCod(INT_CRM_STIPA, l.STIPA) },
+      { k: 'QTD', rot: 'Registros', dir: 1 }, { k: 'PROPOSTAS', rot: 'Propostas', dir: 1 },
+      { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
+      ls, 'Nenhuma proposta recebida.')) +
+    intSub('Projetos gerados (ZA0)', B.crm_projetos, (ls) => intTabela([
+      { rot: 'Tipo', fmt: l => intCod(INT_CRM_TPPROD, l.TPPROD) }, { rot: 'Situação', fmt: l => intCod(INT_CRM_ZA0, l.STATUS) },
+      { k: 'QTD', rot: 'Projetos', dir: 1 }, { k: 'CONTRATOS', rot: 'Contratos', dir: 1 },
+      { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
+      ls, 'Nenhum projeto gerado pela integração.')) +
+    intSub('Contratos gerados (CN9)', B.crm_contratos, (ls) => intTabela([
+      { rot: 'Situação', fmt: l => intCod(INT_CN9_SIT, l.SITUAC) }, { k: 'CONTRATOS', rot: 'Contratos', dir: 1 },
+      { k: 'REVISOES', rot: 'Linhas (revisões)', dir: 1 }, { rot: 'Início mais antigo', fmt: l => intData(l.INICIO_MAIS_ANTIGO) }],
+      ls, 'Nenhum contrato gerado pela integração.')) +
+    intSub('Medições dos contratos gerados (CND)', B.crm_medicoes, (ls) => intTabela([
+      { rot: 'Situação', fmt: l => intCod(INT_CND_SIT, l.SITUAC) }, { k: 'QTD', rot: 'Medições', dir: 1 },
+      { k: 'CONTRATOS', rot: 'Contratos', dir: 1 },
+      ...(ls.some(l => 'COM_PEDIDO' in l) ? [{ k: 'COM_PEDIDO', rot: 'Com pedido de venda', dir: 1 }] : [])],
+      ls, 'Nenhuma medição nos contratos gerados pela integração.')) +
+    `<h4 class="text-xs font-semibold text-totvs-petroleo uppercase tracking-wide mt-5 mb-2 border-t border-slate-100 pt-3">Protheus → CRM · produtos e tabelas de preço</h4>
+     <p class="text-xs text-slate-500 mb-3">O gatilho, a API e a periodicidade do envio ao CRM ainda não foram definidos (P1). Por isso o painel mede a
+       <b>prontidão</b> (produto ativo com preço em tabela vigente) e o <b>efeito</b> (proposta barrada por cadastro, na causa do erro acima).</p>` +
+    intSub('Produtos ativos por tipo (sem os PRJ criados pela integração)', B.crm_cad_produtos, (ls) => intTabela([
+      { k: 'TIPO', rot: 'Tipo' }, { k: 'ATIVOS', rot: 'Ativos', dir: 1 }, { k: 'COM_PRECO', rot: 'Com preço vigente', dir: 1 },
+      { rot: '% com preço', dir: 1, fmt: l => `${Math.round(100 * (+l.COM_PRECO || 0) / Math.max(1, +l.ATIVOS || 0))}%` },
+      ...(ls.some(l => 'COM_ZFATURA' in l) ? [{ k: 'COM_ZFATURA', rot: 'Com B1_ZFATURA', dir: 1 }] : [])],
+      ls, 'Nenhum produto ativo.')) +
+    intSub('Tabelas de preço (DA0)', B.crm_cad_tabelas, (ls) => intTabela([
+      { k: 'TABELA', rot: 'Tabela' }, { k: 'DESCRICAO', rot: 'Descrição' },
+      { rot: 'Ativa', fmt: l => escapeHtml(l.ATIVO === '1' ? 'sim' : 'não') },
+      { rot: 'Vigência', fmt: l => `${intData(l.DE)} → ${String(l.ATE || '').trim() ? intData(l.ATE) : 'sem fim'}` },
+      { k: 'ITENS', rot: 'Itens', dir: 1 }, { k: 'COM_PRECO', rot: 'Com preço', dir: 1 }], ls, 'Nenhuma tabela de preço cadastrada.')) +
+    intSub('Produtos ativos sem preço em tabela vigente', B.crm_sem_preco_lista, (ls) => intTabela([
+      { k: 'PRODUTO', rot: 'Produto' }, { k: 'DESCRICAO', rot: 'Descrição' }, { k: 'TIPO', rot: 'Tipo' }, { k: 'GRUPO', rot: 'Grupo' }],
+      ls, 'Todo produto ativo tem preço vigente.')) +
+    intSub('Parâmetros da integração (SX6)', B.crm_config, (ls) => intTabela([
+      { k: 'PARAMETRO', rot: 'Parâmetro' }, { rot: 'Filial', fmt: l => escapeHtml(l.FILIAL || '(todas)') },
+      { k: 'CONTEUDO', rot: 'Conteúdo' }], ls, 'Nenhum dos parâmetros existe nesta base.')) +
+    `<p class="text-xs text-slate-500">Caminho: proposta ganha no CRM → iPaaS → <b>POST /api/v1/CRMIntegracao</b> grava a <b>ZA3</b>
+       (Etapa 1) → job <b>U_CRMPROJT</b> ou Sincronizar (DIG00A05) gera, numa transação só, um projeto por Ordem de Venda (ZA0),
+       o item contábil e um contrato por oportunidade (CN9) com uma planilha por projeto (Etapa 2). Erro = nada gravado: corrija o
+       cadastro e sincronize. A medição (CND) não é gerada pela integração. Tokens (MV_ZCRMTOK, MV_ZLIC*) aparecem só como “(preenchido)”.</p>`);
+}
+
+/** ⚡ Produção + Teste: coleta nas duas bases, uma depois da outra. Liga o
+ *  grupo CRM na outra base se ele estiver desligado lá (pergunta antes). */
+async function coletaDuasBases() {
+  if (!integ.customer || integ.coletando) return;
+  const outra = integ.dados?.outra || {};
+  const bases = ['producao', 'teste'];
+  const semCad = !outra.cadastrada;
+  const ligar = !semCad && !(outra.integ_grupos || []).includes('crm');
+  const labO = (AMB[outra.ambiente] || AMB.teste).label;
+  if (!confirm(`Coletar o grupo CRM × iPaaS na Base Produção e na Base de Testes?\n\nConsultas só de leitura pela REST de ` +
+               `cada base (TSCMONITREST), uma depois da outra — até ~50 s cada. Cada chamada usa licença no REST.` +
+               (semCad ? `\n\n${labO} não está cadastrada no ⚙ Ambiente: só esta base será coletada.` : '') +
+               (ligar ? `\n\nO grupo CRM está desligado na ${labO} e será ligado lá (os grupos que ela já monitora continuam).` : ''))) return;
+  integ.coletando = true; integ.erroColeta = null; integ.duas = { atual: null, falhas: [] };
+  renderIntegracoes();
+  const cli = encodeURIComponent(integ.customer);
+  try {
+    if (ligar) {
+      await api(`/api/integracoes/${cli}/grupos?ambiente=${outra.ambiente}`,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ grupos: [...(outra.integ_grupos || []), 'crm'] }) });
+    }
+    for (const amb of bases) {
+      if (amb !== integ.ambiente && semCad) continue;
+      integ.duas.atual = amb; renderIntegracoes();
+      try { await api(`/api/integracoes/${cli}/coletar?ambiente=${amb}`, { method: 'POST' }); }
+      catch (e) { integ.duas.falhas.push(`${(AMB[amb] || {}).label || amb}: ${e.message}`); }
+    }
+  } catch (e) {
+    integ.duas.falhas.push(e.message);
+  } finally {
+    integ.coletando = false;
+    integ.erroColeta = integ.duas.falhas.length ? integ.duas.falhas.join(' · ') : null;
+    integ.duas = null;
+    await carregaIntegracoes();
+  }
+}
+
 function ligaIntegracoes() {
   $$('#int-conteudo [data-int-caixa]').forEach(b => b.addEventListener('click', () => {
     const id = b.dataset.intCaixa;
@@ -12394,6 +12618,7 @@ function ligaIntegracoes() {
     renderIntegracoes();
   }));
   $$('#int-conteudo [data-int-amb]').forEach(b => b.addEventListener('click', abreAmbienteIntegracoes));
+  $$('#int-conteudo [data-int-duas-btn]').forEach(b => b.addEventListener('click', coletaDuasBases));
 }
 
 async function abreAmbienteIntegracoes() {
@@ -12431,6 +12656,7 @@ async function abreScriptsIntegracoes() {
 
 $('#int-coletar').addEventListener('click', coletaIntegracoes);
 $('#int-coletar-topo').addEventListener('click', coletaIntegracoes);
+$('#int-coletar-duas').addEventListener('click', coletaDuasBases);
 $('#int-scripts').addEventListener('click', abreScriptsIntegracoes);
 $('#int-ambiente').addEventListener('click', abreAmbienteIntegracoes);
 $('#int-reload').addEventListener('click', carregaIntegracoes);

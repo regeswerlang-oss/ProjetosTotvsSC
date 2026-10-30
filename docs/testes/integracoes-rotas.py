@@ -347,5 +347,98 @@ confere("grupos: sem ambiente = 404", r.status_code == 404)
 m.execute = _exec_orig
 m.requests.post = fake_post
 
+# ── grupo CRM × iPaaS (Dígitro, 30/10/2026) ─────────────────────────────────
+# Base com só o grupo crm. A ZA3 fingida tem memo CLOB: a 1ª variante da
+# lista de pendentes (BLOB) falha e a 2ª vale. Sem healthcheck da Quírons.
+CRM_CSV = {
+    "config": "PARAMETRO;FILIAL;CONTEUDO\nMV_ZCRMMOD;;2\nMV_ZMAILPP;;contratos@digitro.com.br\nMV_ZCRMTOK;;(preenchido)\n",
+    "totais": f"MENSAGENS;PROPOSTAS;LIBERADAS;TRATADAS;CONTRATOS_ZA3;RETORNADAS;MAIS_ANTIGA;MAIS_RECENTE\n4;3;3;2;2;0;20261001;{HOJE}\n",
+    "situacao": "STG1;STG2;STIPA;QTD;PROPOSTAS;MAIS_ANTIGO;MAIS_RECENTE\nL;S;N;2;2;20261001;20261020\nL;E;N;2;1;20261020;20261021\n",
+    "fila": "STG1;STG2;DIA;QTD;PRIMEIRA\n",
+    "erros": f"STG1;STG2;DIA;QTD;PROPOSTAS;SEM_SUCESSO\nL;E;{HOJE};2;1;1\n",
+    "projetos": "TPPROD;STATUS;QTD;CONTRATOS;MAIS_ANTIGO;MAIS_RECENTE\n1;1;3;2;20261001;20261020\n",
+    "contratos": "SITUAC;CONTRATOS;REVISOES;INICIO_MAIS_ANTIGO\n02;2;2;20261001\n",
+    "medicoes": "SITUAC;QTD;CONTRATOS;COM_PEDIDO\nE;1;1;1\n",
+    "produtos": "TIPO;ATIVOS;COM_PRECO;COM_ZFATURA\nPA;10;9;10\n",
+    "tabelas": "FILIAL;TABELA;DESCRICAO;ATIVO;DE;ATE;ITENS;COM_PRECO\n01;001;PADRAO;1;20260101;;9;9\n",
+    "pendentes": f"IDCRM;MSGID;STG1;STG2;STIPA;ETAPA;DTINC;HRINC;DTFIM;HRFIM;JA_OK;ERRO\n"
+                 f"OPP-9;MSG-9;L;E;N;VALIDA CABECALHO;{HOJE};08:00:00;{HOJE};08:00:05;N;Cliente 000099/01 não encontrado\n",
+    "rastreio": "IDCRM;DTINC;HRINC;DTFIM;HRFIM;CONTRATO;STIPA;PROPOSTA;PROJETOS;SITUAC;MEDICOES\n"
+                "OPP-1;20261001;09:00:00;20261001;09:01:00;000000000000001;N;PROP-1;2;02;1\n"
+                "OPP-2;20261020;10:00:00;20261020;10:02:00;000000000000002;N;PROP-2;1;02;0\n",
+    "sem_preco": "PRODUTO;DESCRICAO;TIPO;GRUPO\nNGC-01;NGC CORPORATE;PA;0001\n",
+}
+
+
+def crm_chave(sql):
+    if "FROM SX6010" in sql: return "config"
+    if "AS JA_OK" in sql: return "pendentes"
+    if "AS PROJETOS" in sql: return "rastreio"
+    if "AS MENSAGENS" in sql: return "totais"
+    if "AS SEM_SUCESSO" in sql: return "erros"
+    if "AS PRIMEIRA" in sql: return "fila"
+    if "ZA3_STIPA AS STIPA, COUNT" in sql: return "situacao"
+    if "FROM ZA0010 WHERE" in sql: return "projetos"
+    if "AS REVISOES" in sql: return "contratos"
+    if "FROM CND010" in sql: return "medicoes"
+    if "AS ATIVOS" in sql: return "produtos"
+    if "PR.COD IS NULL ORDER" in sql: return "sem_preco"
+    if "FROM DA0010 DA0 WHERE" in sql: return "tabelas"
+    raise AssertionError("bloco CRM inesperado: " + sql[:120])
+
+
+def fake_post_crm(url, json=None, headers=None, auth=None, params=None, timeout=None, verify=None):
+    CHAMADAS.append({"url": url, "sql": json["sql"], "token": headers.get("X-TSC-Token"),
+                     "tipo": json["tipo"], "auth": auth, "limite": json["limite"]})
+    sql = json["sql"]
+    assert not sql.rstrip().endswith(";")
+    k = crm_chave(sql)
+    if k == "pendentes" and "UTL_RAW" in sql:
+        return R(200, {"ok": False, "erro": "ORA-06502: PL/SQL: numeric or value error"})
+    return R(200, {"ok": True, "csv": CRM_CSV[k], "linhas": CRM_CSV[k].count("\n") - 1,
+                   "truncado": False, "environment": "producao"})
+
+
+m.requests.post = fake_post_crm
+CHAMADAS.clear()
+aad_dg = m._aad("000348D0", "producao")
+CFG["cfg"] = dict(BASE_CFG, customer="000348D0", integ_grupos=["crm"], integ_desde=None,
+                  environment="producao", senha_enc=m._cifra("s3nha", aad_dg),
+                  token_enc=m._cifra("tok123", aad_dg))
+DB["medicoes"].clear()
+r = cli.post("/api/integracoes/000348D0/coletar?ambiente=producao")
+d = r.get_json()
+q_crm = [c for c in CHAMADAS if "/query" in c["url"]]
+confere("crm: coleta 200", r.status_code == 200 and d["ok"])
+confere("crm: sem healthcheck da Quírons", not any("healthcheck" in c["url"] for c in CHAMADAS))
+confere("crm: 14 consultas (13 blocos + 1 variante do memo)", len(q_crm) == 14)
+confere("crm: nenhuma consulta de RH ou Transmite",
+        not any(t in c["sql"] for c in q_crm for t in ("RJP010", "RUM010", "CKOCOL", "SDS010")))
+ult = d["ultima"]
+inds = {i["chave"]: i for i in ult["indicadores"]}
+confere("crm: só indicadores do grupo", set(i["grupo"] for i in ult["indicadores"]) == {"crm"})
+confere("crm: 3 propostas recebidas", inds["crm_recebidas"]["valor"] == 3)
+confere("crm: erro de hoje sem sucesso = amarelo", inds["crm_erros"]["nivel"] == "amarelo"
+        and "Cliente 1" in inds["crm_erros"]["texto"])
+confere("crm: contratos achados", inds["crm_contratos"]["valor"] == 2 and inds["crm_contratos"]["nivel"] == "verde")
+confere("crm: medidos 1/2 pelo rastreio", inds["crm_medicoes"]["valor"] == "1/2")
+confere("crm: retorno cinza (P11)", inds["crm_retorno"]["nivel"] == "cinza")
+confere("crm: cobertura 90%", inds["crm_cad_produtos"]["valor"] == "90%")
+pl = ult["blocos"]["crm_pendentes_lista"]
+confere("crm: memo pela variante CLOB", pl["ok"] and pl["variante"] == 1)
+confere("crm: causa anotada na linha", pl["linhas"][0]["CAUSA"] == "cliente" and pl["causas"] == {"cliente": 1})
+confere("crm: grupos gravados na coleta", ult["blocos"]["_meta"]["grupos"] == ["crm"])
+confere("crm: payload traz a outra base", d["outra"]["ambiente"] == "teste" and "ultima" in d["outra"])
+confere("crm: payload sem segredo", "tok123" not in r.get_data(as_text=True))
+d = cli.get("/api/integracoes/000348D0/scripts?ambiente=producao").get_json()
+confere("crm: scripts do grupo", d["grupos"] == ["crm"] and len(d["scripts"]) == 13
+        and all(s["id"].startswith("crm_") for s in d["scripts"]))
+UPG = []
+m.execute = exec_grupos
+r = cli.post("/api/integracoes/000348D0/grupos?ambiente=producao", json={"grupos": ["crm", "rh"]})
+confere("crm: grupo aceito na rota", r.status_code == 200 and r.get_json()["grupos"] == ["rh", "crm"])
+m.execute = _exec_orig
+m.requests.post = fake_post
+
 print(f"{ok} asserções OK, {falhou} falha(s)")
 raise SystemExit(1 if falhou else 0)

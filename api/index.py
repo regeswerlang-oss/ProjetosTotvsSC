@@ -8133,7 +8133,7 @@ INTEG_TEMPO_MIN = 4                # s mínimos para valer a pena abrir mais um 
 # Grupos que uma base pode monitorar (protheus_ambientes.integ_grupos). Nulo =
 # só RH, que é como a aba nasceu: base de RH não paga consulta de Compras e
 # base de Compras (Rio Deserto) não vê 8 cartões cinza de Quírons/Ahgora.
-INTEG_GRUPOS_BASE = ("rh", "transmite")
+INTEG_GRUPOS_BASE = ("rh", "transmite", "crm")
 INTEG_GRUPOS_PADRAO = ("rh",)
 
 # ── TOTVS Transmite (16/10/2026) ──────────────────────────────────────────
@@ -8219,6 +8219,8 @@ def _integ_scripts(sufixo, hoje, desde=None, banco=None, grupos=None, agora=None
         lista += _integ_scripts_rh(sufixo, hoje, desde, banco)
     if "transmite" in grupos:
         lista += _tra_scripts(sufixo, hoje, desde, agora)
+    if "crm" in grupos:
+        lista += _crm_scripts(sufixo, hoje, desde, banco)
     for b in lista:
         if "sqls" in b:
             b["sql"] = b["sqls"][0]
@@ -8555,7 +8557,7 @@ def _integ_bloco_falhou(b, chave, grupo, rotulo):
     return _integ_ind(chave, grupo, rotulo, None, "cinza", b.get("erro") or "Não lido.")
 
 
-def _integ_indicadores(blocos, health, hoje, grupos=None):
+def _integ_indicadores(blocos, health, hoje, grupos=None, agora=None):
     """Indicadores dos grupos ligados na base. `grupos` nulo = só RH."""
     grupos = _integ_grupos(grupos)
     out = []
@@ -8563,6 +8565,8 @@ def _integ_indicadores(blocos, health, hoje, grupos=None):
         out += _integ_indicadores_rh(blocos, health, hoje)
     if "transmite" in grupos:
         out += _tra_indicadores(blocos, hoje)
+    if "crm" in grupos:
+        out += _crm_indicadores(blocos, hoje, agora)
     return out
 
 
@@ -9044,6 +9048,456 @@ def _tra_indicadores(blocos, hoje):
     return out
 
 
+# ── CRM × iPaaS × Painel de Projetos (30/10/2026) ─────────────────────────
+# Piloto: DÍGITRO (000348D0). A proposta ganha no TOTVS CRM vai pelo iPaaS ao
+# POST /api/v1/CRMIntegracao, que grava a ZA3 (Etapa 1: STG1 R→P→L|E). O job
+# U_CRMPROJT (ou o Sincronizar da DIG00A05) faz a Etapa 2 (STG2 A→P→S|E): um
+# projeto (ZA0) por Ordem de Venda, um contrato (CN9) por oportunidade, numa
+# transação só. ZA3_STIPA é o retorno ao CRM — ainda NÃO implementado
+# (reunião de 27/10): aparece, mas não pesa. Medição (CND) não é gerada pela
+# integração; o painel só mede se o contrato gerado já foi medido.
+# O lado Protheus → CRM (produtos e tabelas de preço) ainda não tem gatilho
+# nem tabela de controle definidos (P1): o painel mede a PRONTIDÃO dos
+# cadastros (produto ativo com preço em tabela vigente) e o EFEITO (proposta
+# barrada por cadastro, classificada pelo texto do ZA3_ERRO).
+# Spec: docs/specs/2026-10-30-integracoes-crm-ipaas.md
+CRM_PARAMS = ("MV_ZCRMMOD", "MV_ZCRMURL", "MV_ZCRMTOK", "MV_ZCRMLOG", "MV_ZMAILPP",
+              "MV_ZOPEMAI", "MV_ZLICORI", "MV_ZLICURL", "MV_ZLICIPA", "MV_ZGRPLIC",
+              "MV_ZLICTOK", "MV_ZLICCLI", "MV_ZLICSEC")
+CRM_MASCARA = ("MV_ZCRMTOK", "MV_ZLICTOK", "MV_ZLICCLI", "MV_ZLICSEC")   # só "(preenchido)"
+CRM_PARADA_MIN = 60                # min parado na fila (Etapa 1 ou 2) = atenção
+CRM_PARADA_HORAS = 24              # h parado = crítico (o job roda em schedule)
+CRM_ERRO_DIAS = 1                  # erro sem correção há 1 dia ou mais = crítico
+CRM_COB_VERDE, CRM_COB_AMARELO = 0.9, 0.6    # produtos ativos com preço vigente
+CRM_PRJ = "PRJ"                    # prefixo do produto que a Etapa 2 cria (projeto físico)
+CRM_STG1 = {"R": "Recebido", "P": "Processando", "L": "Liberado", "E": "Erro"}
+CRM_STG2 = {"N": "Não liberado", "A": "Aguardando", "P": "Processando", "S": "Sucesso", "E": "Erro"}
+CRM_STIPA = {"N": "Não disponível", "A": "Aguardando", "P": "Enviando", "S": "Sucesso", "E": "Erro"}
+# Causa do erro = QUEM resolve. Ordem importa: "produto sem preço na tabela"
+# é tabela de preço, não produto; duplicidade vem antes de tudo.
+CRM_CAUSAS = (
+    ("duplicidade", "Duplicidade", r"duplic|ja receb|ja exist|ja cadastr|ja process|messageid"),
+    ("tabela", "Tabela de preço", r"tabela de pre|tab\.? ?pre|\bda0\b|\bda1\b|sem pre[cç]o|preco"),
+    ("cliente", "Cliente", r"client|\bsa1\b|\bloja\b"),
+    ("vendedor", "Vendedor / representante", r"vendedor|represent|\bsa3\b"),
+    ("produto", "Produto", r"produto|\bsb1\b"),
+    ("condicao", "Condição de pagamento", r"condi[cç]|\bse4\b|pagamento"),
+    ("tipo_contrato", "Tipo de contrato", r"tipo de contrato|tipo de venda|tipovenda|\bcn1\b|\bcnl\b"),
+    ("mensagem", "Mensagem (JSON)", r"json|obrigat|invalid|nao informad|layout|parse|formato"),
+    ("ambiente", "Ambiente / infraestrutura", r"token|unauthori|\b40[13]\b|\b50[0-4]\b|timeout|conex|lock|licen|thread"),
+)
+_CRM_RE_CAUSA = tuple((c, r, re.compile(x)) for c, r, x in CRM_CAUSAS)
+
+
+def _crm_causa(txt):
+    """Causa do erro gravado no ZA3_ERRO (texto livre do Protheus)."""
+    n = _integ_norm(txt)
+    if not n:
+        return "sem_texto"
+    for causa, _rot, rx in _CRM_RE_CAUSA:
+        if rx.search(n):
+            return causa
+    return "outros"
+
+
+def _crm_scripts(sufixo, hoje, desde=None, banco=None):
+    """Blocos do grupo CRM. Mesmas regras dos outros grupos: datas calculadas
+    aqui, sem ';', só SELECT, vazio robusto, sufixo do ⚙ Ambiente.
+
+    A chave da cadeia é o CONTRATO gravado na ZA3 (ZA3_CONTRA), não o número
+    da proposta: na ZA3 a proposta só existe dentro do JSON, e o CN9_XOPORT
+    tem 6 posições contra 50 do ZA0_PROPOS (P10) — a junção quebraria calada.
+    `desde` (corte da base) vale para ZA3_DTINC: o que entrou antes não conta."""
+    s = (sufixo or "010").strip()
+    h = hoje.strftime("%Y%m%d")
+    jan = f" AND ZA3_DTINC >= '{desde.strftime('%Y%m%d')}'" if desde else ""
+    janZ = f" AND Z.ZA3_DTINC >= '{desde.strftime('%Y%m%d')}'" if desde else ""
+    params = ", ".join(f"'{p}'" for p in CRM_PARAMS)
+    masc = ", ".join(f"'{p}'" for p in CRM_MASCARA)
+    # Contratos que a integração gerou (Etapa 2 com sucesso), na janela.
+    gerados = (f"SELECT RTRIM(Z.ZA3_CONTRA) FROM ZA3{s} Z WHERE Z.D_E_L_E_T_ = ' ' "
+               f"AND Z.ZA3_STG2 = 'S' AND {_integ_preenchido('Z.ZA3_CONTRA')}{janZ}")
+    erro = "(ZA3_STG1 = 'E' OR ZA3_STG2 = 'E')"
+    sem_sucesso = (f"NOT EXISTS (SELECT 1 FROM ZA3{s} Z WHERE Z.D_E_L_E_T_ = ' ' "
+                   f"AND Z.ZA3_IDCRM = ZA3{s}.ZA3_IDCRM AND Z.ZA3_STG2 = 'S')")
+    # Propostas que já tiveram sucesso (para o erro antigo de uma proposta
+    # reprocessada não contar como aberto). Derivada + LEFT JOIN: portátil.
+    com_ok = (f"SELECT DISTINCT ZA3_IDCRM AS ID FROM ZA3{s} WHERE D_E_L_E_T_ = ' ' "
+              f"AND ZA3_STG2 = 'S'")
+    fila = "(ZA3_STG1 IN ('R','P') OR (ZA3_STG1 = 'L' AND ZA3_STG2 IN ('A','P')))"
+    # Preço vigente: item com preço > 0 numa tabela ativa e dentro da vigência.
+    # LEFT JOIN numa derivada (e não SUM(CASE WHEN EXISTS)): subconsulta dentro
+    # de agregação não roda no SQL Server.
+    vigentes = (f"SELECT DISTINCT RTRIM(DA1.DA1_CODPRO) AS COD FROM DA1{s} DA1 INNER JOIN DA0{s} DA0 "
+                f"ON DA0.DA0_FILIAL = DA1.DA1_FILIAL AND DA0.DA0_CODTAB = DA1.DA1_CODTAB "
+                f"AND DA0.D_E_L_E_T_ = ' ' AND DA0.DA0_ATIVO = '1' AND DA0.DA0_DATDE <= '{h}' "
+                f"AND ({_integ_vazio('DA0.DA0_DATATE')} OR DA0.DA0_DATATE >= '{h}') "
+                f"WHERE DA1.D_E_L_E_T_ = ' ' AND DA1.DA1_PRCVEN > 0")
+    ativo = (f"SB1.D_E_L_E_T_ = ' ' AND SB1.B1_MSBLQL <> '1' "
+             f"AND SB1.B1_COD NOT LIKE '{CRM_PRJ}%'")
+    pedidos = (f"SELECT DISTINCT RTRIM(C5_MDCONTR) AS CT, RTRIM(C5_MDNUMED) AS MD FROM SC5{s} "
+               f"WHERE D_E_L_E_T_ = ' ' AND {_integ_preenchido('C5_MDCONTR')}")
+    cnd_sql = lambda ped: (
+        f"SELECT RTRIM(CND.CND_SITUAC) AS SITUAC, COUNT(*) AS QTD, "
+        f"COUNT(DISTINCT CND.CND_CONTRA) AS CONTRATOS"
+        + (", SUM(CASE WHEN PV.CT IS NULL THEN 0 ELSE 1 END) AS COM_PEDIDO" if ped else "")
+        + f" FROM CND{s} CND"
+        + (f" LEFT JOIN ({pedidos}) PV ON PV.CT = RTRIM(CND.CND_CONTRA) "
+           f"AND PV.MD = RTRIM(CND.CND_NUMMED)" if ped else "")
+        + f" WHERE CND.D_E_L_E_T_ = ' ' AND RTRIM(CND.CND_CONTRA) IN ({gerados}) "
+        f"GROUP BY CND.CND_SITUAC ORDER BY SITUAC")
+    prod_sql = lambda zf: (
+        f"SELECT RTRIM(SB1.B1_TIPO) AS TIPO, COUNT(*) AS ATIVOS, "
+        f"SUM(CASE WHEN PR.COD IS NULL THEN 0 ELSE 1 END) AS COM_PRECO"
+        + (f", SUM(CASE WHEN {_integ_preenchido('SB1.B1_ZFATURA')} THEN 1 ELSE 0 END) AS COM_ZFATURA"
+           if zf else "")
+        + f" FROM SB1{s} SB1 LEFT JOIN ({vigentes}) PR ON PR.COD = RTRIM(SB1.B1_COD) "
+        f"WHERE {ativo} GROUP BY SB1.B1_TIPO ORDER BY ATIVOS DESC")
+    erro_lista = lambda expr: (
+        f"SELECT RTRIM(ZA3_IDCRM) AS IDCRM, RTRIM(ZA3_MSGID) AS MSGID, ZA3_STG1 AS STG1, "
+        f"ZA3_STG2 AS STG2, ZA3_STIPA AS STIPA, RTRIM(ZA3_ETAPA) AS ETAPA, ZA3_DTINC AS DTINC, "
+        f"RTRIM(ZA3_HRINC) AS HRINC, ZA3_DTFIM AS DTFIM, RTRIM(ZA3_HRFIM) AS HRFIM, "
+        f"CASE WHEN {sem_sucesso} THEN 'N' ELSE 'S' END AS JA_OK"
+        + (f", {expr} AS ERRO" if expr else "")
+        + f" FROM ZA3{s} WHERE D_E_L_E_T_ = ' ' AND ({erro} OR {fila}){jan} "
+        f"ORDER BY ZA3_DTINC DESC, ZA3_HRINC DESC")
+    return [
+        {"id": "crm_config", "rotulo": "CRM — parâmetros da integração (SX6)",
+         "tabela": f"SX6{s}", "limite": 200,
+         "sql": (f"SELECT RTRIM(X6_VAR) AS PARAMETRO, RTRIM(X6_FIL) AS FILIAL, "
+                 f"CASE WHEN RTRIM(X6_VAR) IN ({masc}) THEN CASE WHEN "
+                 f"{_integ_preenchido('X6_CONTEUD')} THEN '(preenchido)' ELSE '' END "
+                 f"ELSE RTRIM(X6_CONTEUD) END AS CONTEUDO FROM SX6{s} "
+                 f"WHERE D_E_L_E_T_ = ' ' AND RTRIM(X6_VAR) IN ({params}) "
+                 f"ORDER BY X6_VAR, X6_FIL")},
+        {"id": "crm_totais", "rotulo": "CRM — propostas recebidas e tratadas (ZA3)",
+         "tabela": f"ZA3{s}", "limite": 5,
+         "sql": (f"SELECT COUNT(*) AS MENSAGENS, COUNT(DISTINCT ZA3_IDCRM) AS PROPOSTAS, "
+                 f"COUNT(DISTINCT CASE WHEN ZA3_STG1 = 'L' THEN ZA3_IDCRM END) AS LIBERADAS, "
+                 f"COUNT(DISTINCT CASE WHEN ZA3_STG2 = 'S' THEN ZA3_IDCRM END) AS TRATADAS, "
+                 f"COUNT(DISTINCT CASE WHEN ZA3_STG2 = 'S' AND {_integ_preenchido('ZA3_CONTRA')} "
+                 f"THEN ZA3_CONTRA END) AS CONTRATOS_ZA3, "
+                 f"COUNT(DISTINCT CASE WHEN ZA3_STIPA = 'S' THEN ZA3_IDCRM END) AS RETORNADAS, "
+                 f"MIN(ZA3_DTINC) AS MAIS_ANTIGA, MAX(ZA3_DTINC) AS MAIS_RECENTE "
+                 f"FROM ZA3{s} WHERE D_E_L_E_T_ = ' '{jan}")},
+        {"id": "crm_situacao", "rotulo": "CRM — registros por etapa (ZA3_STG1 × STG2 × STIPA)",
+         "tabela": f"ZA3{s}", "limite": 100,
+         "sql": (f"SELECT ZA3_STG1 AS STG1, ZA3_STG2 AS STG2, ZA3_STIPA AS STIPA, COUNT(*) AS QTD, "
+                 f"COUNT(DISTINCT ZA3_IDCRM) AS PROPOSTAS, MIN(ZA3_DTINC) AS MAIS_ANTIGO, "
+                 f"MAX(ZA3_DTINC) AS MAIS_RECENTE FROM ZA3{s} WHERE D_E_L_E_T_ = ' '{jan} "
+                 f"GROUP BY ZA3_STG1, ZA3_STG2, ZA3_STIPA ORDER BY STG2, STG1, STIPA")},
+        # Fila e erro POR DIA: o par (data, menor hora) dá a idade exata sem
+        # concatenar campo (|| no Oracle, + no SQL Server).
+        {"id": "crm_fila", "rotulo": "CRM — paradas na fila (Etapa 1 ou 2), por dia",
+         "tabela": f"ZA3{s}", "limite": 400,
+         "sql": (f"SELECT ZA3_STG1 AS STG1, ZA3_STG2 AS STG2, ZA3_DTINC AS DIA, COUNT(*) AS QTD, "
+                 f"MIN(ZA3_HRINC) AS PRIMEIRA FROM ZA3{s} WHERE D_E_L_E_T_ = ' ' AND {fila}{jan} "
+                 f"GROUP BY ZA3_STG1, ZA3_STG2, ZA3_DTINC ORDER BY DIA")},
+        {"id": "crm_erros", "rotulo": "CRM — registros em erro, por dia",
+         "tabela": f"ZA3{s}", "limite": 400,
+         "sql": (f"SELECT E.ZA3_STG1 AS STG1, E.ZA3_STG2 AS STG2, E.ZA3_DTINC AS DIA, COUNT(*) AS QTD, "
+                 f"COUNT(DISTINCT E.ZA3_IDCRM) AS PROPOSTAS, "
+                 f"COUNT(DISTINCT CASE WHEN OK.ID IS NULL THEN E.ZA3_IDCRM END) AS SEM_SUCESSO "
+                 f"FROM ZA3{s} E LEFT JOIN ({com_ok}) OK ON OK.ID = E.ZA3_IDCRM "
+                 f"WHERE E.D_E_L_E_T_ = ' ' AND (E.ZA3_STG1 = 'E' OR E.ZA3_STG2 = 'E')"
+                 f"{jan.replace('ZA3_DTINC', 'E.ZA3_DTINC')} "
+                 f"GROUP BY E.ZA3_STG1, E.ZA3_STG2, E.ZA3_DTINC ORDER BY DIA")},
+        {"id": "crm_projetos", "rotulo": "CRM — projetos gerados (ZA0)",
+         "tabela": f"ZA0{s}", "limite": 100,
+         "sql": (f"SELECT RTRIM(ZA0_TPPROD) AS TPPROD, RTRIM(ZA0_STATUS) AS STATUS, COUNT(*) AS QTD, "
+                 f"COUNT(DISTINCT ZA0_CONTRA) AS CONTRATOS, MIN(ZA0_EMISSA) AS MAIS_ANTIGO, "
+                 f"MAX(ZA0_EMISSA) AS MAIS_RECENTE FROM ZA0{s} WHERE D_E_L_E_T_ = ' ' "
+                 f"AND RTRIM(ZA0_CONTRA) IN ({gerados}) "
+                 f"GROUP BY ZA0_TPPROD, ZA0_STATUS ORDER BY TPPROD, STATUS")},
+        {"id": "crm_contratos", "rotulo": "CRM — contratos gerados (CN9)",
+         "tabela": f"CN9{s}", "limite": 100,
+         "sql": (f"SELECT RTRIM(CN9_SITUAC) AS SITUAC, COUNT(DISTINCT CN9_NUMERO) AS CONTRATOS, "
+                 f"COUNT(*) AS REVISOES, MIN(CN9_DTINIC) AS INICIO_MAIS_ANTIGO "
+                 f"FROM CN9{s} WHERE D_E_L_E_T_ = ' ' AND RTRIM(CN9_NUMERO) IN ({gerados}) "
+                 f"GROUP BY CN9_SITUAC ORDER BY SITUAC")},
+        {"id": "crm_medicoes", "rotulo": "CRM — medições dos contratos gerados (CND)",
+         "tabela": f"CND{s}", "limite": 100,
+         "sqls": [cnd_sql(True), cnd_sql(False)]},
+        {"id": "crm_cad_produtos", "rotulo": "CRM — produtos ativos com preço vigente (SB1 × DA0/DA1)",
+         "tabela": f"SB1{s}", "limite": 100,
+         "sqls": [prod_sql(True), prod_sql(False)]},
+        {"id": "crm_cad_tabelas", "rotulo": "CRM — tabelas de preço (DA0)",
+         "tabela": f"DA0{s}", "limite": 300,
+         "sql": (f"SELECT RTRIM(DA0.DA0_FILIAL) AS FILIAL, RTRIM(DA0.DA0_CODTAB) AS TABELA, "
+                 f"RTRIM(DA0.DA0_DESCRI) AS DESCRICAO, RTRIM(DA0.DA0_ATIVO) AS ATIVO, "
+                 f"DA0.DA0_DATDE AS DE, DA0.DA0_DATATE AS ATE, "
+                 f"(SELECT COUNT(*) FROM DA1{s} DA1 WHERE DA1.D_E_L_E_T_ = ' ' "
+                 f"AND DA1.DA1_FILIAL = DA0.DA0_FILIAL AND DA1.DA1_CODTAB = DA0.DA0_CODTAB) AS ITENS, "
+                 f"(SELECT COUNT(*) FROM DA1{s} DA1 WHERE DA1.D_E_L_E_T_ = ' ' "
+                 f"AND DA1.DA1_FILIAL = DA0.DA0_FILIAL AND DA1.DA1_CODTAB = DA0.DA0_CODTAB "
+                 f"AND DA1.DA1_PRCVEN > 0) AS COM_PRECO "
+                 f"FROM DA0{s} DA0 WHERE DA0.D_E_L_E_T_ = ' ' ORDER BY DA0.DA0_CODTAB")},
+        # ── detalhes ───────────────────────────────────────────────────────
+        {"id": "crm_pendentes_lista", "rotulo": "CRM — propostas com erro ou paradas na fila (ZA3)",
+         "tabela": f"ZA3{s}", "limite": 200, "detalhe": True,
+         "sqls": [erro_lista(e) for e in _integ_memo_exprs("ZA3_ERRO", banco)]},
+        {"id": "crm_rastreio_lista", "rotulo": "CRM — rastreio proposta → projetos → contrato → medições",
+         "tabela": f"ZA3{s}", "limite": 200, "detalhe": True,
+         "sql": (f"SELECT RTRIM(Z.ZA3_IDCRM) AS IDCRM, Z.ZA3_DTINC AS DTINC, RTRIM(Z.ZA3_HRINC) AS HRINC, "
+                 f"Z.ZA3_DTFIM AS DTFIM, RTRIM(Z.ZA3_HRFIM) AS HRFIM, RTRIM(Z.ZA3_CONTRA) AS CONTRATO, "
+                 f"Z.ZA3_STIPA AS STIPA, "
+                 f"(SELECT MAX(RTRIM(P.ZA0_PROPOS)) FROM ZA0{s} P WHERE P.D_E_L_E_T_ = ' ' "
+                 f"AND RTRIM(P.ZA0_CONTRA) = RTRIM(Z.ZA3_CONTRA)) AS PROPOSTA, "
+                 f"(SELECT COUNT(*) FROM ZA0{s} P WHERE P.D_E_L_E_T_ = ' ' "
+                 f"AND RTRIM(P.ZA0_CONTRA) = RTRIM(Z.ZA3_CONTRA)) AS PROJETOS, "
+                 f"(SELECT MIN(RTRIM(C.CN9_SITUAC)) FROM CN9{s} C WHERE C.D_E_L_E_T_ = ' ' "
+                 f"AND RTRIM(C.CN9_NUMERO) = RTRIM(Z.ZA3_CONTRA) AND C.CN9_SITUAC <> '10') AS SITUAC, "
+                 f"(SELECT COUNT(*) FROM CND{s} M WHERE M.D_E_L_E_T_ = ' ' "
+                 f"AND RTRIM(M.CND_CONTRA) = RTRIM(Z.ZA3_CONTRA)) AS MEDICOES "
+                 f"FROM ZA3{s} Z WHERE Z.D_E_L_E_T_ = ' ' AND Z.ZA3_STG2 = 'S'{janZ} "
+                 f"ORDER BY Z.ZA3_DTINC DESC, Z.ZA3_HRINC DESC")},
+        {"id": "crm_sem_preco_lista", "rotulo": "CRM — produtos ativos sem preço em tabela vigente",
+         "tabela": f"SB1{s}", "limite": 200, "detalhe": True,
+         "sql": (f"SELECT RTRIM(SB1.B1_COD) AS PRODUTO, RTRIM(SB1.B1_DESC) AS DESCRICAO, "
+                 f"RTRIM(SB1.B1_TIPO) AS TIPO, RTRIM(SB1.B1_GRUPO) AS GRUPO FROM SB1{s} SB1 "
+                 f"LEFT JOIN ({vigentes}) PR ON PR.COD = RTRIM(SB1.B1_COD) "
+                 f"WHERE {ativo} AND PR.COD IS NULL ORDER BY SB1.B1_COD")},
+    ]
+
+
+def _crm_idade_min(dia, hora, agora):
+    """Minutos entre ZA3_DTINC/HRINC e agora (relógio de Florianópolis)."""
+    d = _integ_data(dia)
+    if not d or not agora:
+        return None
+    try:
+        hh, mm, *_ = [int(x) for x in (hora or "00:00").strip().split(":")] + [0]
+    except ValueError:
+        hh, mm = 0, 0
+    ini = datetime(d.year, d.month, d.day, min(hh, 23), min(mm, 59), tzinfo=agora.tzinfo)
+    return max(0, int((agora - ini).total_seconds() // 60))
+
+
+def _crm_anota_causas(b):
+    """Classifica cada linha em erro da lista (CAUSA) e resume por causa.
+    A lista continua gravada: é o que o consultor abre para agir."""
+    if not b or not b.get("ok"):
+        return
+    resumo = {}
+    for ln in b["linhas"]:
+        if "E" not in (ln.get("STG1"), ln.get("STG2")):
+            continue
+        ln["CAUSA"] = _crm_causa(ln.get("ERRO"))
+        if ln.get("JA_OK") == "S":
+            continue                     # já houve sucesso depois: erro antigo, não pesa
+        resumo[ln["CAUSA"]] = resumo.get(ln["CAUSA"], 0) + 1
+    b["causas"] = resumo
+
+
+def _crm_indicadores(blocos, hoje, agora=None):
+    """Indicadores do grupo CRM. Cinza = sem dado e não piora a situação."""
+    out, G = [], "crm"
+    par = _integ_params(blocos, "crm_config")
+
+    # 1. Propostas recebidas e tratadas (funil — informação)
+    b = blocos.get("crm_totais")
+    rot = "Propostas recebidas"
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "crm_recebidas", G, rot))
+    else:
+        t = (b["linhas"] or [{}])[0]
+        n, ok_ = _integ_int(t.get("PROPOSTAS")), _integ_int(t.get("TRATADAS"))
+        if not n:
+            out.append(_integ_ind("crm_recebidas", G, rot, 0, "cinza",
+                                  "Nenhuma proposta chegou do iPaaS nesta base no período."))
+        else:
+            ult = _integ_data(t.get("MAIS_RECENTE"))
+            out.append(_integ_ind(
+                "crm_recebidas", G, rot, n, "verde",
+                f"{ok_} com projetos e contrato gerados ({_integ_int(t.get('MENSAGENS'))} mensagem(ns) "
+                f"do iPaaS). Última recebida em {_integ_ddmm(ult)}."))
+
+    # 2. Erros sem correção (proposta cujo único desfecho é erro)
+    b = blocos.get("crm_erros")
+    rot = "Propostas com erro"
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "crm_erros", G, rot))
+    else:
+        ls = b["linhas"]
+        abertas = sum(_integ_int(x.get("SEM_SUCESSO")) for x in ls)
+        dias = [d for d in (_integ_data(x.get("DIA")) for x in ls if _integ_int(x.get("SEM_SUCESSO"))) if d]
+        antiga = min(dias) if dias else None
+        idade = (hoje - antiga).days if antiga else 0
+        e1 = sum(_integ_int(x.get("QTD")) for x in ls if x.get("STG1") == "E")
+        e2 = sum(_integ_int(x.get("QTD")) for x in ls if x.get("STG2") == "E")
+        if not abertas:
+            nivel = "verde"
+            txt = ("Nenhuma proposta parada em erro." if not ls else
+                   f"{e1 + e2} erro(s) no período, todos já com sucesso depois (reprocessados).")
+        else:
+            nivel = "vermelho" if idade >= CRM_ERRO_DIAS else "amarelo"
+            causas = (blocos.get("crm_pendentes_lista") or {}).get("causas") or {}
+            rot_c = {c: r for c, r, _x in CRM_CAUSAS}
+            rot_c.update({"outros": "Outros", "sem_texto": "Sem texto"})
+            pc = " · ".join(f"{rot_c.get(c, c)} {q}" for c, q in
+                            sorted(causas.items(), key=lambda kv: -kv[1]))
+            txt = (f"Etapa 1 (recebimento) {e1} · Etapa 2 (geração) {e2}. Mais antiga de "
+                   f"{_integ_ddmm(antiga)}. Corrija o cadastro e use Sincronizar na Administração "
+                   f"do Painel (DIG00A05)." + (f" Por causa: {pc}." if pc else ""))
+        out.append(_integ_ind("crm_erros", G, rot, abertas, nivel, txt))
+
+    # 3. Paradas na fila (Etapa 1 sem liberar ou Etapa 2 aguardando o job)
+    b = blocos.get("crm_fila")
+    rot = "Paradas na fila"
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "crm_fila", G, rot))
+    else:
+        ls = b["linhas"]
+        n = sum(_integ_int(x.get("QTD")) for x in ls)
+        idades = [i for i in (_crm_idade_min(x.get("DIA"), x.get("PRIMEIRA"), agora) for x in ls)
+                  if i is not None]
+        if not idades and ls:            # sem relógio: só a data
+            idades = [((hoje - d).days * 1440) for d in
+                      (_integ_data(x.get("DIA")) for x in ls) if d]
+        maior = max(idades) if idades else 0
+        if not n:
+            nivel, txt = "verde", "Fila vazia: tudo o que chegou foi processado."
+        else:
+            nivel = ("vermelho" if maior >= CRM_PARADA_HORAS * 60 else
+                     "amarelo" if maior >= CRM_PARADA_MIN else "verde")
+            e1 = sum(_integ_int(x.get("QTD")) for x in ls if x.get("STG1") in ("R", "P"))
+            txt = (f"{n - e1} aguardando o job U_CRMPROJT (Etapa 2) · {e1} presa(s) no recebimento "
+                   f"(Etapa 1). A mais antiga está parada há "
+                   f"{maior // 1440} d {(maior % 1440) // 60} h. "
+                   + ("Job parado? Confira o Schedule ou use Sincronizar Todos." if nivel != "verde" else ""))
+        out.append(_integ_ind("crm_fila", G, rot, n, nivel, txt.strip()))
+
+    # 4. Sucesso sem contrato / projeto (a transação diz S e o resultado não está lá)
+    bt, bc, bp = blocos.get("crm_totais"), blocos.get("crm_contratos"), blocos.get("crm_projetos")
+    rot = "Contratos gerados"
+    if not (bc and bc.get("ok")) or not (bt and bt.get("ok")):
+        out.append(_integ_bloco_falhou(bc if not (bc and bc.get("ok")) else bt, "crm_contratos", G, rot))
+    else:
+        esperados = _integ_int((bt["linhas"] or [{}])[0].get("CONTRATOS_ZA3"))
+        por_sit = {x.get("SITUAC") or "": _integ_int(x.get("CONTRATOS")) for x in bc["linhas"]}
+        achados = sum(q for sit, q in por_sit.items() if sit != "10")
+        cancel = por_sit.get("01", 0)
+        projetos = sum(_integ_int(x.get("QTD")) for x in (bp or {}).get("linhas") or []) \
+            if bp and bp.get("ok") else None
+        faltam = max(0, esperados - achados)
+        if not esperados:
+            nivel, txt = "cinza", "Nenhum contrato gerado pela integração no período."
+        else:
+            nivel = "vermelho" if faltam else "verde"
+            txt = (f"{achados} de {esperados} contrato(s) gravados na ZA3 existem na CN9"
+                   + (f"; {faltam} não encontrado(s) — sucesso sem contrato" if faltam else "")
+                   + (f". {cancel} cancelado(s) (erro estrutural: cancela e gera de novo)" if cancel else "")
+                   + (f". {projetos} projeto(s) no Painel." if projetos is not None else "."))
+        out.append(_integ_ind("crm_contratos", G, rot, achados, nivel, txt))
+
+    # 5. Medições dos contratos gerados (informação: a integração não mede)
+    bm = blocos.get("crm_medicoes")
+    rot = "Contratos já medidos"
+    if not (bm and bm.get("ok")):
+        out.append(_integ_bloco_falhou(bm, "crm_medicoes", G, rot))
+    else:
+        ls = bm["linhas"]
+        med = sum(_integ_int(x.get("QTD")) for x in ls)
+        enc = sum(_integ_int(x.get("QTD")) for x in ls if x.get("SITUAC") == "E")
+        ped = sum(_integ_int(x.get("COM_PEDIDO")) for x in ls) if any("COM_PEDIDO" in x for x in ls) else None
+        # contratos distintos: o maior por situação é o piso; a lista dá o exato
+        rast = (blocos.get("crm_rastreio_lista") or {})
+        if rast.get("ok") and not rast.get("truncado"):
+            cts = {x.get("CONTRATO") for x in rast["linhas"] if _integ_int(x.get("MEDICOES"))}
+            medidos = len(cts)
+        else:
+            medidos = max((_integ_int(x.get("CONTRATOS")) for x in ls), default=0)
+        tot = sum(q for sit, q in ({x.get("SITUAC") or "": _integ_int(x.get("CONTRATOS"))
+                                    for x in (bc or {}).get("linhas") or []}).items() if sit != "10") \
+            if bc and bc.get("ok") else 0
+        if not tot:
+            nivel, txt = "cinza", "Sem contrato gerado pela integração para medir."
+        else:
+            nivel = "verde"
+            txt = (f"{medidos} de {tot} contrato(s) com medição · {med} medição(ões), {enc} encerrada(s)"
+                   + (f", {ped} com pedido de venda" if ped is not None else "") + ".")
+        out.append(_integ_ind("crm_medicoes", G, rot, f"{medidos}/{tot}" if tot else None, nivel, txt))
+
+    # 6. Retorno ao CRM (ZA3_STIPA) — ainda não implementado: não pesa
+    b = blocos.get("crm_situacao")
+    rot = "Retorno ao CRM"
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "crm_retorno", G, rot))
+    else:
+        st = {}
+        for x in b["linhas"]:
+            st[x.get("STIPA") or ""] = st.get(x.get("STIPA") or "", 0) + _integ_int(x.get("QTD"))
+        if st.get("E"):
+            nivel, val = "vermelho", st["E"]
+            txt = f"{st['E']} retorno(s) ao CRM com erro."
+        elif st.get("S") or st.get("P"):
+            nivel, val = ("amarelo" if st.get("A") else "verde"), st.get("S", 0)
+            txt = f"{st.get('S', 0)} devolvido(s) ao CRM · {st.get('A', 0)} aguardando."
+        else:
+            nivel, val = "cinza", None
+            txt = ("Retorno ao CRM ainda não implementado (P11): a integração termina ao gerar "
+                   "projetos e contrato. O resultado chega só por e-mail (MV_ZMAILPP).")
+        out.append(_integ_ind("crm_retorno", G, rot, val, nivel, txt))
+
+    # 7. Prontidão dos cadastros para o CRM (produto ativo com preço vigente)
+    b = blocos.get("crm_cad_produtos")
+    rot = "Produtos com preço vigente"
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "crm_cad_produtos", G, rot))
+    else:
+        ls = b["linhas"]
+        tot = sum(_integ_int(x.get("ATIVOS")) for x in ls)
+        com = sum(_integ_int(x.get("COM_PRECO")) for x in ls)
+        if not tot:
+            nivel, txt, val = "vermelho", "Nenhum produto ativo nesta base — nada para subir ao CRM.", 0
+        else:
+            cob = com / tot
+            nivel = "verde" if cob >= CRM_COB_VERDE else "amarelo" if cob >= CRM_COB_AMARELO else "vermelho"
+            val = f"{round(cob * 100)}%"
+            zf = (f" · {sum(_integ_int(x.get('COM_ZFATURA')) for x in ls)} com indicador de faturamento "
+                  f"(B1_ZFATURA)") if any("COM_ZFATURA" in x for x in ls) else ""
+            txt = (f"{com} de {tot} produto(s) ativo(s) têm preço numa tabela ativa e vigente{zf}. "
+                   f"Código sem preço barra a proposta inteira (tudo ou nada).")
+        out.append(_integ_ind("crm_cad_produtos", G, rot, val, nivel, txt))
+
+    b = blocos.get("crm_cad_tabelas")
+    rot = "Tabelas de preço vigentes"
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "crm_cad_tabelas", G, rot))
+    else:
+        h = hoje.strftime("%Y%m%d")
+        vig = [x for x in b["linhas"] if (x.get("ATIVO") == "1" and (x.get("DE") or "") <= h
+                                          and (not (x.get("ATE") or "").strip() or x.get("ATE") >= h))]
+        itens = sum(_integ_int(x.get("COM_PRECO")) for x in vig)
+        if not vig:
+            nivel = "vermelho"
+            txt = f"Nenhuma tabela ativa e vigente ({len(b['linhas'])} cadastrada(s))."
+        else:
+            nivel = "verde" if itens else "amarelo"
+            txt = (f"{len(vig)} de {len(b['linhas'])} tabela(s) ativas e vigentes, {itens} item(ns) com preço. "
+                   + ("" if itens else "Nenhum item com preço."))
+        out.append(_integ_ind("crm_cad_tabelas", G, rot, len(vig), nivel, txt.strip()))
+
+    # 8. Parâmetros
+    b = blocos.get("crm_config")
+    rot = "Parâmetros da integração"
+    if not (b and b.get("ok")):
+        out.append(_integ_bloco_falhou(b, "crm_params", G, rot))
+    else:
+        nivel, avisos = "verde", []
+        modo = (par.get("MV_ZCRMMOD") or "").strip()
+        if modo and modo != "2":
+            nivel = "amarelo"
+            avisos.append(f"MV_ZCRMMOD = {modo} (o combinado é 2: o iPaaS envia; 1 é contingência)")
+        if not (par.get("MV_ZMAILPP") or "").strip():
+            nivel = "amarelo"
+            avisos.append("MV_ZMAILPP vazio: o e-mail de erro da geração não sai")
+        txt = ("; ".join(avisos) + ".") if avisos else \
+              f"MV_ZCRMMOD = {modo or '(padrão 2)'} · e-mails para {par.get('MV_ZMAILPP')}."
+        out.append(_integ_ind("crm_params", G, rot, f"{len(par)}/{len(CRM_PARAMS)}", nivel, txt))
+    return out
+
+
 def _integ_health(cfg, customer, amb, timeout):
     """GET <raiz REST>/api/rh/v1/integrationcheck/healthcheck com o Basic do
     ⚙ Ambiente. A raiz sai da URL do TSCMONITREST (…/rest/tscmonit → …/rest).
@@ -9115,9 +9569,20 @@ def _integ_payload(customer, amb, n=60):
         amb_cfg["integ_grupos"] = list(_integ_grupos(cfg.get("integ_grupos")))
         amb_cfg["tem_token"] = bool(cfg.get("token_enc"))
         amb_cfg["tem_senha"] = bool(cfg.get("senha_enc"))
+    # A OUTRA base (Produção × Teste): só o retrato da última coleta, lido do
+    # Supabase — o grupo CRM compara as duas lado a lado. Não toca a base.
+    outro = "teste" if amb == "producao" else "producao"
+    o_cfg = _cfg_ambiente(customer, outro)
+    o_ult = q("""select coletado_em, nivel, indicadores, blocos->'_meta' as meta, environment
+                   from cockpit.integ_medicoes where customer=%s and ambiente=%s
+                  order by coletado_em desc limit 1""", (customer, outro), one=True)
+    outra = {"ambiente": outro, "cadastrada": bool(o_cfg),
+             "integ_grupos": list(_integ_grupos((o_cfg or {}).get("integ_grupos"))) if o_cfg else [],
+             "ultima": o_ult}
     return {"ok": True, "customer": customer, "ambiente": amb,
             "hoje": _cp_hoje().isoformat(), "ambiente_cfg": amb_cfg,
-            "ultima": ult, "serie": list(reversed(serie or [])), "coletas": coletas}
+            "ultima": ult, "serie": list(reversed(serie or [])), "coletas": coletas,
+            "outra": outra}
 
 
 @app.get("/api/integracoes/<customer>")
@@ -9234,7 +9699,7 @@ def api_integracoes_coletar(customer):
     suf = (cfg.get("sufixo") or "").strip()
     if not suf:
         return _err(409, "Informe o sufixo das tabelas no ⚙ Ambiente (ex.: 010) — "
-                         "as tabelas das integrações (RJP/RUM/RJE, SF1/SDS) são lidas com ele.")
+                         "as tabelas das integrações (RJP/RUM/RJE, SF1/SDS, ZA3/ZA0/CN9) são lidas com ele.")
 
     ini = time.time()
     try:
@@ -9343,7 +9808,8 @@ def api_integracoes_coletar(customer):
     if bm and bm.get("ok"):
         bm["resumo"] = _integ_motivos(bm["linhas"])
         bm["linhas"] = []                  # só o resumo vai para o histórico
-    inds = _integ_indicadores(blocos, health, hoje, grupos)
+    _crm_anota_causas(blocos.get("crm_pendentes_lista"))
+    inds = _integ_indicadores(blocos, health, hoje, grupos, datetime.now(TZ_SP))
     nivel = _integ_pior(i["nivel"] for i in inds)
     # O corte usado fica GRAVADO com a coleta: trocar o corte depois não pode
     # fazer um número antigo parecer medido com a regra nova.
