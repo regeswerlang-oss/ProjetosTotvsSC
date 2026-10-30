@@ -8,7 +8,7 @@
 # outro código", referências quebradas, vigência, status de teste, CBS/IBS por
 # filial, dependências da migração e a coleta faseada com uma REST fingida.
 import ast, csv, io, json, pathlib, re, time, unicodedata
-from datetime import date
+from datetime import date, datetime, timedelta
 
 RAIZ = pathlib.Path(__file__).resolve().parents[2]
 src = (RAIZ / 'api' / 'index.py').read_text(encoding='utf-8')
@@ -27,6 +27,7 @@ class _App:
 
 
 ns = {'re': re, 'csv': csv, 'io': io, 'json': json, 'time': time, 'unicodedata': unicodedata,
+      'datetime': datetime, 'timedelta': timedelta,
       'app': _App(), 'INTEG_TEMPO_MIN': 4, 'TIMEOUT_TETO': 50}
 exec(compile(aux_src, 'aux', 'exec'), ns)
 exec(compile(src[ini:fim], 'tributos', 'exec'), ns)
@@ -108,6 +109,10 @@ confere('SIX só com ID técnico → sem chave (compara por conteúdo)', ns['_tr
 confere('ID técnico reconhecido', ns['_trib_eh_id']('F2B_ID') and ns['_trib_eh_id']('F21_IDF20')
         and not ns['_trib_eh_id']('F2E_IDTRIB') and not ns['_trib_eh_id']('F2B_REGRA'))
 confere('CBOX', ns['_trib_cbox']('1=Em teste;2=Aprovado') == {'1': 'Em teste', '2': 'Aprovado'})
+confere('CBOX como a REST devolve (espaço no lugar do ;)', ns['_trib_cbox']('01=Origem/Destino 02=Participante 03=Operação 04=Produto')
+        == {'01': 'Origem/Destino', '02': 'Participante', '03': 'Operação', '04': 'Produto'})
+confere('CBOX com espaço dentro do rótulo', ns['_trib_cbox']('1=Considera valor Máximo  2=Zerar o tributo  3=Não Calcula Tributo')
+        == {'1': 'Considera valor Máximo', '2': 'Zerar o tributo', '3': 'Não Calcula Tributo'})
 confere('CBOX com função não decodifica', ns['_trib_cbox']('#FISCBOX()') == {})
 
 
@@ -140,9 +145,9 @@ F28_P = [{'F28_FILIAL': '', 'F28_CODIGO': c, 'F28_DESC': d, 'F28_ALIQ': a}
          for c, d, a in (('TA0001', '0,9%', '0.90'), ('TA0002', '0,1%', '0.10'), ('TA0007', 'x', '1'))]
 F28_T = F28_P + [{'F28_FILIAL': '', 'F28_CODIGO': 'TA0003', 'F28_DESC': 'nova', 'F28_ALIQ': '0.05'},
                  {'F28_FILIAL': '', 'F28_CODIGO': 'TA0004', 'F28_DESC': 'mun', 'F28_ALIQ': '0.02'}]
-F20_P = [{'F20_FILIAL': '01', 'F20_CODIGO': 'TPP001', 'F20_TIPO': '01', 'F20_DESC': 'todos'},
-         {'F20_FILIAL': '01', 'F20_CODIGO': '000051', 'F20_TIPO': '02', 'F20_DESC': 'todos os CFOPs'}]
-F20_T = F20_P + [{'F20_FILIAL': '01', 'F20_CODIGO': 'TPP009', 'F20_TIPO': '01', 'F20_DESC': 'serviços'}]
+F20_P = [{'F20_FILIAL': '01', 'F20_CODIGO': 'TPP001', 'F20_TIPO': '04', 'F20_DESC': 'todos'},
+         {'F20_FILIAL': '01', 'F20_CODIGO': '000051', 'F20_TIPO': '03', 'F20_DESC': 'todos os CFOPs'}]
+F20_T = F20_P + [{'F20_FILIAL': '01', 'F20_CODIGO': 'TPP009', 'F20_TIPO': '04', 'F20_DESC': 'serviços'}]
 F21_P = [{'F21_FILIAL': '01', 'F21_IDF20': 'p' * 32, 'F21_UFORI': 'SC', 'F21_UFDEST': 'SC'}]
 F21_T = [{'F21_FILIAL': '01', 'F21_IDF20': 't' * 32, 'F21_UFORI': 'SC', 'F21_UFDEST': 'SC'},
          {'F21_FILIAL': '01', 'F21_IDF20': 'u' * 32, 'F21_UFORI': 'SC', 'F21_UFDEST': 'PR'}]
@@ -231,6 +236,11 @@ confere('indicador só em Teste = 4, amarelo', inds['migrar']['valor'] == 4 and 
 confere('indicador ref Produção vermelho', inds['refs_p']['valor'] == 1 and inds['refs_p']['nivel'] == 'vermelho')
 confere('indicador ref Teste vermelho (perfil de outra filial)', inds['refs_t']['nivel'] == 'vermelho')
 confere('indicador em teste na Produção', inds['em_teste_prod']['valor'] == 1)
+confere('vence: nenhuma regra perto do fim no retrato fingido', inds['vence']['valor'] == 0)
+an_v = ns['_trib_analisa_base']({'tabelas': {}}, {'F2B': [
+    {'F2B_FILIAL': '01', 'F2B_REGRA': 'A00101', 'F2B_TRIB': 'CBSFED', 'F2B_DESC': 'CBSFED - CCLASS41099', 'F2B_VIGINI': '20260101', 'F2B_VIGFIM': '20261231'},
+    {'F2B_FILIAL': '01', 'F2B_REGRA': 'E00101', 'F2B_TRIB': 'ICMS', 'F2B_DESC': 'ICMS', 'F2B_VIGINI': '20260101', 'F2B_VIGFIM': ''}]}, HOJE)
+confere('vence: CBS até 31/12/2026 entra (62 dias)', [v['regra'] for v in an_v['vence']] == ['A00101'])
 confere('indicador reforma amarelo (CBS/IBS faltando na 02)', inds['reforma']['nivel'] == 'amarelo', inds['reforma'])
 
 q = {x['tab']: x for x in out['quantidades']}
@@ -245,6 +255,43 @@ confere('só Produção: indicador migrar cinza', {i['chave']: i for i in so_p['
 confere('só Produção: análise existe', so_p['analise']['producao'] and so_p['analise']['teste'] is None)
 vazio = ns['_trib_monta'](None, None, HOJE)
 confere('nenhuma coleta não quebra', vazio['comparacao'] == {} and vazio['migracao'] == [])
+
+
+# ── versões anteriores (FISA170 guarda a antiga com *_ALTERA = 1) ──────────
+F28V = [{'F28_FILIAL': '', 'F28_CODIGO': '000019', 'F28_DESC': 'INSS 11%', 'F28_ALIQ': '11', 'F28_ALTERA': '1', 'F28_ID': 'a' * 20},
+        {'F28_FILIAL': '', 'F28_CODIGO': '000019', 'F28_DESC': 'INSS 11% - TOMADO', 'F28_ALIQ': '11', 'F28_ALTERA': '2', 'F28_ID': 'b' * 20},
+        {'F28_FILIAL': '', 'F28_CODIGO': '000015', 'F28_DESC': 'IR 1%', 'F28_ALIQ': '1', 'F28_ALTERA': '2', 'F28_ID': 'c' * 20},
+        {'F28_FILIAL': '', 'F28_CODIGO': '000016', 'F28_DESC': 'IR 1,5', 'F28_ALIQ': '1.5', 'F28_ALTERA': '2', 'F28_ID': 'd' * 20},
+        {'F28_FILIAL': '', 'F28_CODIGO': 'TA001', 'F28_DESC': '0,9%', 'F28_ALIQ': '0.9', 'F28_ALTERA': '2', 'F28_ID': 'e' * 20}]
+mt = {'colunas': list(F28V[0]), 'cbox': {'F28_ALTERA': {'1': 'Foi Alterado', '2': 'Não foi Alterado'}}}
+atuais, nant = ns['_trib_registros'](mt, matriz(F28V), 'F28')
+confere('versão anterior fora (1 de 5)', nant == 1 and len(atuais) == 4 and all(r['F28_ALTERA'] == '2' for r in atuais))
+confere('CIN: vale o dado (1 = anterior), não o CBOX invertido', ns['_trib_alterado']('CIN', {'colunas': ['CIN_ALTERA'],
+        'cbox': {'CIN_ALTERA': {'0': 'Foi alterado', '1': 'Não foi Alterado'}}}) == ('CIN_ALTERA', '1'))
+confere('carimbo e ALTERA ignorados', ns['_trib_ignorar']('F28', [{'F28_DTALT': '', 'F28_HRALT': '', 'F28_CHVMD5': '', 'F28_ALTERA': '', 'F28_ID': '', 'F28_ALIQ': ''}], [])
+        == ['F28_ALTERA', 'F28_CHVMD5', 'F28_DTALT', 'F28_HRALT', 'F28_ID'])
+
+# ── coerência (casos REAIS da Produção da Dígitro, 30/10/2026) ─────────────
+F2BC = [{'F2B_FILIAL': '01', 'F2B_REGRA': 'E00302', 'F2B_DESC': 'IR - RETENÇÃO 1% - SERVIÇO TOMADO', 'F2B_TRIB': 'IRF', 'F2B_RALIQ': '000016'},
+        {'F2B_FILIAL': '01', 'F2B_REGRA': 'E00301', 'F2B_DESC': 'IR - RETENÇÃO 1% - SERVIÇO TOMADO', 'F2B_TRIB': 'IRF', 'F2B_RALIQ': '000015'},
+        {'F2B_FILIAL': '01', 'F2B_REGRA': 'E00307', 'F2B_DESC': 'INSS - RETENÇÃO 11% - SERVIÇO TOMADO', 'F2B_TRIB': 'ISS', 'F2B_RALIQ': '000020'},
+        {'F2B_FILIAL': '01', 'F2B_REGRA': 'S00105', 'F2B_DESC': 'PIS - ÓRG PUB FED 0,65 - SERVIÇO PRESTADO', 'F2B_TRIB': 'PISRET', 'F2B_RALIQ': '000017'},
+        {'F2B_FILIAL': '01', 'F2B_REGRA': 'S00201', 'F2B_DESC': 'COFINS - SERVIÇO NÃO CUMULATIVO', 'F2B_TRIB': 'COF', 'F2B_RALIQ': '000008'}]
+coe = ns['_trib_coerencia']({'F2B': F2BC, 'F28': atuais})
+kinds = sorted((c['regra'], c['tipo']) for c in coe)
+confere('E00302: 1% na descrição × alíquota 1,5', ('E00302', 'aliquota') in kinds, coe)
+confere('E00301 coerente', not any(c['regra'] == 'E00301' for c in coe))
+confere('E00307: descrição INSS, tributo ISS', ('E00307', 'tributo') in kinds)
+confere('sem % na descrição não acusa (S00105)', not any(c['regra'] == 'S00105' for c in coe))
+confere('TA001 fora do padrão de tamanho', any(c['tipo'] == 'codigo' and c['regra'] == 'TA001' for c in coe), coe)
+confere('PISRET é família PIS, COF é família COFINS', not any(c['regra'] in ('S00105', 'S00201') and c['tipo'] == 'tributo' for c in coe))
+
+# ── perfil com o tipo errado ────────────────────────────────────────────────
+regs_tipo = {'F2B': [{'F2B_FILIAL': '01', 'F2B_REGRA': 'X1', 'F2B_TRIB': 'ICMS', 'F2B_PERFPA': '000004', 'F2B_PERFPR': '000004'}],
+             'F20': [{'F20_FILIAL': '', 'F20_CODIGO': '000004', 'F20_TIPO': '04', 'F20_DESC': 'energia'}]}
+an = ns['_trib_analisa_base']({'tabelas': {}}, regs_tipo, HOJE)
+confere('perfil de participante com código que só existe como produto',
+        [(x['campo'], x['motivo']) for x in an['refs']] == [('F2B_PERFPA', 'existe, mas com outro tipo de perfil')], an['refs'])
 
 # ── coleta faseada com REST fingida ─────────────────────────────────────────
 chamadas = []
