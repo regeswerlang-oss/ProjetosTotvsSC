@@ -227,6 +227,7 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
     IND('tra_entrada', 'transmite', 'Dias sem importar XML', 0, 'verde', 'Último XML importado em 16/10/2026.'),
     IND('tra_sem_monitor', 'transmite', 'Lançadas fora do Importador', 2, 'amarelo', 'Sem SDS.'),
     IND('tra_params', 'transmite', 'Parâmetros do Importador', '2/14', 'verde', 'MV_IMPXML = .T.'),
+    IND('tra_erros', 'transmite', 'XML parados por erro do Importador', 37, 'vermelho', 'Por motivo: COM007 Fornecedor inexistente na base (35).'),
   ];
   const TBLOCOS = {
     _meta: { desde: null, grupos: ['transmite'] },
@@ -234,7 +235,17 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
       { FILIAL: '0101', DOC: '000013687', SERIE: '1', FORNECEDOR: 'F00001', LOJA: '01', EMISSAO: '20260804', DTDIGIT: '20261001',
         HORA: '10:00:00', STRAN: '2', CODEDI: '109', DT_IMP: '20260805', DS_STATUS: 'B', CHAVE: '42261027968581000106550010000136871530601731' },
       { FILIAL: '0102', DOC: '000000001', SERIE: '1', FORNECEDOR: 'F00002', LOJA: '01', EMISSAO: '20260701', DTDIGIT: '20261002',
-        HORA: '11:00:00', STRAN: '', CODEDI: '214', DT_IMP: '20260702', DS_STATUS: '', CHAVE: '4226<i>zz</i>' }] },
+        HORA: '11:00:00', STRAN: '', CODEDI: '214', DT_IMP: '20260702', DS_STATUS: '', CHAVE: '4226<i>zz</i>' },
+      { FILIAL: '010113', DOC: '000121659', SERIE: '2', FORNECEDOR: '83286500', LOJA: '0012', EMISSAO: '20261020', DTDIGIT: '20261020',
+        HORA: '11:16:00', STRAN: '2', CODEDI: '109', DT_IMP: '20261020', DS_STATUS: '', TEM_SDS: 'S', TIPO_NF: 'I', CHAVE: '42261083286500001211550020001216591539161896' }] },
+    tra_erros: { ok: true, linhas: [], resumo: { acao: 37, sem_acao: 55, sem_erro: 614, sem_erro_por_situacao: { '2': 614 },
+      mais_antigo_acao: '20261001', codigos: [
+        { codigo: 'COM007', qtd: 35, tipos: { NFE: 30, NFSE: 5 }, texto: 'Fornecedor inexistente na base', fonte: 'padrao', quem: 'cadastro', mais_antigo: '20261001', mais_recente: '20261030' },
+        { codigo: 'COM099', qtd: 2, tipos: { CTE: 2 }, texto: 'Código sem <b>descrição</b>', fonte: 'nenhuma', quem: 'outros', mais_antigo: '20261010', mais_recente: '20261010' },
+        { codigo: 'COM052', qtd: 34, tipos: { NFE: 34 }, texto: 'Este XML não pertence a nenhuma empresa/filial e não podera ser processado.', fonte: 'base', quem: 'nada', mais_antigo: '20261001', mais_recente: '20261029' },
+        { codigo: 'COM040', qtd: 21, tipos: { NFE: 21 }, texto: 'NF-e cancelada', fonte: 'padrao', quem: 'nada', mais_antigo: '20260920', mais_recente: '20261029' }] } },
+    tra_erros_lista: { ok: true, linhas: [
+      { ERRO: 'COM007', STRAN: '2', CODEDI: '109', DT_IMP: '20261001', DOC: '123', DESTINO: '83286500001211', CHAVE: '42261000000000000000550010000001231000000010' }] },
     tra_sem_retorno: { ok: true, linhas: [{ FILIAL: '0101', QTD: '31', DIGIT_MAIS_ANTIGA: '20260905', EMISSAO_MAIS_ANTIGA: '20260701', VENCIDAS: '1', CRITICAS: '2', ATENCAO: '5' }] },
     tra_futuras_lista: { ok: true, linhas: [] },
     tra_revisao: { ok: true, linhas: [{ STATUS: 'B', QTD: '6', MAIS_ANTIGO: '20260920', MAIS_RECENTE: '20261010' }] },
@@ -262,7 +273,7 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   });
   await pg.waitForFunction(() => document.querySelector('[data-int-ind="tra_sem_retorno"]'), null, { timeout: 5000 }).catch(() => {});
   const rd = await txt('#int-conteudo');
-  t('transmite: 8 cartões, nenhum de RH', (await pg.$$('[data-int-ind]')).length === 8 && await pg.$('[data-int-ind^="quirons"]') === null);
+  t('transmite: 9 cartões, nenhum de RH', (await pg.$$('[data-int-ind]')).length === 9 && await pg.$('[data-int-ind^="quirons"]') === null);
   t('transmite: grupo nomeado', /TOTVS Transmite/.test(rd));
   t('transmite: caixas de RH somem', await pg.$('[data-int-caixa="quirons"]') === null && await pg.$('[data-int-caixa="config"]') === null);
   t('transmite: sem aviso de senha do RH', !/healthcheck da Quírons exige/.test(rd));
@@ -271,8 +282,22 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   const l1 = tl.find(l => /000013687/.test(l)) || '', l2 = tl.find(l => /000000001/.test(l)) || '';
   t('transmite: prazo em texto (73 d, faltam 17)', /! 73 d · faltam 17/.test(l1), l1);
   t('transmite: vencido', /✕ 107 d · vencido/.test(l2), l2);
-  t('transmite: STRAN e tipo legíveis', /2 · não classificada/.test(l1) && /109 · NF-e/.test(l1) && /B · revisão cadastral/.test(l1));
+  t('transmite: STRAN e tipo legíveis', /2 · Exportada/.test(l1) && /109 · NF-e/.test(l1) && /B · revisão cadastral/.test(l1));
   t('transmite: STRAN vazio e sem SDS', /\(vazio\) · não classificada/.test(l2) && /sem SDS/.test(l2) && /214 · CT-e/.test(l2));
+  const l3 = tl.find(l => /000121659/.test(l)) || '';
+  t('transmite: Importador com status vazio ≠ sem SDS', /\(vazio\) · sem status/.test(l3) && !/sem SDS/.test(l3), l3);
+  t('transmite: tipo da NF (complemento ICMS)', /I · compl\. ICMS/.test(l3), l3);
+  t('erros: quadro do Importador', /Por que o Importador parou/.test(rd));
+  const tq = async (q) => pg.$eval(`[data-int-tra-quem="${q}"]`, n => n.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
+  t('erros: contagem por quem resolve', /Cadastro 35/.test(await tq('cadastro')) && /Sem ação 55/.test(await tq('nada'))
+    && /Não mapeado 2/.test(await tq('outros')) && /Fiscal \(fora do Importador\) 0/.test(await tq('fiscal')), await tq('nada'));
+  const lc = tl.find(l => /^COM007/.test(l)) || '';
+  t('erros: linha do código com motivo, quem e tipo', /Fornecedor inexistente na base/.test(lc) && /Cadastro/.test(lc) && /NF-e 30 · NFS-e 5/.test(lc), lc);
+  t('erros: texto da base marcado', /não podera ser processado\. \(texto da base\)/.test(rd));
+  t('erros: texto escapado', await pg.$('#int-conteudo b:has-text("descrição")') === null && /Código sem <b>descrição<\/b>/.test(rd));
+  t('erros: fila sem motivo explicada', /Sem motivo gravado: 614 XML/.test(rd) && /2 · Exportada 614/.test(rd));
+  const ll = tl.find(l => /83286500001211/.test(l) && /COM007/.test(l)) || '';
+  t('erros: lista um a um com destino e quem resolve', /Cadastro/.test(ll) && /123/.test(ll), ll);
   t('transmite: chave escapada', await pg.$('#int-conteudo i:has-text("zz")') === null && /4226<i>zz<\/i>/.test(rd));
   t('transmite: bloco não lido explicado', /tempo da coleta acabou/.test(rd));
   t('transmite: credencial mascarada', /\(preenchido\)/.test(rd));

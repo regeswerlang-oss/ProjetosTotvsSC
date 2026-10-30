@@ -274,6 +274,9 @@ TRA_CSV = {
     "mon": "FILIAL;ESPECIE;QTD;MAIS_ANTIGO;MAIS_RECENTE\n",
     "lista": "FILIAL;DOC;SERIE;FORNECEDOR;LOJA;EMISSAO;DTDIGIT;HORA;STRAN;CODEDI;DT_IMP;DS_STATUS;CHAVE\n"
              "0101;000013687;1;F00001;01;20260801;20261001;10:00:00;2;109;20260802;B;42261027968581000106550010000136871530601731\n",
+    "erros": "ERRO;STRAN;TIPO;QTD;MAIS_ANTIGO;MAIS_RECENTE\nCOM007;2;NFE;5;20261001;20261010\nCOM052;0;NFE;4;20261001;20261002\n-;2;NFSE;9;20261001;20261002\n",
+    "msg": "ERRO;MENSAGEM\nCOM052;\\x434f4d303532202d204573746520584d4c206ee36f2070657274656e636500\nCOM007;\n",
+    "elista": "ERRO;STRAN;CODEDI;DT_IMP;DOC;DESTINO;CHAVE\nCOM007;2;109;20261001;123;83286500001211;42261000000000000000550010000001231000000010\n",
     "vazio": "X\n",
 }
 
@@ -290,6 +293,9 @@ def fake_post_tra(url, json=None, headers=None, auth=None, params=None, timeout=
     k = ("cfg" if "MV_IMPXML" in sql else
          "lista" if "INNER JOIN CKOCOL" in sql else
          "sem_ret" if "EXISTS (SELECT 1 FROM CKOCOL" in sql else
+         "msg" if "MIN(R_E_C_N_O_)" in sql else
+         "erros" if "X.ERRO" in sql else
+         "elista" if "CKO_CNPJIM" in sql else
          "fila" if "FROM CKOCOL WHERE" in sql else
          "rev" if "FROM SDS010 WHERE" in sql and "COUNT(*)" in sql else
          "mon" if "NOT EXISTS" in sql else
@@ -300,7 +306,7 @@ def fake_post_tra(url, json=None, headers=None, auth=None, params=None, timeout=
 
 m.requests.post = fake_post_tra
 aad_rd = m._aad("TFDPHR00", "producao")          # credencial cifrada amarra cliente+base
-CFG["cfg"] = dict(BASE_CFG, customer="TFDPHR00", integ_grupos=["transmite"], integ_desde=None,
+CFG["cfg"] = dict(BASE_CFG, customer="TFDPHR00", integ_grupos=["transmite"], integ_desde=None, banco="postgres",
                   senha_enc=m._cifra("s3nha", aad_rd), token_enc=m._cifra("tok123", aad_rd))
 CHAMADAS.clear()
 DB["medicoes"].clear()
@@ -311,7 +317,9 @@ q_tra = [c for c in CHAMADAS if "/query" in c["url"]]
 confere("transmite: nenhuma consulta de RH", not any(t in c["sql"] for c in q_tra
                                                   for t in ("RJP010", "RUM010", "RU7010", "RJE010")))
 confere("transmite: sem healthcheck da Quírons", not any("healthcheck" in c["url"] for c in CHAMADAS))
-confere("transmite: 12 consultas (10 blocos + 2 variantes da SDS)", len(q_tra) == 12)
+confere("transmite: 15 consultas (13 blocos + 2 variantes da SDS)", len(q_tra) == 15)
+confere("transmite: Postgres lê o memo com CAST", any("CAST(CKO_MSGERR AS VARCHAR)" in c["sql"] for c in q_tra)
+        and not any("DBMS_LOB" in c["sql"] for c in q_tra))
 ult = d["ultima"]
 inds = {i["chave"]: i for i in ult["indicadores"]}
 confere("transmite: só indicadores do grupo", set(i["grupo"] for i in ult["indicadores"]) == {"transmite"})
@@ -323,8 +331,14 @@ confere("transmite: fila parada 24", inds["tra_fila"]["valor"] == 24)
 confere("transmite: grupos gravados na coleta", ult["blocos"]["_meta"]["grupos"] == ["transmite"])
 confere("transmite: cfg devolve grupos", d["ambiente_cfg"]["integ_grupos"] == ["transmite"])
 confere("transmite: detalhe com a nota", ult["blocos"]["tra_sem_retorno_lista"]["linhas"][0]["DOC"] == "000013687")
+res_e = ult["blocos"]["tra_erros"]["resumo"]
+confere("erros: resumo gravado na coleta", res_e["acao"] == 5 and res_e["sem_acao"] == 4 and res_e["sem_erro"] == 9)
+confere("erros: mensagem da base decodificada", ult["blocos"]["tra_erros_msg"]["linhas"][0]["MENSAGEM"].startswith("Este XML")
+        and next(c for c in res_e["codigos"] if c["codigo"] == "COM052")["fonte"] == "base")
+confere("erros: cartão", inds["tra_erros"]["valor"] == 5 and inds["tra_erros"]["nivel"] in ("amarelo", "vermelho"))
+confere("erros: lista com destino", ult["blocos"]["tra_erros_lista"]["linhas"][0]["DESTINO"] == "83286500001211")
 d = cli.get("/api/integracoes/TFDPHR00/scripts?ambiente=producao").get_json()
-confere("transmite: scripts do grupo", d["grupos"] == ["transmite"] and len(d["scripts"]) == 10
+confere("transmite: scripts do grupo", d["grupos"] == ["transmite"] and len(d["scripts"]) == 13
         and all(s["id"].startswith("tra_") for s in d["scripts"]))
 
 # rota /grupos

@@ -267,7 +267,7 @@ confere('hora limite sem agora', hl(None) is None)
 
 tra = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('transmite',), AGORA)
 tid = [s['id'] for s in tra]
-confere('transmite: 10 blocos', len(tra) == 10)
+confere('transmite: 13 blocos', len(tra) == 13)
 confere('transmite: nenhum bloco de RH', not any(i in tid for i in ('config', 'rjp_fila', 'rum_resumo')))
 confere('transmite: resumos antes dos detalhes',
         max(tid.index(i) for i in tid if not tra[tid.index(i)].get('detalhe'))
@@ -278,7 +278,9 @@ for s in tra:
         confere(f'{s["id"]}: sem ;', not sql.rstrip().endswith(';'))
         confere(f'{s["id"]}: deletados', "D_E_L_E_T_ = ' '" in sql)
         up = sql.upper()
-        for proib in ('INSERT', 'UPDATE', 'DELETE ', 'MERGE', 'DROP', 'EXEC ', ' INTO ', 'DBMS_', 'UTL_'):
+        # DBMS_LOB/UTL_RAW só no memo do Oracle (a trava da REST compara a palavra inteira)
+        extra = () if s['id'] == 'tra_erros_msg' else ('DBMS_', 'UTL_')
+        for proib in ('INSERT', 'UPDATE', 'DELETE ', 'MERGE', 'DROP', 'EXEC ', ' INTO ') + extra:
             confere(f'{s["id"]}: sem {proib}', proib not in up)
         for relogio in ('SYSDATE', 'GETDATE', 'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'NOW()', 'TO_CHAR'):
             confere(f'{s["id"]}: data vem do Python ({relogio})', relogio not in up)
@@ -311,7 +313,7 @@ confere('corte encurta a janela', "F1_DTDIGIT >= '20261001'" in cor['tra_sem_ret
 velho = {s['id']: s['sql'] for s in ns['_integ_scripts']('010', HOJE, date(2025, 1, 1), 'oracle', ('transmite',), AGORA)}
 confere('corte mais antigo não alarga a janela', "'20260615'" in velho['tra_fila'])
 ambos = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('rh', 'transmite'), AGORA)
-confere('rh + transmite = 20 blocos', len(ambos) == 20 and ambos[0]['id'] == 'config')
+confere('rh + transmite = 23 blocos', len(ambos) == 23 and ambos[0]['id'] == 'config')
 confere('padrão continua só RH', len(ns['_integ_scripts']('010', HOJE)) == 10)
 
 # ── indicadores Transmite ───────────────────────────────────────────────────
@@ -328,7 +330,7 @@ tra_ok = {
     'tra_sem_monitor': bloco(),
 }
 ti = ns['_integ_indicadores'](tra_ok, {'ok': False}, HOJE, ('transmite',))
-confere('transmite: 8 indicadores, nenhum de RH', len(ti) == 8 and all(i['grupo'] == 'transmite' for i in ti))
+confere('transmite: 9 indicadores, nenhum de RH', len(ti) == 9 and all(i['grupo'] == 'transmite' for i in ti))
 confere('transmite saudável = verde', ns['_integ_pior'](i['nivel'] for i in ti) == 'verde')
 confere('classificada (4) não conta como parada', ind(ti, 'tra_fila')['valor'] == 0)
 confere('última importação hoje = 0 dias', ind(ti, 'tra_entrada')['valor'] == 0)
@@ -383,7 +385,75 @@ sem_data = dict(tra_ok, tra_revisao=dict(bloco({'STATUS': 'B', 'QTD': '2'}), var
 rv = ind(ns['_integ_indicadores'](sem_data, {'ok': False}, HOJE, ('transmite',)), 'tra_revisao')
 confere('revisão sem campo de data = amarelo e avisa', rv['nivel'] == 'amarelo' and 'sem janela' in rv['texto'])
 ambos_i = ns['_integ_indicadores'](dict(saudavel, **tra_ok), health_ok, HOJE, ('rh', 'transmite'))
-confere('rh + transmite = 16 indicadores', len(ambos_i) == 16)
+confere('rh + transmite = 17 indicadores', len(ambos_i) == 17)
+
+# ══ Transmite: motivo do Importador (CKO_CODERR) — 30/10/2026 ═══════════════
+por_banco = {b: {x['id']: x for x in ns['_integ_scripts']('010', HOJE, None, b, ('transmite',), AGORA)}
+             for b in ('oracle', 'mssql', 'postgres')}
+E = por_banco['oracle']['tra_erros']['sql']
+confere('erros: Oracle usa SUBSTR e LENGTH', 'SUBSTR(CKO_CHVDOC, 21, 2)' in E and 'LENGTH(RTRIM(CKO_CHVDOC))' in E
+        and 'SUBSTRING' not in E)
+confere('erros: SQL Server usa SUBSTRING e LEN', 'SUBSTRING(CKO_CHVDOC' in por_banco['mssql']['tra_erros']['sql']
+        and 'LEN(RTRIM' in por_banco['mssql']['tra_erros']['sql'])
+confere('erros: Postgres usa SUBSTRING e LENGTH', 'SUBSTRING(CKO_CHVDOC' in por_banco['postgres']['tra_erros']['sql']
+        and 'LENGTH(RTRIM' in por_banco['postgres']['tra_erros']['sql'])
+confere('erros: GROUP BY pelas colunas da subconsulta (Oracle)', 'GROUP BY X.ERRO, X.STRAN, X.TIPO' in E)
+confere('erros: sem concatenação (DBAccess Postgres)', '||' not in E)
+confere('erros: só o que não chegou a 4', "RTRIM(CKO_STRAN) <> '4'" in E)
+confere('erros: janela', "CKO_DT_IMP >= '20260615'" in E)
+M = por_banco['postgres']['tra_erros_msg']['sqls']
+confere('msg postgres: CAST do BYTEA e variante sem mensagem', 'CAST(CKO_MSGERR AS VARCHAR)' in M[0] and 'MSGERR' not in M[-1])
+confere('msg oracle: BLOB, CLOB e sem mensagem', len(por_banco['oracle']['tra_erros_msg']['sqls']) == 3)
+confere('msg: um XML por código', 'MIN(R_E_C_N_O_)' in M[0] and 'GROUP BY CKO_CODERR' in M[0])
+confere('lista: destino (CKO_CNPJIM)', 'CKO_CNPJIM' in por_banco['oracle']['tra_erros_lista']['sql'])
+confere('sem retorno: TEM_SDS separa sem registro de status vazio',
+        "CASE WHEN SDS.DS_CHAVENF IS NULL THEN 'N' ELSE 'S' END AS TEM_SDS" in por_banco['oracle']['tra_sem_retorno_lista']['sql'])
+
+tm = ns['_tra_msg']
+HEX = '\\x434f4d303532202d204573746520584d4c206ee36f2070657274656e63652061206e656e68756d6120656d70726573612f66696c69616c2065206ee36f20706f64657261207365722070726f6365737361646f2e00'
+confere('msg: BYTEA em hexa vira texto sem o código', tm(HEX) == 'Este XML não pertence a nenhuma empresa/filial e não podera ser processado.')
+confere('msg: duas barras (CSV escapado)', tm('\\' + HEX) == tm(HEX))
+confere('msg: texto puro (Oracle) só perde o prefixo', tm('COM007 - Fornecedor X inexistente na base.') == 'Fornecedor X inexistente na base.')
+confere('msg: vazio', tm('') == '' and tm(None) == '')
+confere('msg: hexa inválido não quebra', tm('\\xZZ') == '\\xZZ' or tm('\\xZZ') == '')
+
+err = {
+    'tra_erros': bloco(
+        {'ERRO': 'COM007', 'STRAN': '2', 'TIPO': 'NFE', 'QTD': '30', 'MAIS_ANTIGO': '20261001', 'MAIS_RECENTE': '20261028'},
+        {'ERRO': 'COM007', 'STRAN': '2', 'TIPO': 'NFSE', 'QTD': '5', 'MAIS_ANTIGO': '20261003', 'MAIS_RECENTE': '20261030'},
+        {'ERRO': 'COM040', 'STRAN': '1', 'TIPO': 'NFE', 'QTD': '21', 'MAIS_ANTIGO': '20260920', 'MAIS_RECENTE': '20261029'},
+        {'ERRO': 'COM052', 'STRAN': '0', 'TIPO': 'NFE', 'QTD': '34', 'MAIS_ANTIGO': '20261001', 'MAIS_RECENTE': '20261029'},
+        {'ERRO': 'COM099', 'STRAN': '2', 'TIPO': 'CTE', 'QTD': '2', 'MAIS_ANTIGO': '20261010', 'MAIS_RECENTE': '20261010'},
+        {'ERRO': '-', 'STRAN': '2', 'TIPO': 'NFSE', 'QTD': '614', 'MAIS_ANTIGO': '20261001', 'MAIS_RECENTE': '20261030'}),
+    'tra_erros_msg': bloco({'ERRO': 'COM052', 'MENSAGEM': HEX}, {'ERRO': 'COM007', 'MENSAGEM': ''}),
+}
+res = ns['_tra_erros_resumo'](err)
+cod = {c['codigo']: c for c in res['codigos']}
+confere('resumo: soma por código e tipo', cod['COM007']['qtd'] == 35 and cod['COM007']['tipos'] == {'NFE': 30, 'NFSE': 5})
+confere('resumo: data mais antiga e recente por código', cod['COM007']['mais_antigo'] == '20261001' and cod['COM007']['mais_recente'] == '20261030')
+confere('resumo: texto da base vence o padrão', cod['COM052']['texto'].startswith('Este XML não pertence') and cod['COM052']['fonte'] == 'base')
+confere('resumo: sem mensagem usa o padrão', cod['COM007']['texto'] == 'Fornecedor inexistente na base' and cod['COM007']['fonte'] == 'padrao')
+confere('resumo: código desconhecido = não mapeado', cod['COM099']['quem'] == 'outros' and cod['COM099']['fonte'] == 'nenhuma')
+confere('resumo: quem resolve', cod['COM007']['quem'] == 'cadastro' and cod['COM040']['quem'] == 'nada' and cod['COM052']['quem'] == 'nada')
+confere('resumo: ação × sem ação × sem erro', res['acao'] == 37 and res['sem_acao'] == 55 and res['sem_erro'] == 614)
+confere('resumo: sem ação vai para o fim', res['codigos'][-1]['quem'] == 'nada' and res['codigos'][0]['codigo'] == 'COM007')
+confere('resumo: antigo só do que pede ação', res['mais_antigo_acao'] == '20261001')
+confere('resumo: bloco não lido = None', ns['_tra_erros_resumo']({}) is None)
+ti = ns['_integ_indicadores'](dict(tra_ok, **err), {'ok': False}, HOJE, ('transmite',))
+ie = ind(ti, 'tra_erros')
+confere('cartão erros: valor = só o que pede ação', ie['valor'] == 37)
+confere('cartão erros: 12 dias = vermelho', ie['nivel'] == 'vermelho')
+confere('cartão erros: texto com motivo e sem ação', 'COM007 Fornecedor inexistente na base (35)' in ie['texto'] and 'Sem ação' in ie['texto'] and '55' in ie['texto'])
+so_nada = {'tra_erros': bloco({'ERRO': 'COM040', 'STRAN': '1', 'TIPO': 'NFE', 'QTD': '3', 'MAIS_ANTIGO': '20261001', 'MAIS_RECENTE': '20261002'})}
+ie = ind(ns['_integ_indicadores'](dict(tra_ok, **so_nada), {'ok': False}, HOJE, ('transmite',)), 'tra_erros')
+confere('cartão erros: só cancelada = verde', ie['nivel'] == 'verde' and ie['valor'] == 0 and 'Sem ação' in ie['texto'])
+recente = {'tra_erros': bloco({'ERRO': 'COM007', 'STRAN': '2', 'TIPO': 'NFE', 'QTD': '1', 'MAIS_ANTIGO': '20261010', 'MAIS_RECENTE': '20261010'})}
+ie = ind(ns['_integ_indicadores'](dict(tra_ok, **recente), {'ok': False}, HOJE, ('transmite',)), 'tra_erros')
+confere('cartão erros: 3 dias = amarelo', ie['nivel'] == 'amarelo')
+ie = ind(ns['_integ_indicadores'](dict(tra_ok), {'ok': False}, HOJE, ('transmite',)), 'tra_erros')
+confere('cartão erros: bloco não lido = cinza', ie['nivel'] == 'cinza')
+pronto = dict(tra_ok, tra_erros=dict(bloco(), resumo={'codigos': [], 'acao': 0, 'sem_acao': 0, 'sem_erro': 0, 'mais_antigo_acao': None}))
+confere('cartão erros: usa o resumo gravado', ind(ns['_integ_indicadores'](pronto, {'ok': False}, HOJE, ('transmite',)), 'tra_erros')['nivel'] == 'verde')
 
 print(f'{ok} asserções OK, {falhou} falha(s)')
 raise SystemExit(1 if falhou else 0)

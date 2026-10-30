@@ -158,3 +158,74 @@ tela ("2 · não classificada"), sem inventar significado.
   exportado do portal Transmite e cruzamento por chave com a SF1/CKOCOL. Isso
   fecha a pergunta "o evento saiu?".
 - **Coleta diária automática.** Feita por pg_cron, como as outras coletas.
+
+## Por que o Importador parou: CKO_CODERR (30/10/2026)
+
+**Pedido.** Deixar fixo na aba o quadro "motivo de cada erro do Importador". Na
+Rio Deserto ele mostrou que o problema não estava nas transferências entre
+filiais: era cadastro de fornecedor, notas que o Importador não trata e XML
+cancelado ou sem destino no grupo.
+
+**Blocos novos**
+
+| id | tipo | o que lê |
+|---|---|---|
+| `tra_erros` | resumo | CKOCOL sem `CKO_STRAN = 4` na janela, agrupada por `CKO_CODERR` × `CKO_STRAN` × tipo do documento. O tipo é NFS-e quando a chave não tem 44 posições, CT-e quando o modelo é 57, e NF-e nos demais casos. |
+| `tra_erros_msg` | detalhe | o texto gravado pelo Importador (`CKO_MSGERR`), um XML por código |
+| `tra_erros_lista` | detalhe (300) | os XML com código, um a um, com o destinatário (`CKO_CNPJIM`) |
+
+**Regras que o SQL tem que seguir**
+
+- **Funções por banco.** `_tra_sql_fns` usa `SUBSTR`/`LENGTH` no Oracle,
+  `SUBSTRING`/`LEN` no SQL Server e `SUBSTRING`/`LENGTH` no Postgres.
+- **Classificação em subconsulta, sem concatenação.** O DBAccess do Postgres
+  reescreve `||` com `CASE` dentro e quebra o SQL. Foi visto em 30/10, com o
+  erro "syntax error at or near )".
+- **Agrupamento.** Usa as colunas da subconsulta, porque o Oracle não aceita
+  `GROUP BY` por apelido nem por posição.
+
+**Leitura da mensagem (memo)**
+
+- **Postgres.** O DBAccess grava o memo em BYTEA.
+  `SUBSTRING(CAST(CKO_MSGERR AS VARCHAR), 1, n)` devolve o hexa (`\x434f4d…`),
+  e o `_tra_msg` decodifica em latin-1 e tira o prefixo "COM052 - ".
+- **Oracle e SQL Server.** Usam as mesmas variantes do memo do RH. A última
+  variante vem sempre sem mensagem.
+- **Sem texto lido.** Se nenhuma variante devolver texto, vale o texto de
+  `TRA_CODERR`.
+
+**Quem resolve** (`TRA_CODERR`, com os textos lidos na base da Rio Deserto)
+
+| Código | Motivo | Quem resolve |
+|---|---|---|
+| COM007 | Fornecedor inexistente na base | Cadastro |
+| COM020 | CT-e cita documento de entrada inexistente | Cadastro |
+| COM003 | Devolução/complemento de ICMS-IPI não é tratado pelo Importador | Fiscal (lançar à mão e manifestar no Transmite) |
+| COM004 | NF-e de ajuste não é tratada pelo Importador | Fiscal |
+| COM005 | Chave já registrada em outra nota de entrada | Duplicidade |
+| COM044 | Documento de entrada já existe no Monitor | Duplicidade |
+| COM036 / COM040 | CT-e / NF-e cancelada | Sem ação |
+| COM052 | XML não pertence a nenhuma empresa/filial | Sem ação |
+| outro | — | Não mapeado (ver a mensagem no Monitor) |
+
+> O COM040/COM036 confirma a leitura do `DisponivelCancelamento` do Transmite:
+> as chaves recusadas em 16/10 aparecem na base como "NF-e cancelada" e "CT-e
+> cancelado".
+
+**Cartão `tra_erros`**
+
+- **Valor:** XML que pedem ação (cadastro, fiscal, duplicidade e não mapeado).
+- **Níveis:** 0 = verde; o mais antigo com 7 dias ou mais = vermelho; abaixo
+  disso = amarelo. Os "sem ação" aparecem só no texto.
+- **Resumo gravado.** A coleta grava o resumo em
+  `blocos.tra_erros.resumo` (`_tra_erros_resumo`, função pura), e o histórico
+  ganha a coluna "Erros Importador".
+
+**Ajustes na lista "sem retorno"**
+
+- **Coluna Importador.** Separa "sem SDS" de "(vazio) · sem status" usando
+  `TEM_SDS`. Antes, as duas situações apareciam como "sem SDS".
+- **Coluna Tipo NF.** Mostra o tipo da nota (normal, complemento de ICMS,
+  complemento de preço/frete…).
+- **Legenda do `CKO_STRAN`.** Agora vai completa: 0 não processado,
+  1 pendente, 2 Exportada, 3 Integrada, 4 Classificada.

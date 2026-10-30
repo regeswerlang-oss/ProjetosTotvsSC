@@ -8840,6 +8840,28 @@ TRA_FILA_AMARELO, TRA_FILA_VERMELHO = 30, 60   # dias na CKOCOL sem classificar
 TRA_FOLGA_MIN = 10                 # min de folga entre o relógio do painel e o do AppServer
 TRA_STRAN = {"4": "Classificada"}  # único código documentado; os outros vão crus
 TRA_DS_STATUS = {"B": "revisão cadastral"}
+# Motivo de o Importador não processar o XML (CKO_CODERR). Texto lido da base
+# da Rio Deserto em 30/10/2026 (CKO_MSGERR); quando a coleta consegue ler o
+# memo, vale o texto da base. `quem` diz QUEM resolve — é a pergunta do cartão:
+#   cadastro  → falta cadastro no Protheus (fornecedor, amarração, nota de origem)
+#   fiscal    → o Importador não trata esse tipo: lançar à mão e manifestar no Transmite
+#   duplicado → o documento já existe (Monitor ou SF1): conferir e descartar o XML
+#   nada      → cancelada pelo emitente ou XML sem destino no grupo: sem ação
+TRA_CODERR = {
+    "COM003": ("Devolução/complemento de ICMS-IPI não é tratado pelo Importador", "fiscal"),
+    "COM004": ("NF-e de ajuste não é tratada pelo Importador", "fiscal"),
+    "COM005": ("Chave de NF-e já registrada em outra nota de entrada", "duplicado"),
+    "COM007": ("Fornecedor inexistente na base", "cadastro"),
+    "COM020": ("CT-e cita documento de entrada inexistente", "cadastro"),
+    "COM036": ("CT-e cancelado", "nada"),
+    "COM040": ("NF-e cancelada", "nada"),
+    "COM044": ("Documento de entrada já existe no Monitor", "duplicado"),
+    "COM052": ("XML não pertence a nenhuma empresa/filial", "nada"),
+}
+TRA_QUEM = {"cadastro": "Cadastro", "fiscal": "Fiscal (fora do Importador)",
+            "duplicado": "Duplicidade", "nada": "Sem ação", "outros": "Não mapeado"}
+TRA_QUEM_ACAO = ("cadastro", "fiscal", "duplicado", "outros")   # pedem alguém
+TRA_ERRO_VERMELHO = 7              # dias: erro que pede ação parado há 7+ dias
 
 
 def _integ_vazio(col):
@@ -8904,7 +8926,7 @@ def _integ_scripts(sufixo, hoje, desde=None, banco=None, grupos=None, agora=None
     if "rh" in grupos:
         lista += _integ_scripts_rh(sufixo, hoje, desde, banco)
     if "transmite" in grupos:
-        lista += _tra_scripts(sufixo, hoje, desde, agora)
+        lista += _tra_scripts(sufixo, hoje, desde, agora, banco)
     if "crm" in grupos:
         lista += _crm_scripts(sufixo, hoje, desde, banco)
     if "eai" in grupos:
@@ -9439,7 +9461,45 @@ def _tra_hora_limite(agora):
     return t.strftime("%H:%M:%S") if t.date() == agora.date() else None
 
 
-def _tra_scripts(sufixo, hoje, desde=None, agora=None):
+def _tra_sql_fns(banco):
+    """(SUBSTRING, LENGTH) do dialeto: o Oracle só tem SUBSTR e o SQL Server
+    só tem LEN. É o que deixa o mesmo bloco rodar nos três bancos."""
+    b = (banco or "oracle").lower()
+    if b == "mssql":
+        return "SUBSTRING", "LEN"
+    if b == "postgres":
+        return "SUBSTRING", "LENGTH"
+    return "SUBSTR", "LENGTH"
+
+
+def _tra_memo_exprs(col, banco, n=300):
+    """Como ler os primeiros bytes do memo CKO_MSGERR em cada banco. No
+    Postgres o DBAccess grava memo em BYTEA: o CAST devolve '\\x434f4d…' e o
+    Python decodifica (_tra_msg). A última variante é sempre SEM a mensagem."""
+    b = (banco or "oracle").lower()
+    if b == "postgres":
+        return [f"SUBSTRING(CAST({col} AS VARCHAR), 1, {2 * n + 2})", None]
+    return _integ_memo_exprs(col, b, n)
+
+
+def _tra_msg(v):
+    """Mensagem do memo → texto. Aceita o hexa do BYTEA do Postgres e tira o
+    prefixo 'COM052 - ' (o código já vai em coluna própria)."""
+    t = (v or "").strip()
+    m = re.match(r"^\\+x([0-9a-fA-F]+)$", t)     # BYTEA: \x434f… (1 ou 2 barras)
+    if m:
+        h = m.group(1)
+        try:
+            t = bytes.fromhex(h[: len(h) // 2 * 2]).decode("latin-1")
+        except ValueError:
+            return ""
+    t = t.replace("\x00", " ").replace("\r", " ").replace("\n", " ")
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"^COM\d{3}\s*-\s*", "", t)
+    return t[:200]
+
+
+def _tra_scripts(sufixo, hoje, desde=None, agora=None, banco=None):
     """Blocos do grupo Transmite. Mesmas regras do RH: datas calculadas aqui
     (nada de SYSDATE/GETDATE/CURRENT_DATE), sem ';', só SELECT, vazio robusto.
     A CKOCOL é a tabela do TOTVS Colaboração — nome fixo, sem o sufixo.
@@ -9457,6 +9517,7 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None):
     f_am, f_vm = dia(TRA_FILA_AMARELO), dia(TRA_FILA_VERMELHO)
     hl = _tra_hora_limite(agora)
     cko = TRA_CKO
+    sub, ln = _tra_sql_fns(banco)
     params = ", ".join(f"'{p}'" for p in TRA_PARAMS)
     masc = ", ".join(f"'{p}'" for p in TRA_MASCARA)
     # Nota de TERCEIRO com chave (NF-e/CT-e recebida). Formulário próprio
@@ -9522,7 +9583,37 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None):
                  f"AND SF1.F1_DTDIGIT >= '{j}' AND NOT EXISTS (SELECT 1 FROM SDS{s} SDS "
                  f"WHERE RTRIM(SDS.DS_CHAVENF) = RTRIM(SF1.F1_CHVNFE) AND SDS.D_E_L_E_T_ = ' ') "
                  f"GROUP BY SF1.F1_FILIAL, SF1.F1_ESPECIE ORDER BY QTD DESC")},
+        # Por que o Importador parou: CKO_CODERR × situação × tipo, só o que
+        # não chegou a Classificada. Classificação em subconsulta: o DBAccess
+        # do Postgres reescreve CASE dentro de concatenação e quebra o SQL, e o
+        # Oracle não aceita GROUP BY por apelido nem por posição.
+        {"id": "tra_erros", "rotulo": "Transmite — XML parados por motivo do Importador (CKO_CODERR)",
+         "tabela": cko, "limite": 300,
+         "sql": (f"SELECT X.ERRO, X.STRAN, X.TIPO, COUNT(*) AS QTD, MIN(X.DT) AS MAIS_ANTIGO, "
+                 f"MAX(X.DT) AS MAIS_RECENTE FROM (SELECT CASE WHEN {_integ_preenchido('CKO_CODERR')} "
+                 f"THEN RTRIM(CKO_CODERR) ELSE '-' END AS ERRO, CASE WHEN {_integ_preenchido('CKO_STRAN')} "
+                 f"THEN RTRIM(CKO_STRAN) ELSE '-' END AS STRAN, CASE WHEN {ln}(RTRIM(CKO_CHVDOC)) <> 44 "
+                 f"THEN 'NFSE' WHEN {sub}(CKO_CHVDOC, 21, 2) = '57' THEN 'CTE' ELSE 'NFE' END AS TIPO, "
+                 f"CKO_DT_IMP AS DT FROM {cko} WHERE D_E_L_E_T_ = ' ' AND CKO_DT_IMP >= '{j}' "
+                 f"AND ({_integ_vazio('CKO_STRAN')} OR RTRIM(CKO_STRAN) <> '4')) X "
+                 f"GROUP BY X.ERRO, X.STRAN, X.TIPO ORDER BY QTD DESC")},
         # ── detalhes: as notas para agir ───────────────────────────────────
+        # Uma mensagem por código (o 1º XML de cada um): o texto exato que o
+        # Importador gravou. Se o memo não vier, vale o texto de TRA_CODERR.
+        {"id": "tra_erros_msg", "rotulo": "Transmite — mensagem de cada código do Importador (CKO_MSGERR)",
+         "tabela": cko, "limite": 100, "detalhe": True,
+         "sqls": [(f"SELECT RTRIM(CKO_CODERR) AS ERRO" + (f", {e} AS MENSAGEM" if e else "")
+                   + f" FROM {cko} WHERE R_E_C_N_O_ IN (SELECT MIN(R_E_C_N_O_) FROM {cko} "
+                   f"WHERE D_E_L_E_T_ = ' ' AND CKO_DT_IMP >= '{j}' AND {_integ_preenchido('CKO_CODERR')} "
+                   f"GROUP BY CKO_CODERR)") for e in _tra_memo_exprs("CKO_MSGERR", banco)]},
+        {"id": "tra_erros_lista", "rotulo": "Transmite — XML parados com motivo do Importador, um a um",
+         "tabela": cko, "limite": 300, "detalhe": True,
+         "sql": (f"SELECT RTRIM(CKO_CODERR) AS ERRO, RTRIM(CKO_STRAN) AS STRAN, RTRIM(CKO_CODEDI) AS CODEDI, "
+                 f"CKO_DT_IMP AS DT_IMP, RTRIM(CKO_DOC) AS DOC, RTRIM(CKO_CNPJIM) AS DESTINO, "
+                 f"RTRIM(CKO_CHVDOC) AS CHAVE FROM {cko} WHERE D_E_L_E_T_ = ' ' AND CKO_DT_IMP >= '{j}' "
+                 f"AND {_integ_preenchido('CKO_CODERR')} "
+                 f"AND ({_integ_vazio('CKO_STRAN')} OR RTRIM(CKO_STRAN) <> '4') "
+                 f"ORDER BY CKO_CODERR, CKO_DT_IMP")},
         {"id": "tra_sem_retorno_lista", "rotulo": "Transmite — notas classificadas sem retorno",
          "tabela": f"SF1{s}", "limite": 300, "detalhe": True,
          "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_DOC) AS DOC, RTRIM(SF1.F1_SERIE) AS SERIE, "
@@ -9530,7 +9621,8 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None):
                  f"SF1.F1_EMISSAO AS EMISSAO, SF1.F1_DTDIGIT AS DTDIGIT, RTRIM(SF1.F1_HORA) AS HORA, "
                  f"RTRIM(CKO.CKO_STRAN) AS STRAN, RTRIM(CKO.CKO_CODEDI) AS CODEDI, "
                  f"CKO.CKO_DT_IMP AS DT_IMP, RTRIM(SDS.DS_STATUS) AS DS_STATUS, "
-                 f"RTRIM(SF1.F1_CHVNFE) AS CHAVE "
+                 f"CASE WHEN SDS.DS_CHAVENF IS NULL THEN 'N' ELSE 'S' END AS TEM_SDS, "
+                 f"RTRIM(SF1.F1_TIPO) AS TIPO_NF, RTRIM(SF1.F1_CHVNFE) AS CHAVE "
                  f"FROM SF1{s} SF1 INNER JOIN {cko} CKO ON {mesma_chave} AND {nao4} "
                  f"LEFT JOIN SDS{s} SDS ON RTRIM(SDS.DS_CHAVENF) = RTRIM(SF1.F1_CHVNFE) "
                  f"AND SDS.D_E_L_E_T_ = ' ' "
@@ -9572,6 +9664,54 @@ def _tra_soma(linhas, campo="QTD"):
 def _tra_min_data(linhas, campo):
     ds = [d for d in (_integ_data(x.get(campo)) for x in linhas) if d]
     return min(ds) if ds else None
+
+
+def _tra_erros_resumo(blocos):
+    """Resumo por código do Importador (CKO_CODERR), a partir dos blocos
+    tra_erros (contagem) e tra_erros_msg (texto gravado na base). Função PURA:
+    a coleta grava o resultado em blocos["tra_erros"]["resumo"] e o cartão usa
+    o mesmo cálculo. Código sem mensagem lida usa o texto de TRA_CODERR."""
+    b = blocos.get("tra_erros") or {}
+    if not b.get("ok"):
+        return None
+    msgs = {}
+    for ln in (blocos.get("tra_erros_msg") or {}).get("linhas") or []:
+        t = _tra_msg(ln.get("MENSAGEM"))
+        if ln.get("ERRO") and t:
+            msgs[ln["ERRO"]] = t
+    por, sem_erro = {}, {}
+    for ln in b.get("linhas") or []:
+        cod, qtd = (ln.get("ERRO") or "-").strip() or "-", _integ_int(ln.get("QTD"))
+        if cod == "-":
+            st = ln.get("STRAN") or "-"
+            sem_erro[st] = sem_erro.get(st, 0) + qtd
+            continue
+        c = por.setdefault(cod, {"codigo": cod, "qtd": 0, "tipos": {}, "situacoes": {},
+                                 "mais_antigo": None, "mais_recente": None})
+        c["qtd"] += qtd
+        c["tipos"][ln.get("TIPO") or "?"] = c["tipos"].get(ln.get("TIPO") or "?", 0) + qtd
+        c["situacoes"][ln.get("STRAN") or "-"] = c["situacoes"].get(ln.get("STRAN") or "-", 0) + qtd
+        for campo, f in (("mais_antigo", min), ("mais_recente", max)):
+            d = _integ_data(ln.get(campo.upper()))
+            if d:
+                c[campo] = d if not c[campo] else f(c[campo], d)
+    cods = []
+    for c in por.values():
+        padrao = TRA_CODERR.get(c["codigo"])
+        c["texto"] = msgs.get(c["codigo"]) or (padrao[0] if padrao else "Código sem descrição — veja a mensagem no Monitor do Importador.")
+        c["fonte"] = "base" if c["codigo"] in msgs else ("padrao" if padrao else "nenhuma")
+        c["quem"] = padrao[1] if padrao else "outros"
+        cods.append(c)
+    cods.sort(key=lambda c: (c["quem"] == "nada", -c["qtd"], c["codigo"]))
+    acao = [c for c in cods if c["quem"] in TRA_QUEM_ACAO]
+    antigas = [c["mais_antigo"] for c in acao if c["mais_antigo"]]
+    for c in cods:
+        for k in ("mais_antigo", "mais_recente"):
+            c[k] = c[k].strftime("%Y%m%d") if c[k] else None
+    return {"codigos": cods, "acao": sum(c["qtd"] for c in acao),
+            "sem_acao": sum(c["qtd"] for c in cods if c["quem"] == "nada"),
+            "sem_erro": sum(sem_erro.values()), "sem_erro_por_situacao": sem_erro,
+            "mais_antigo_acao": min(antigas).strftime("%Y%m%d") if antigas else None}
 
 
 def _tra_indicadores(blocos, hoje):
@@ -9716,7 +9856,25 @@ def _tra_indicadores(blocos, hoje):
             "Notas com chave digitadas direto no Documento de Entrada (sem SDS). Confira no "
             "Transmite se elas recebem 'Classificada' e a Confirmação."))
 
-    # ── 8. Parâmetros ─────────────────────────────────────────────────────
+    # ── 8. Por que o Importador parou (CKO_CODERR) ────────────────────────
+    rot = "XML parados por erro do Importador"
+    res = (blocos.get("tra_erros") or {}).get("resumo") or _tra_erros_resumo(blocos)
+    if res is None:
+        out.append(_integ_bloco_falhou(blocos.get("tra_erros"), "tra_erros", G, rot))
+    else:
+        antiga = _integ_data(res.get("mais_antigo_acao"))
+        idade = (hoje - antiga).days if antiga else 0
+        n = res["acao"]
+        nivel = ("verde" if n == 0 else "vermelho" if idade >= TRA_ERRO_VERMELHO else "amarelo")
+        top = [c for c in res["codigos"] if c["quem"] in TRA_QUEM_ACAO][:3]
+        txt = ("Nenhum XML parado por erro que peça ação." if n == 0 else
+               "Por motivo: " + " · ".join(f"{c['codigo']} {c['texto'][:48]} ({c['qtd']})" for c in top)
+               + f". Mais antigo de {_integ_ddmm(antiga)} ({idade} dia(s)).")
+        if res["sem_acao"]:
+            txt += f" Sem ação (cancelados ou fora do grupo): {res['sem_acao']}."
+        out.append(_integ_ind("tra_erros", G, rot, n, nivel, txt))
+
+    # ── 9. Parâmetros ─────────────────────────────────────────────────────
     b = blocos.get("tra_config")
     rot = "Parâmetros do Importador"
     if not b or not b.get("ok"):
@@ -11067,6 +11225,11 @@ def api_integracoes_coletar(customer):
     if bm and bm.get("ok"):
         bm["resumo"] = _integ_motivos(bm["linhas"])
         bm["linhas"] = []                  # só o resumo vai para o histórico
+    for ln in (blocos.get("tra_erros_msg") or {}).get("linhas") or []:
+        ln["MENSAGEM"] = _tra_msg(ln.get("MENSAGEM"))     # BYTEA em hexa → texto
+    bt = blocos.get("tra_erros")
+    if bt and bt.get("ok"):
+        bt["resumo"] = _tra_erros_resumo(blocos)
     _crm_anota_causas(blocos.get("crm_pendentes_lista"))
     _eai_anota_tipos(blocos, hoje, datetime.now(TZ_SP))
     inds = _integ_indicadores(blocos, health, hoje, grupos, datetime.now(TZ_SP))

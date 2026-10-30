@@ -12425,8 +12425,20 @@ const INT_CRM_CAUSA = {
   sem_texto:     { rot: 'Sem texto', ico: '–', quem: 'ZA3_ERRO vazio ou não lido' },
 };
 const intGruposCfg = () => integ.dados?.ambiente_cfg?.integ_grupos || ['rh'];
-// Transmite: só o 4 é documentado (Classificada); o resto aparece cru.
-const INT_TRA_STRAN = { '4': 'Classificada' };
+// Transmite: CKO_STRAN = último status aceito pelo Transmite (Central TOTVS
+// 19877027865495 e 23130965724823; o 0 visto na base em XML que o Importador
+// não processa, ex.: COM052).
+const INT_TRA_STRAN = { '0': 'não processado', '1': 'pendente', '2': 'Exportada', '3': 'Integrada', '4': 'Classificada' };
+const INT_TRA_TIPO_NF = { N: 'normal', I: 'compl. ICMS', P: 'compl. IPI', C: 'compl. preço/frete', D: 'devolução', B: 'beneficiamento' };
+// Quem resolve cada motivo do Importador (CKO_CODERR) — mesmas chaves de TRA_QUEM (api).
+const INT_TRA_QUEM = {
+  cadastro:  { rot: 'Cadastro',                    ico: '🗂', cls: 'bg-indigo-100 text-indigo-800', quem: 'fornecedor, amarração, nota de origem' },
+  fiscal:    { rot: 'Fiscal (fora do Importador)', ico: '🧾', cls: 'bg-amber-100 text-amber-900',   quem: 'lançar à mão e manifestar no Transmite' },
+  duplicado: { rot: 'Duplicidade',                 ico: '⧉', cls: 'bg-sky-100 text-sky-800',       quem: 'já existe no Monitor ou na SF1' },
+  nada:      { rot: 'Sem ação',                    ico: '–', cls: 'bg-slate-100 text-slate-600',   quem: 'cancelada ou fora do grupo' },
+  outros:    { rot: 'Não mapeado',                 ico: '❔', cls: 'bg-slate-100 text-slate-700',   quem: 'ver a mensagem no Monitor' },
+};
+const INT_TRA_TIPO = { NFE: 'NF-e', NFSE: 'NFS-e', CTE: 'CT-e' };
 const INT_TRA_DS = { B: 'revisão cadastral' };
 const INT_TRA_EDI = { '109': 'NF-e', '214': 'CT-e' };
 const INT_TRA_PRAZO = 90, INT_TRA_AMARELO = 60, INT_TRA_VERMELHO = 80;   // = TRA_PRAZO* (api)
@@ -12501,7 +12513,7 @@ const INT_HIST = [
   ['ahgora_inconsistencias', 'Ahgora incons.'], ['ahgora_aguardando', 'Ahgora ret. perdido'],
   ['ahgora_nao_enviados', 'Ahgora não env.'], ['sst_pendentes', 'SST pend.'],
   ['tra_sem_retorno', 'Transm. sem retorno'], ['tra_prazo', 'Transm. prazo'],
-  ['tra_hora_futura', 'Hora futura'], ['tra_revisao', 'Revisão (B)'],
+  ['tra_hora_futura', 'Hora futura'], ['tra_revisao', 'Revisão (B)'], ['tra_erros', 'Erros Importador'],
   ['crm_recebidas', 'CRM recebidas'], ['crm_erros', 'CRM erros'], ['crm_fila', 'CRM fila'],
   ['crm_contratos', 'CRM contratos'], ['crm_medicoes', 'CRM medidos'], ['crm_cad_produtos', 'Prod. c/ preço'],
   ['eai_sem_retorno', 'EAI sem retorno'], ['eai_falhas', 'EAI falhas'], ['eai_depara', 'EAI de-para'],
@@ -12844,6 +12856,45 @@ function intPrazo(emissao, hoje) {
 }
 const intNw = (t) => `<span class="whitespace-nowrap">${escapeHtml(t)}</span>`;
 const intStran = (v) => intNw(v ? `${v} · ${INT_TRA_STRAN[v] || 'não classificada'}` : '(vazio) · não classificada');
+const intTraQuem = (q) => {
+  const c = INT_TRA_QUEM[q] || INT_TRA_QUEM.outros;
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${c.cls}">${c.ico} ${c.rot}</span>`;
+};
+/** Importador da nota: separa "sem registro no Importador" de "registro com
+ *  status vazio" — antes as duas apareciam como "sem SDS". */
+const intTraImportador = (l) => {
+  if (l.DS_STATUS) return escapeHtml(`${l.DS_STATUS}${INT_TRA_DS[l.DS_STATUS] ? ' · ' + INT_TRA_DS[l.DS_STATUS] : ''}`);
+  if (l.TEM_SDS === 'S') return escapeHtml('(vazio) · sem status');
+  return escapeHtml('sem SDS');
+};
+/** Quadro "por que o Importador parou": contagem por quem resolve + motivo a motivo. */
+function intTraErros(b) {
+  if (!b) return '<p class="text-xs text-slate-500 py-2">Não lido nesta coleta.</p>';
+  if (!b.ok) return `<p class="text-xs text-slate-500 py-2">${b.ausente ? 'ℹ' : '⚠'} ${escapeHtml(b.erro || 'Não lido.')}</p>`;
+  const r = b.resumo;
+  if (!r) return '<p class="text-xs text-slate-500 py-2">Coleta anterior a este quadro — clique em ⚡ Coletar agora.</p>';
+  const cods = r.codigos || [];
+  const por = {};
+  cods.forEach(c => { por[c.quem] = (por[c.quem] || 0) + (c.qtd || 0); });
+  const tiles = Object.keys(INT_TRA_QUEM).filter(q => q !== 'outros' || por.outros).map(q => {
+    const n = por[q] || 0, k = INT_TRA_QUEM[q];
+    return `<div class="rounded-lg border border-slate-200 px-3 py-2 ${n ? 'bg-white' : 'bg-slate-50 opacity-70'}" data-int-tra-quem="${q}">
+      <div class="flex items-center justify-between gap-2"><span class="text-xs font-semibold text-slate-700">${k.ico} ${escapeHtml(k.rot)}</span>
+        <span class="text-lg font-totvs text-totvs-petroleo tabular-nums">${n}</span></div>
+      <p class="text-[11px] text-slate-500 leading-snug mt-0.5">${escapeHtml(k.quem)}</p></div>`;
+  }).join('');
+  return `<div class="grid grid-cols-2 md:grid-cols-${Object.keys(por).includes('outros') ? 5 : 4} gap-2 mb-3">${tiles}</div>` +
+    intTabela([
+      { rot: 'Código', fmt: c => `<span class="font-mono text-xs">${escapeHtml(c.codigo)}</span>` },
+      { rot: 'Motivo', fmt: c => `${escapeHtml(c.texto || '')}${c.fonte === 'base' ? ' <span class="text-[10px] text-slate-400">(texto da base)</span>' : ''}` },
+      { rot: 'Quem resolve', fmt: c => intTraQuem(c.quem) },
+      { rot: 'Tipo', fmt: c => escapeHtml(Object.entries(c.tipos || {}).map(([t, q]) => `${INT_TRA_TIPO[t] || t} ${q}`).join(' · ')) },
+      { k: 'qtd', rot: 'XML', dir: 1 },
+      { rot: 'Mais antigo', fmt: c => intData(c.mais_antigo) }, { rot: 'Mais recente', fmt: c => intData(c.mais_recente) }],
+      cods, 'Nenhum XML parado por erro do Importador.') +
+    (r.sem_erro ? `<p class="text-xs text-slate-500 mt-1">Sem motivo gravado: ${r.sem_erro} XML ainda sem "Classificada" (${escapeHtml(
+      Object.entries(r.sem_erro_por_situacao || {}).map(([st, q]) => `${st === '-' ? '(vazio)' : st + ' · ' + (INT_TRA_STRAN[st] || '?')} ${q}`).join(' · '))}) — é a fila normal até a nota ser classificada.</p>` : '');
+}
 const intEdi = (v) => intNw(v ? `${v}${INT_TRA_EDI[v] ? ' · ' + INT_TRA_EDI[v] : ''}` : '—');
 const intChave = (v) => `<span class="font-mono text-[11px] text-slate-500 select-all">${escapeHtml(v || '')}</span>`;
 
@@ -12855,8 +12906,17 @@ function intCaixaTransmite(B, hoje, nivel) {
       { rot: 'Emissão', fmt: l => intData(l.EMISSAO) }, { rot: 'Prazo do evento', fmt: l => intPrazo(l.EMISSAO, hoje) },
       { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}` },
       { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) }, { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) },
-      { rot: 'Importador', fmt: l => escapeHtml(l.DS_STATUS ? `${l.DS_STATUS}${INT_TRA_DS[l.DS_STATUS] ? ' · ' + INT_TRA_DS[l.DS_STATUS] : ''}` : 'sem SDS') },
+      { rot: 'Importador', fmt: intTraImportador },
+      ...(ls.some(l => l.TIPO_NF) ? [{ rot: 'Tipo NF', fmt: l => intNw(l.TIPO_NF ? `${l.TIPO_NF} · ${INT_TRA_TIPO_NF[l.TIPO_NF] || '?'}` : '—') }] : []),
       { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Toda nota classificada já voltou ao Transmite.')) +
+    `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">Por que o Importador parou (CKO_CODERR)</h4>${intTraErros(B.tra_erros)}</div>` +
+    intSub('XML parados com motivo do Importador, um a um', B.tra_erros_lista, (ls) => intTabela([
+      { rot: 'Código', fmt: l => `<span class="font-mono text-xs">${escapeHtml(l.ERRO || '')}</span>` },
+      { rot: 'Quem resolve', fmt: l => intTraQuem(((B.tra_erros?.resumo?.codigos || []).find(c => c.codigo === l.ERRO) || {}).quem) },
+      { rot: 'Importado', fmt: l => intData(l.DT_IMP) }, { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) },
+      { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) }, { k: 'DOC', rot: 'Documento' },
+      { rot: 'Destino (CNPJ)', fmt: l => intNw(l.DESTINO || '—') },
+      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhum XML com motivo de erro.')) +
     intSub('Sem retorno por filial', B.tra_sem_retorno, (ls) => intTabela([
       { k: 'FILIAL', rot: 'Filial' }, { k: 'QTD', rot: 'Notas', dir: 1 },
       { rot: 'Digitada mais antiga', fmt: l => intData(l.DIGIT_MAIS_ANTIGA) },

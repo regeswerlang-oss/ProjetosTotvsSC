@@ -98,7 +98,7 @@ confere('corte não mexe no cadastro', '20261001' not in corte['crm_cad_produtos
 
 # Os três grupos juntos: resumos de todos antes dos detalhes (a coleta reordena)
 todos = ns['_integ_scripts']('010', HOJE, None, 'oracle', ['rh', 'transmite', 'crm'], AGORA)
-confere('três grupos somam os blocos', len(todos) == 10 + 10 + len(ESPERADOS))
+confere('três grupos somam os blocos', len(todos) == 10 + 13 + len(ESPERADOS))
 
 # ── causa do erro ───────────────────────────────────────────────────────────
 C = ns['_crm_causa']
