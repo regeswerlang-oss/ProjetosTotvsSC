@@ -302,12 +302,23 @@
                      font-size:11.5px; font-weight:600; color:#475569; text-align:left; flex:1 1 auto; cursor:pointer; }
   .rx-drawer .chip.is-on { border-color:var(--totvs-petroleo); background:#ecfeff; color:#0f172a; }
 
+  /* Largura da tela (30/10/2026): o conteúdo era preso em max-w-7xl (1280 px)
+     e sobrava margem em monitor largo. Três larguras, trocadas no botão ⇔ do
+     topo e guardadas no navegador: normal (1280), ampla (1760, padrão) e
+     tela cheia. Vale para todas as abas — header e <main> usam .app-wrap. */
+  .app-wrap { max-width: 1760px; margin-left: auto; margin-right: auto; }
+  html[data-largura="normal"] .app-wrap { max-width: 80rem; }
+  html[data-largura="cheia"] .app-wrap { max-width: none; }
 </style>
+<script>
+  // Antes do primeiro desenho: sem "pulo" de largura ao carregar.
+  try { const l = localStorage.getItem('gp-largura'); if (l) document.documentElement.dataset.largura = l; } catch { }
+</script>
 </head>
 <body class="bg-totvs-beige text-totvs-petroleo">
 
 <header class="bg-totvs-petroleo text-totvs-white sticky top-0 z-10 shadow-sm totvs-hex">
-  <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
+  <div class="app-wrap px-6 py-4 flex items-center justify-between gap-4">
     <div class="flex items-center gap-4">
       <span id="nav-back" class="hidden cursor-pointer text-totvs-graylight hover:text-totvs-blue text-xl leading-none">←</span>
       <img src="assets/logos/logo-totvs-branco.svg" alt="TOTVS" class="h-7 w-auto select-none" draggable="false">
@@ -339,6 +350,7 @@
       <button id="btn-conta" data-interno class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Suas credenciais do Tasks SC e do e-mail — as gravações saem no seu nome">👤 Minha conta<span id="conta-alerta" class="hidden ml-1 inline-block w-2 h-2 rounded-full bg-amber-400 align-middle"></span></button>
       <button id="btn-acessos" data-interno class="hidden px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Liberar usuários por cliente e escolher as abas que cada um enxerga">👥 Acessos</button>
       <button id="btn-sync" data-interno class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Busca os projetos na API PCI e atualiza a base (só a regional e os clientes da carteira). O cron do Supabase já faz isso de hora em hora.">⟳ Sincronizar API</button>
+      <button id="btn-largura" class="px-3 py-1.5 rounded-md bg-white/10 text-totvs-white font-semibold hover:bg-white/20 transition-colors" title="Largura da tela: normal, ampla ou tela cheia (vale para todas as abas)">⇔ <span id="btn-largura-txt">Ampla</span></button>
       <button id="btn-refresh" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde transition-colors">↻ Atualizar</button>
     </div>
   </div>
@@ -350,7 +362,7 @@
   <button id="sair-simulacao" class="ml-auto px-3 py-1 rounded-md bg-amber-950 text-amber-50 text-xs font-bold hover:bg-amber-900">Sair da simulação</button>
 </div>
 
-<main class="max-w-7xl mx-auto px-6 py-6">
+<main class="app-wrap px-6 py-6">
   <!-- VIEW 1: LISTA -->
   <section id="view-lista">
     <div id="filtro-bar" class="mb-4 flex items-center gap-3 flex-wrap text-sm">
@@ -2330,6 +2342,22 @@ $('#sair-simulacao').addEventListener('click', async () => {
 initViewAs();
 
 $('#nav-back').addEventListener('click', voltarLista);
+
+// Largura da tela: normal (1280) → ampla (1760, padrão) → tela cheia. Guarda no
+// navegador; o <script> do <head> aplica antes do primeiro desenho.
+const LARGURAS = [['normal', 'Normal'], ['ampla', 'Ampla'], ['cheia', 'Tela cheia']];
+function aplicaLargura(l) {
+  const atual = LARGURAS.some(([k]) => k === l) ? l : 'ampla';
+  document.documentElement.dataset.largura = atual;
+  $('#btn-largura-txt').textContent = LARGURAS.find(([k]) => k === atual)[1];
+  try { localStorage.setItem('gp-largura', atual); } catch { /* sem storage */ }
+  window.dispatchEvent(new Event('resize'));          // gráficos (Chart.js) se redesenham
+}
+aplicaLargura(document.documentElement.dataset.largura || 'ampla');
+$('#btn-largura').addEventListener('click', () => {
+  const i = LARGURAS.findIndex(([k]) => k === document.documentElement.dataset.largura);
+  aplicaLargura(LARGURAS[(i + 1) % LARGURAS.length][0]);
+});
 $('#btn-refresh').addEventListener('click', () => {
   if (state.view === 'lista') carregaLista();
   else if (state.selected) abrirDetalhe(state.selected);
