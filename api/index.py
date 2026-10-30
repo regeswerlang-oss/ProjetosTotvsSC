@@ -316,6 +316,10 @@ ABAS = [
     # itens do Radar marcados "visível ao cliente" e a prontidão por processo
     # do Diagnóstico (sem SQL, amostra nem nota interna).
     {"id": "pendencias", "label": "Pendências e Retornos", "cliente": True},
+    # Tributos (30/10/2026): Configurador de Tributos (FISA170) comparado entre
+    # Produção e Teste. Liberável ao cliente — foi pedida para ser mostrada a
+    # ele; a coleta continua só com a equipe TOTVS.
+    {"id": "tributos",  "label": "Configurador de Tributos", "cliente": True},
 ]
 ABAS_IDS = [a["id"] for a in ABAS]
 # 23/10/2026: TODAS as abas passaram a ser liberáveis para o perfil cliente
@@ -12390,6 +12394,999 @@ def api_plano_marcos(customer, projeto):
             execute("delete from cockpit.plano_marcos where customer=%s and codigo_projeto=%s and marco=%s",
                     (customer, projeto, m))
     return _json({"ok": True, "marcos": _plano_marcos(customer, projeto)})
+
+
+# ── CONFIGURADOR DE TRIBUTOS (FISA170) ──────────────────────────────────────
+# Spec: docs/specs/2026-10-30-aba-tributos.md · SQL: docs/sql/2026-10-30-tributos.sql
+# Aba "Tributos": o Configurador de Tributos lido nas DUAS bases (Produção e
+# Teste) pela mesma REST TSCMONITREST (/tscmonit/query, só SELECT) e comparado
+# registro a registro. Responde três perguntas, nesta ordem:
+#   1. O que está em Teste e ainda não subiu para a Produção (e o contrário)?
+#   2. O que existe mas não funciona (referência quebrada, vencida, "em teste")?
+#   3. O que falta para a Reforma (CBS/IBS), por filial?
+# A coleta é FASEADA: a função da Vercel morre em 60 s e são ~40 tabelas por
+# base. A 1ª chamada lê o dicionário e as quantidades; as seguintes leem o
+# conteúdo das tabelas de cadastro até acabar o tempo, e devolvem o que falta.
+# O front repete a chamada enquanto houver tabela pendente.
+
+# código: (rótulo, grupo, tipo) — 'cad' = conteúdo lido e comparado;
+# 'mov' = só quantidade (cálculo, escrituração por item, apuração).
+TRIB_TABELAS = {
+    "F2E": ("Cadastro de Tributo", "tributos", "cad"),
+    "F2C": ("Tributos De/Para", "tributos", "cad"),
+    "F20": ("Perfis Tributários", "perfis", "cad"),
+    "F21": ("Perfil Origem/Destino", "perfis", "cad"),
+    "F22": ("Perfil de Participante", "perfis", "cad"),
+    "F23": ("Perfil de Operação", "perfis", "cad"),
+    "F24": ("Perfil de Produto", "perfis", "cad"),
+    "F25": ("Perfil Produto × Origem", "perfis", "cad"),
+    "F26": ("Perfil Tipo de Operação", "perfis", "cad"),
+    "CIO": ("Cód. Serviço do Perfil de Operação", "perfis", "cad"),
+    "F27": ("Regra de Base de Cálculo", "regras", "cad"),
+    "F28": ("Regra de Alíquota", "regras", "cad"),
+    "F29": ("Unidade de Referência Fiscal", "regras", "cad"),
+    "F2A": ("Valores da URF", "regras", "cad"),
+    "CIN": ("Fórmulas", "regras", "cad"),
+    "F2B": ("Regra de Cálculo — Documentos Fiscais", "regras", "cad"),
+    "CIQ": ("Tabela Progressiva", "regras", "cad"),
+    "CIR": ("Itens da Tabela Progressiva", "regras", "cad"),
+    "CIS": ("Regra por NCM — Cabeçalho", "ncm", "cad"),
+    "CIT": ("Tributo × Regra (NCM)", "ncm", "cad"),
+    "CIU": ("Regra Adicional por NCM", "ncm", "cad"),
+    "CIV": ("Regra por Dependentes", "regras", "cad"),
+    "CIX": ("Regra de ISS — Cabeçalho", "iss", "cad"),
+    "CIY": ("Alíquota de ISS por Município", "iss", "cad"),
+    "CJ0": ("CST — Cabeçalho", "escrituracao", "cad"),
+    "CJ1": ("CST — Item", "escrituracao", "cad"),
+    "CJ2": ("Regra de Escrituração", "escrituracao", "cad"),
+    "CJ4": ("Regra de Guia de Recolhimento", "apuracao", "cad"),
+    "CJ5": ("Regra de Código de Receita", "apuracao", "cad"),
+    "CJ6": ("Código de Receita por Estado", "apuracao", "cad"),
+    "CJ7": ("Mod. Documento × Código de Receita", "apuracao", "cad"),
+    "CJ8": ("Cadastro de Mensagem", "escrituracao", "cad"),
+    "CJ9": ("Regra de Ajuste de Lançamento", "escrituracao", "cad"),
+    "CJA": ("Itens da Regra de Ajuste", "escrituracao", "cad"),
+    "F2G": ("Regra de Apuração", "apuracao", "cad"),
+    "F2N": ("Regras de Título da Apuração", "apuracao", "cad"),
+    "F2D": ("Tributos Calculados (por item de NF)", "movimento", "mov"),
+    "F2F": ("Títulos de Tributos × NF", "movimento", "mov"),
+    "CJ3": ("Escrituração por Item", "movimento", "mov"),
+    "CJL": ("Mensagens Decodificadas", "movimento", "mov"),
+    "CJM": ("Controle de Estorno ICMS", "movimento", "mov"),
+    "F2H": ("Apuração Tributo Genérico", "movimento", "mov"),
+    "F2I": ("Saldos da Apuração", "movimento", "mov"),
+    "F2J": ("Resumo da Apuração por Regra", "movimento", "mov"),
+    "F2K": ("Resumo Analítico", "movimento", "mov"),
+    "F2L": ("Títulos da Apuração", "movimento", "mov"),
+    "F2M": ("Ajustes da Apuração", "movimento", "mov"),
+    # Classificação Tributária by Systax — alimenta perfis e regras (F2B_ORIGEM = 2)
+    "CJK": ("Enquadramento de Participante (Systax)", "classificador", "cad"),
+    "CJH": ("Natureza de Operação do Classificador", "classificador", "cad"),
+    "CJF": ("Natureza de Operação × CFOP (Classificador)", "classificador", "cad"),
+    "CJE": ("Configuração do Classificador", "classificador", "cad"),
+    "CIZ": ("Código de Serviço Federal", "classificador", "cad"),
+}
+TRIB_GRUPOS = (("tributos", "Tributos"), ("perfis", "Perfis"), ("regras", "Regras de cálculo"),
+               ("ncm", "Regras por NCM"), ("iss", "ISS"), ("escrituracao", "Escrituração e CST"),
+               ("apuracao", "Apuração e guias"), ("classificador", "Classificação Tributária (Systax)"),
+               ("movimento", "Uso (movimento)"))
+TRIB_LIMITE = 5000            # linhas por tabela; acima disso a lista vem parcial
+TRIB_MEMO_N = 1000            # bytes lidos de cada memo (fórmulas)
+TRIB_ITENS_MAX = 1500         # itens "iguais" devolvidos por tabela (os diferentes vão todos)
+TRIB_HISTORICO = 6            # coletas guardadas por base
+# Coluna técnica nunca entra na comparação: o DBAccess e o log de usuário mudam
+# de base para base sem que a regra mude.
+_TRIB_TECNICAS = {"R_E_C_N_O_", "R_E_C_D_E_L_", "D_E_L_E_T_", "S_T_A_M_P_", "I_N_S_D_T_"}
+_TRIB_RE_LOG = re.compile(r"_USERG[IA]$|_USERL?G[IA]$|_USRLG[IA]$")
+# Carimbo de alteração e hash: mudam sem a regra mudar — fora da comparação.
+_TRIB_RE_CARIMBO = re.compile(r"_(DTALT|HRALT|CHVMD5)$")
+_TRIB_MEMO_TIPOS = {"BLOB", "CLOB", "NCLOB", "LONG", "LONG RAW", "IMAGE", "TEXT", "NTEXT",
+                    "VARBINARY", "BYTEA"}
+# Chave de negócio preferida (quando as colunas existem). O SIX ordem 1 é o
+# plano B; ID técnico (FWUUID) nunca vale como chave — muda de base para base.
+TRIB_CHAVE = {
+    "F2E": ["TRIB"], "F2B": ["REGRA", "VIGINI"], "F20": ["CODIGO", "TIPO"],
+    "F27": ["CODIGO"], "F28": ["CODIGO"], "F29": ["CODIGO"], "CJ2": ["CODIGO"],
+    "CIN": ["CODIGO"], "CJ8": ["CODIGO"], "CIS": ["CODIGO"], "CIX": ["CODIGO"],
+    "CJ0": ["CODIGO"], "CJ5": ["CODIGO"], "CJ4": ["CODIGO"], "CJ9": ["CODIGO"],
+    "F2G": ["CODIGO"], "CIQ": ["CODIGO"], "CJK": ["CODIGO"], "CJH": ["COD"],
+    "CJE": ["PARAM"], "F2C": ["CODIGO"], "CJ1": ["CODCAB", "CST"], "CJK": ["CODIGO", "TIPO"],
+}
+TRIB_VENCE_DIAS = 90          # regra vigente que termina dentro deste prazo vira alerta
+# Referências da Regra de Cálculo (F2B) → cadastro que precisa existir.
+# Só são checadas quando as duas colunas existem na base. O 6º item filtra o
+# destino: o perfil é um só cadastro (F20) com o TIPO dizendo de quê — o mesmo
+# código TPP001 existe como participante (02) e como produto (04) na Dígitro.
+TRIB_REFS = (
+    ("F2B", "TRIB", "F2E", "TRIB", "Tributo", None),
+    ("F2B", "RBASE", "F27", "CODIGO", "Regra de base", None),
+    ("F2B", "RBASES", "F27", "CODIGO", "Base auxiliar", None),
+    ("F2B", "RALIQ", "F28", "CODIGO", "Regra de alíquota", None),
+    ("F2B", "PEROD", "F20", "CODIGO", "Perfil origem/destino", ("F20_TIPO", "01")),
+    ("F2B", "PERFPA", "F20", "CODIGO", "Perfil de participante", ("F20_TIPO", "02")),
+    ("F2B", "PERFOP", "F20", "CODIGO", "Perfil de operação", ("F20_TIPO", "03")),
+    ("F2B", "PERFPR", "F20", "CODIGO", "Perfil de produto", ("F20_TIPO", "04")),
+    ("F2B", "CODESC", "CJ2", "CODIGO", "Regra de escrituração", None),
+    ("F2B", "RAPUR", "F2G", "CODIGO", "Regra de apuração", None),
+    ("F2B", "TRBMAJ", "F2E", "TRIB", "Tributo de majoração", None),
+    ("F2B", "TBCONF", "F2E", "TRIB", "Tributo para consulta", None),
+)
+# Família do tributo pela 1ª palavra da descrição da regra — para achar regra
+# cuja descrição fala de um tributo e calcula outro.
+TRIB_FAMILIA = {"IR": {"IRF", "IR", "IRRF"}, "IRRF": {"IRF", "IR", "IRRF"}, "CSLL": {"CSL", "CSLL"},
+                "PIS": {"PIS", "PISRET"}, "COFINS": {"COF", "COFRET", "COFINS"}, "INSS": {"INSS"},
+                "ISS": {"ISS"}, "ICMS": {"ICMS", "CRDPRE", "ICMSST", "DIFAL"}, "IPI": {"IPI"},
+                "CBSFED": {"CBSFED"}, "IBSEST": {"IBSEST"}, "IBSMUN": {"IBSMUN"}}
+TRIB_RE_REFORMA = re.compile(r"^(CBS|IBS)")
+
+
+def _trib_lista_sql(codigos, suf):
+    return ", ".join(f"'{c}{suf}'" for c in codigos)
+
+
+def _trib_scripts_meta(suf, banco):
+    """Leituras da fase 0 — dicionário e quantidades vêm depois, montadas a
+    partir do que a base respondeu aqui."""
+    b = (banco or "oracle").lower()
+    nomes = _trib_lista_sql(TRIB_TABELAS, suf)
+    chaves = ", ".join(f"'{c}'" for c in TRIB_TABELAS)
+    if b == "oracle":
+        col = (f"SELECT C.TABLE_NAME, C.COLUMN_NAME, C.DATA_TYPE, C.COLUMN_ID FROM USER_TAB_COLUMNS C "
+               f"WHERE C.TABLE_NAME IN ({nomes}) ORDER BY C.TABLE_NAME, C.COLUMN_ID")
+    else:
+        col = (f"SELECT UPPER(C.TABLE_NAME) TABLE_NAME, UPPER(C.COLUMN_NAME) COLUMN_NAME, "
+               f"UPPER(C.DATA_TYPE) DATA_TYPE, C.ORDINAL_POSITION COLUMN_ID "
+               f"FROM INFORMATION_SCHEMA.COLUMNS C WHERE UPPER(C.TABLE_NAME) IN ({nomes}) "
+               f"ORDER BY 1, 4")
+    return [
+        {"id": "colunas", "sqls": [col], "limite": 20000},
+        {"id": "sx2", "limite": 500, "sqls": [
+            f"SELECT X2_CHAVE, X2_NOME, X2_MODO, X2_MODOUN, X2_MODOEMP FROM SX2{suf} "
+            f"WHERE D_E_L_E_T_ = ' ' AND X2_CHAVE IN ({chaves})"]},
+        {"id": "sx3", "limite": 20000, "sqls": [
+            f"SELECT X3_ARQUIVO, X3_CAMPO, X3_TITULO, X3_CBOX, X3_CONTEXT FROM SX3{suf} "
+            f"WHERE D_E_L_E_T_ = ' ' AND X3_ARQUIVO IN ({chaves}) ORDER BY X3_ARQUIVO, X3_ORDEM",
+            f"SELECT X3_ARQUIVO, X3_CAMPO, X3_TITULO FROM SX3{suf} "
+            f"WHERE D_E_L_E_T_ = ' ' AND X3_ARQUIVO IN ({chaves}) ORDER BY X3_ARQUIVO, X3_ORDEM"]},
+        {"id": "six", "limite": 500, "sqls": [
+            f"SELECT INDICE, ORDEM, CHAVE FROM SIX{suf} WHERE D_E_L_E_T_ = ' ' "
+            f"AND INDICE IN ({chaves}) AND ORDEM = '1'"]},
+        {"id": "filiais", "limite": 2000, "sqls": [
+            "SELECT M0_CODIGO, M0_CODFIL, M0_FILIAL, M0_ESTENT FROM SYS_COMPANY WHERE D_E_L_E_T_ = ' ' "
+            "ORDER BY M0_CODIGO, M0_CODFIL"]},
+    ]
+
+
+def _trib_dicionario(linhas_col, suf):
+    """USER_TAB_COLUMNS → {código: {"tabela", "colunas": [(nome, tipo)]}}."""
+    out = {}
+    for r in linhas_col:
+        t = (r.get("TABLE_NAME") or "").upper()
+        if not t.endswith(suf.upper()):
+            continue
+        cod = t[: -len(suf)]
+        if cod not in TRIB_TABELAS:
+            continue
+        out.setdefault(cod, {"tabela": t, "colunas": []})["colunas"].append(
+            ((r.get("COLUMN_NAME") or "").upper(), (r.get("DATA_TYPE") or "").upper()))
+    return out
+
+
+def _trib_filial_col(cod, colunas):
+    nome = f"{cod}_FILIAL"
+    return nome if any(c == nome for c, _t in colunas) else None
+
+
+def _trib_sql_contagem(dic):
+    """UMA consulta com a quantidade de todas as tabelas por filial."""
+    partes = []
+    for cod in sorted(dic):
+        fil = _trib_filial_col(cod, dic[cod]["colunas"])
+        t = dic[cod]["tabela"]
+        if fil:
+            partes.append(f"SELECT '{cod}' TAB, {fil} FIL, COUNT(*) QTD FROM {t} "
+                          f"WHERE D_E_L_E_T_ = ' ' GROUP BY {fil}")
+        else:
+            partes.append(f"SELECT '{cod}' TAB, ' ' FIL, COUNT(*) QTD FROM {t} WHERE D_E_L_E_T_ = ' '")
+    return " UNION ALL ".join(partes) if partes else None
+
+
+def _trib_cols_leitura(cod, colunas):
+    """(escalares, memos) — sem coluna técnica nem log de usuário."""
+    esc, memo = [], []
+    for c, tipo in colunas:
+        if c in _TRIB_TECNICAS or _TRIB_RE_LOG.search(c):
+            continue
+        (memo if tipo in _TRIB_MEMO_TIPOS else esc).append(c)
+    return esc, memo
+
+
+def _trib_sqls_tabela(cod, info, banco, chave=None):
+    """Variantes da leitura do conteúdo: com os memos (BLOB → CLOB) e, por
+    último, sem eles. A 1ª que a base aceitar vale."""
+    esc, memo = _trib_cols_leitura(cod, info["colunas"])
+    if not esc:
+        return [], esc, memo
+    ordem = [c for c in (chave or []) if c in esc] or esc[:2]
+    base = f" FROM {info['tabela']} WHERE D_E_L_E_T_ = ' ' ORDER BY {', '.join(ordem)}"
+    if not memo:
+        return [f"SELECT {', '.join(esc)}{base}"], esc, []
+    variantes = []
+    n_var = len(_integ_memo_exprs("X", banco, TRIB_MEMO_N))
+    for k in range(n_var):
+        exprs = []
+        for m in memo:
+            e = _integ_memo_exprs(m, banco, TRIB_MEMO_N)[k]
+            if e:
+                exprs.append(f"{e} {m}")
+        variantes.append(f"SELECT {', '.join(esc + exprs)}{base}")
+    # sem duplicar a última (todas None = só escalares)
+    vistos, out = set(), []
+    for v in variantes:
+        if v not in vistos:
+            vistos.add(v); out.append(v)
+    return out, esc, memo
+
+
+def _trib_six_chave(chave, cod):
+    """'F2B_FILIAL+F2B_REGRA+DTOS(F2B_VIGINI)' → ['F2B_FILIAL','F2B_REGRA','F2B_VIGINI']."""
+    out = []
+    for p in (chave or "").split("+"):
+        m = re.search(rf"({cod}_[A-Z0-9_]+)", p.upper())
+        if m:
+            out.append(m.group(1))
+    return out
+
+
+def _trib_cbox(txt):
+    """'1=Em teste;2=Aprovado' → {'1': 'Em teste', '2': 'Aprovado'}. Combo com
+    função (#...) não se decodifica aqui. ARMADILHA: o CSV do TSCMONITREST usa
+    ';' como separador e devolve o X3_CBOX com ESPAÇO no lugar do ';'
+    ("1=Em Teste 2=Aprovada") — o corte é pelo "<código>=" e não pelo ';'."""
+    t = (txt or "").strip()
+    if not t or t.startswith("#"):
+        return {}
+    partes = re.split(r"(?:^|[;\s]+)([0-9A-Za-z]{1,3})=", t)
+    out = {}
+    for i in range(1, len(partes) - 1, 2):
+        out[partes[i]] = partes[i + 1].strip(" ;")
+    return out
+
+
+# ── coleta (rota) ───────────────────────────────────────────────────────────
+def _trib_query(cfg, heads, auth, tok, sql, limite, timeout):
+    r = requests.post(f"{cfg['url_rest']}/query",
+                      json={"token": tok, "tipo": "tributos", "sql": sql, "limite": limite},
+                      headers=heads, auth=auth,
+                      params={"empresa": cfg.get("empresa") or "01", "filial": cfg.get("filial") or "01"},
+                      timeout=max(5, int(timeout)), verify=_verifica_tls(cfg))
+    dados = _json_da_resposta(r)
+    if r.status_code < 400 and dados.get("ok"):
+        return True, dados, None
+    return False, dados, dados.get("erro") or f"HTTP {r.status_code}: {_trecho(r)}"
+
+
+def _trib_roda(cfg, heads, auth, tok, sqls, limite, prazo, tabela=""):
+    """Tenta as variantes em ordem. Devolve (ok, csv, erro, variante, truncado, environment)."""
+    erro = None
+    for k, sql in enumerate(sqls):
+        resta = prazo - time.time()
+        if resta < INTEG_TEMPO_MIN:
+            return False, "", erro or "Não lido: o tempo da chamada acabou.", k, False, None
+        ok, dados, erro = _trib_query(cfg, heads, auth, tok, sql, limite, resta)
+        if ok:
+            return True, dados.get("csv") or "", None, k, bool(dados.get("truncado")), dados.get("environment")
+        ausente, motivo = _integ_motivo(erro, tabela or "do Configurador")
+        erro = motivo
+        if ausente:
+            break
+    return False, "", erro, None, False, None
+
+
+def _trib_matriz(csv_txt):
+    """CSV → (colunas, linhas[list]) — compacto para o jsonb."""
+    linhas = [r for r in csv.reader(io.StringIO(csv_txt or ""), delimiter=";") if r]
+    if not linhas:
+        return [], []
+    cab = [c.strip().upper() for c in linhas[0]]
+    return cab, [[(v or "").strip() for v in ln[: len(cab)]] + [""] * (len(cab) - len(ln))
+                 for ln in linhas[1:]]
+
+
+def _trib_fase0(cfg, heads, auth, tok, suf, prazo):
+    """Dicionário + quantidades. Devolve (meta, pendentes, environment, erros)."""
+    banco = cfg.get("banco")
+    lidos, erros, env = {}, {}, None
+    for s in _trib_scripts_meta(suf, banco):
+        ok, txt, erro, _k, trunc, e = _trib_roda(cfg, heads, auth, tok, s["sqls"], s["limite"], prazo)
+        env = e or env
+        if ok:
+            lidos[s["id"]] = _integ_csv(txt)
+        else:
+            erros[s["id"]] = erro
+    if "colunas" not in lidos:
+        raise RuntimeError(f"Não deu para ler o dicionário da base: {erros.get('colunas')}")
+    dic = _trib_dicionario(lidos["colunas"], suf)
+    sx2 = {r.get("X2_CHAVE", "").strip(): r for r in lidos.get("sx2", [])}
+    sx3 = {}
+    for r in lidos.get("sx3", []):
+        sx3.setdefault(r.get("X3_ARQUIVO", "").strip(), []).append(r)
+    six = {r.get("INDICE", "").strip(): r.get("CHAVE", "") for r in lidos.get("six", [])}
+    meta = {"tabelas": {}, "filiais": [], "erros": erros}
+    for cod, (rot, grupo, tipo) in TRIB_TABELAS.items():
+        info = dic.get(cod)
+        x2 = sx2.get(cod) or {}
+        m = {"rotulo": rot, "grupo": grupo, "tipo": tipo, "existe": bool(info),
+             "nome_sx2": (x2.get("X2_NOME") or "").strip() or None,
+             "modo": "".join((x2.get(k) or "").strip() for k in ("X2_MODOEMP", "X2_MODOUN", "X2_MODO")) or None}
+        if info:
+            cols = [c for c, _t in info["colunas"]]
+            titulos, cbox = {}, {}
+            for r in sx3.get(cod, []):
+                campo = (r.get("X3_CAMPO") or "").strip()
+                if campo in cols:
+                    titulos[campo] = (r.get("X3_TITULO") or "").strip()
+                    cb = _trib_cbox(r.get("X3_CBOX"))
+                    if cb:
+                        cbox[campo] = cb
+            esc, memo = _trib_cols_leitura(cod, info["colunas"])
+            m.update({"tabela": info["tabela"], "colunas": cols, "memos": memo,
+                      "titulos": titulos, "cbox": cbox,
+                      "six": _trib_six_chave(six.get(cod), cod),
+                      "filial_col": _trib_filial_col(cod, info["colunas"])})
+        meta["tabelas"][cod] = m
+    # Quantidades: uma consulta só (UNION ALL); se falhar, tabela a tabela.
+    sql = _trib_sql_contagem(dic)
+    if sql:
+        ok, txt, erro, _k, _t, _e = _trib_roda(cfg, heads, auth, tok, [sql], 20000, prazo)
+        rows = _integ_csv(txt) if ok else []
+        if not ok:
+            meta["erros"]["contagem"] = erro
+        for r in rows:
+            cod = (r.get("TAB") or "").strip()
+            fil = (r.get("FIL") or "").strip()
+            n = _integ_int(r.get("QTD"))
+            t = meta["tabelas"].get(cod)
+            if t is not None:
+                t.setdefault("por_filial", {})[fil] = t.get("por_filial", {}).get(fil, 0) + n
+                t["total"] = t.get("total", 0) + n
+        for cod, t in meta["tabelas"].items():
+            if t["existe"] and ok:
+                t.setdefault("total", 0)
+                t.setdefault("por_filial", {})
+    emp = (cfg.get("empresa") or "01").strip()
+    meta["filiais"] = [{"codigo": (r.get("M0_CODFIL") or "").strip(),
+                        "nome": (r.get("M0_FILIAL") or "").strip(),
+                        "uf": (r.get("M0_ESTENT") or "").strip()}
+                       for r in lidos.get("filiais", []) if (r.get("M0_CODIGO") or "").strip() == emp]
+    # Pendentes = tabelas de cadastro que existem e têm registro (vazia não
+    # precisa de chamada: o conteúdo é a lista vazia).
+    pend = [c for c, t in meta["tabelas"].items()
+            if t["tipo"] == "cad" and t["existe"] and t.get("total", 1) > 0]
+    return meta, pend, env
+
+
+def _trib_le_tabelas(cfg, heads, auth, tok, meta, pendentes, prazo):
+    """Lê o conteúdo das pendentes até acabar o tempo. Devolve (dados, resto)."""
+    dados, resto = {}, list(pendentes)
+    banco = cfg.get("banco")
+    while resto and prazo - time.time() >= INTEG_TEMPO_MIN + 2:
+        cod = resto[0]
+        t = meta["tabelas"].get(cod) or {}
+        memos = set(t.get("memos") or [])
+        info = {"tabela": t.get("tabela"),
+                "colunas": [(c, "BLOB" if c in memos else "C") for c in t.get("colunas") or []]}
+        chave = _trib_chave(cod, t)
+        sqls, _esc, _memo = _trib_sqls_tabela(cod, info, banco, chave)
+        if not sqls:
+            dados[cod] = {"ok": False, "erro": "Sem coluna legível."}
+            resto.pop(0)
+            continue
+        ok, txt, erro, k, trunc, _e = _trib_roda(cfg, heads, auth, tok, sqls, TRIB_LIMITE, prazo, t.get("tabela"))
+        if not ok and (erro or "").startswith("Não lido: o tempo"):
+            break                                  # fica para a próxima chamada
+        resto.pop(0)
+        if ok:
+            cols, linhas = _trib_matriz(txt)
+            dados[cod] = {"ok": True, "cols": cols, "linhas": linhas, "truncado": trunc,
+                          "variante": k, "sem_memo": bool(t.get("memos")) and k == len(sqls) - 1}
+        else:
+            dados[cod] = {"ok": False, "erro": erro}
+    return dados, resto
+
+
+def _trib_chave(cod, t):
+    """Chave de negócio da tabela: TRIB_CHAVE → SIX ordem 1 sem ID técnico."""
+    cols = set(t.get("colunas") or [])
+    fil = t.get("filial_col")
+    pref = TRIB_CHAVE.get(cod)
+    if pref:
+        ch = [f"{cod}_{c}" for c in pref]
+        if all(c in cols for c in ch):
+            return ([fil] if fil else []) + ch
+    six = [c for c in (t.get("six") or []) if c in cols and not _trib_eh_id(c)]
+    if six and (len(six) > 1 or not fil):
+        return six
+    return None
+
+
+def _trib_eh_id(col):
+    return bool(re.search(r"_ID(_?[A-Z0-9]+)?$", col)) and not col.endswith("_IDTRIB")
+
+
+def _trib_guarda_leitura(customer):
+    if (r := require_auth()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    return deny_aba(customer, "tributos")
+
+
+@app.post("/api/tributos/<customer>/coletar")
+def api_tributos_coletar(customer):
+    """Uma FASE da coleta numa base. Sem `coleta_id` abre uma coleta nova e lê
+    dicionário + quantidades; com ele, lê o conteúdo das tabelas pendentes.
+
+        POST /api/tributos/000348D0/coletar?ambiente=producao   {"coleta_id": 12}
+    Resposta: {"ok", "coleta_id", "pendentes": [...], "status"}. O front chama
+    de novo enquanto `pendentes` não vier vazio.
+    """
+    erro, amb = _guarda_ambiente(customer, request.args.get("ambiente") or "producao", escrita=True)
+    if erro:
+        return erro
+    if (d := deny_aba(customer, "tributos")):
+        return d
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer} — "
+                         "preencha a REST em ⚙ Ambiente antes de coletar.")
+    if not cfg.get("ativo"):
+        return _err(409, f"Ambiente {amb} está inativo — reative antes de coletar.")
+    suf = (cfg.get("sufixo") or "").strip()
+    if not suf:
+        return _err(409, "Informe o sufixo das tabelas no ⚙ Ambiente (ex.: 010).")
+    ini = time.time()
+    try:
+        heads, auth, tok, tmo = _sessao_protheus(cfg, customer, amb)
+    except RuntimeError as e:
+        return _err(500, str(e))
+    if not tok:
+        return _err(409, "Sem token cadastrado para este ambiente.")
+    prazo = ini + min(tmo, TIMEOUT_TETO - 5)
+    cid = (request.get_json(silent=True) or {}).get("coleta_id")
+    try:
+        if not cid:
+            meta, pend, env = _trib_fase0(cfg, heads, auth, tok, suf, prazo)
+            row = q("""insert into cockpit.trib_coletas
+                         (customer, ambiente, status, meta, dados, pendentes, environment,
+                          sufixo, disparado_por, chamadas)
+                       values (%s,%s,'coletando',%s::jsonb,'{}'::jsonb,%s,%s,%s,%s,1) returning id""",
+                    (customer, amb, json.dumps(meta, ensure_ascii=False, default=str), pend,
+                     env, suf, current_user()), one=True)
+            cid = row["id"]
+            dados, resto = _trib_le_tabelas(cfg, heads, auth, tok, meta, pend, prazo)
+        else:
+            row = q("""select id, meta, pendentes, status from cockpit.trib_coletas
+                        where id=%s and customer=%s and ambiente=%s""", (cid, customer, amb), one=True)
+            if not row:
+                return _err(404, "Coleta não encontrada.")
+            if row["status"] != "coletando":
+                return _json({"ok": True, "coleta_id": cid, "pendentes": [], "status": row["status"]})
+            execute("update cockpit.trib_coletas set chamadas = chamadas + 1 where id=%s", (cid,))
+            dados, resto = _trib_le_tabelas(cfg, heads, auth, tok, row["meta"], row["pendentes"] or [], prazo)
+    except requests.RequestException as e:
+        msg = f"Falha ao chamar a base: {_motivo_rede(e)}"
+        _log_coleta(customer, amb, "tributos", ini, False, erro=msg)
+        if cid:
+            execute("update cockpit.trib_coletas set status='erro', erro=%s, concluido_em=now() where id=%s",
+                    (msg, cid))
+        return _err(502, msg)
+    except RuntimeError as e:
+        _log_coleta(customer, amb, "tributos", ini, False, erro=str(e))
+        return _err(502, str(e))
+    status = "coletando" if resto else None
+    if not resto:
+        falhou = [k for k, v in dados.items() if not v.get("ok")]
+        prev = q("select dados from cockpit.trib_coletas where id=%s", (cid,), one=True)
+        falhou += [k for k, v in ((prev or {}).get("dados") or {}).items() if not v.get("ok")]
+        status = "parcial" if falhou else "ok"
+    execute("""update cockpit.trib_coletas
+                  set dados = dados || %s::jsonb, pendentes=%s,
+                      status=%s, concluido_em = case when %s <> 'coletando' then now() end,
+                      duracao_ms = coalesce(duracao_ms, 0) + %s
+                where id=%s""",
+            (json.dumps(dados, ensure_ascii=False, default=str), resto, status, status,
+             int((time.time() - ini) * 1000), cid))
+    if status != "coletando":
+        # histórico curto: o conteúdo é grande e o que vale é o retrato atual
+        execute("""delete from cockpit.trib_coletas where customer=%s and ambiente=%s and id not in
+                     (select id from cockpit.trib_coletas where customer=%s and ambiente=%s
+                       order by iniciado_em desc limit %s)""",
+                (customer, amb, customer, amb, TRIB_HISTORICO))
+        _log_coleta(customer, amb, "tributos", ini, True, http_status=200,
+                    itens=len(dados), erro=None if status == "ok" else "coleta parcial")
+    return _json({"ok": True, "coleta_id": cid, "pendentes": resto, "status": status,
+                  "lidas": sorted(dados)})
+
+
+# ── comparação e análises (puro Python — testável sem base) ────────────────
+def _trib_alterado(cod, meta_t):
+    """(coluna, valor) que marca a VERSÃO ANTERIOR de um registro. O FISA170
+    não sobrescreve: alterar uma base/alíquota/regra grava a nova e deixa a
+    antiga com *_ALTERA = '1'. Sem esse corte o mesmo código aparece duas vezes
+    (F27 000004 e F28 000019 na Produção da Dígitro, 30/10/2026).
+    ARMADILHA: o X3_CBOX da CIN diz "0=Foi alterado", mas os dados dizem o
+    contrário — na Dígitro 398 fórmulas vigentes têm '0' e as 3 antigas (as
+    fórmulas das versões anteriores da F27/F28) têm '1'. Vale o dado: '1'."""
+    col = f"{cod}_ALTERA"
+    if col not in ((meta_t or {}).get("colunas") or []):
+        return None
+    return col, "1"
+
+
+def _trib_registros(meta_t, dado, cod=None):
+    """Linhas da tabela como dicts — só a versão VIGENTE de cada registro.
+    Devolve (registros, n_versoes_anteriores)."""
+    if not dado or not dado.get("ok"):
+        return None, 0
+    cols = dado.get("cols") or []
+    regs = [dict(zip(cols, ln)) for ln in dado.get("linhas") or []]
+    alt = _trib_alterado(cod, meta_t) if cod else None
+    if not alt:
+        return regs, 0
+    col, val = alt
+    atuais = [r for r in regs if (r.get(col) or "").strip() != val]
+    return atuais, len(regs) - len(atuais)
+
+
+def _trib_ignorar(cod, regs_p, regs_t):
+    """Colunas fora da comparação: ID técnico (FWUUID) e afins."""
+    cols = set()
+    for regs in (regs_p or [], regs_t or []):
+        for r in regs[:1]:
+            cols.update(r)
+    return sorted(c for c in cols if _trib_eh_id(c) or _TRIB_RE_CARIMBO.search(c) or c.endswith("_ALTERA"))
+
+
+def _trib_assinatura(reg, ignorar):
+    return json.dumps({k: v for k, v in sorted(reg.items()) if k not in ignorar},
+                      ensure_ascii=False, sort_keys=True)
+
+
+def _trib_compara_tabela(cod, chave, regs_p, regs_t, ignorar):
+    """Compara as duas bases. Com chave: por chave (e campo a campo). Sem
+    chave: por conteúdo (multiconjunto de assinaturas)."""
+    itens = []
+    res = {"so_teste": 0, "so_prod": 0, "iguais": 0, "diverg": 0, "mesmo_conteudo": 0}
+    regs_p, regs_t = regs_p or [], regs_t or []
+    if chave:
+        kf = lambda r: tuple(r.get(c, "") for c in chave)
+        mp, mt = {}, {}
+        for r in regs_p:
+            mp.setdefault(kf(r), r)
+        for r in regs_t:
+            mt.setdefault(kf(r), r)
+        conteudo = lambda r: _trib_assinatura({k: v for k, v in r.items() if k not in chave}, ignorar)
+        for k in sorted(set(mp) | set(mt)):
+            p, t = mp.get(k), mt.get(k)
+            if p and t:
+                difs = [c for c in sorted(set(p) | set(t))
+                        if c not in ignorar and (p.get(c, "") != t.get(c, ""))]
+                sit = "diverg" if difs else "iguais"
+                itens.append({"k": list(k), "sit": sit, "p": p, "t": t, "difs": difs})
+            else:
+                sit = "so_teste" if t else "so_prod"
+                itens.append({"k": list(k), "sit": sit, "p": p, "t": t, "difs": []})
+            res[sit] += 1
+        # "mesmo conteúdo, código diferente": casa só-Teste com só-Produção
+        sp = {}
+        for it in itens:
+            if it["sit"] == "so_prod":
+                sp.setdefault(conteudo(it["p"]), []).append(it)
+        for it in itens:
+            if it["sit"] == "so_teste":
+                cands = sp.get(conteudo(it["t"]))
+                if cands:
+                    par = cands.pop(0)
+                    it["par"] = par["k"]; par["par"] = it["k"]
+                    res["mesmo_conteudo"] += 1
+    else:
+        from collections import Counter
+        cp = Counter(_trib_assinatura(r, ignorar) for r in regs_p)
+        ct = Counter(_trib_assinatura(r, ignorar) for r in regs_t)
+        exemplo = {}
+        for r in regs_p + regs_t:
+            exemplo.setdefault(_trib_assinatura(r, ignorar), r)
+        for s in sorted(set(cp) | set(ct)):
+            a, b = cp.get(s, 0), ct.get(s, 0)
+            comum = min(a, b)
+            for _ in range(comum):
+                itens.append({"k": None, "sit": "iguais", "p": exemplo[s], "t": exemplo[s], "difs": []})
+            for _ in range(a - comum):
+                itens.append({"k": None, "sit": "so_prod", "p": exemplo[s], "t": None, "difs": []})
+            for _ in range(b - comum):
+                itens.append({"k": None, "sit": "so_teste", "p": None, "t": exemplo[s], "difs": []})
+            res["iguais"] += comum; res["so_prod"] += a - comum; res["so_teste"] += b - comum
+    return res, itens
+
+
+def _trib_vigencia(ini, fim, hoje_s):
+    ini, fim = (ini or "").strip(), (fim or "").strip()
+    if ini and ini > hoje_s:
+        return "futura"
+    if fim and fim < hoje_s:
+        return "encerrada"
+    return "vigente"
+
+
+def _trib_filial_casa(fil_ref, fil_src):
+    """xFilial simplificado: a filial do cadastro referenciado casa quando é
+    vazia (compartilhado) ou é prefixo da filial da regra."""
+    a, b = (fil_ref or "").strip(), (fil_src or "").strip()
+    return not a or b.startswith(a) or a.startswith(b)
+
+
+def _trib_num(v):
+    try:
+        return float(str(v).strip().replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _trib_coerencia(regs):
+    """Achados de coerência da Regra de Cálculo, só sobre o que a base já tem:
+    - a descrição fala de um tributo e a regra calcula outro;
+    - a descrição traz um percentual e a alíquota amarrada é outra;
+    - código fora do tamanho dos demais da mesma tabela (TA001 × TA0002)."""
+    out = []
+    f2b = regs.get("F2B") or []
+    aliq = {(d.get("F28_CODIGO") or "").strip(): _trib_num(d.get("F28_ALIQ")) for d in regs.get("F28") or []}
+    for r in f2b:
+        desc = (r.get("F2B_DESC") or "").strip()
+        trib = (r.get("F2B_TRIB") or "").strip()
+        base = {"filial": r.get("F2B_FILIAL", ""), "regra": r.get("F2B_REGRA", ""), "trib": trib, "desc": desc}
+        m = re.match(r"([A-Za-z]+)", _integ_norm(desc).upper())
+        fam = TRIB_FAMILIA.get(m.group(1)) if m else None
+        if fam and trib and trib not in fam:
+            out.append({**base, "tipo": "tributo",
+                        "texto": f"a descrição fala de {m.group(1)} e a regra calcula {trib}"})
+        pct = re.findall(r"(\d+(?:[.,]\d+)?)\s*%", desc)
+        cod = (r.get("F2B_RALIQ") or "").strip()
+        a = aliq.get(cod)
+        if pct and a is not None and cod:
+            vals = {round(_trib_num(x), 4) for x in pct if _trib_num(x) is not None}
+            if vals and round(a, 4) not in vals:
+                out.append({**base, "tipo": "aliquota",
+                            "texto": f"a descrição diz {', '.join(p + '%' for p in pct)} e a alíquota {cod} é {a:g}%"})
+    for tab, col in (("F27", "F27_CODIGO"), ("F28", "F28_CODIGO"), ("F2B", "F2B_REGRA"), ("CJ2", "CJ2_CODIGO")):
+        cods = sorted({(d.get(col) or "").strip() for d in regs.get(tab) or []} - {""})
+        if len(cods) < 3:
+            continue
+        from collections import Counter
+        tam = Counter(len(c) for c in cods).most_common(1)[0][0]
+        for c in cods:
+            if len(c) != tam:
+                out.append({"filial": "", "regra": c, "trib": "", "desc": "", "tipo": "codigo", "tabela": tab,
+                            "texto": f"{tab}: código {c} com {len(c)} posições (os demais têm {tam})"})
+    return out
+
+
+def _trib_analisa_base(meta, regs, hoje_s):
+    """Achados de UMA base: referência quebrada, vigência, status, órfãos,
+    coerência. `regs` já vem só com a versão vigente de cada registro."""
+    out = {"refs": [], "vig": {"vigente": 0, "futura": 0, "encerrada": 0}, "status": {},
+           "em_teste": [], "orfaos": [], "regras": 0, "coerencia": [], "versoes": {}}
+    f2b = regs.get("F2B") or []
+    out["regras"] = len(f2b)
+    tabs = meta.get("tabelas") or {}
+    cbox = (tabs.get("F2B") or {}).get("cbox") or {}
+    try:
+        limite = (datetime.strptime(hoje_s, "%Y%m%d") + timedelta(days=TRIB_VENCE_DIAS)).strftime("%Y%m%d")
+    except ValueError:
+        limite = hoje_s
+    out["vence"] = []
+    for r in f2b:
+        v = _trib_vigencia(r.get("F2B_VIGINI"), r.get("F2B_VIGFIM"), hoje_s)
+        out["vig"][v] += 1
+        fim = (r.get("F2B_VIGFIM") or "").strip()
+        if v == "vigente" and fim and fim <= limite:
+            out["vence"].append({"filial": r.get("F2B_FILIAL", ""), "regra": r.get("F2B_REGRA", ""),
+                                 "trib": r.get("F2B_TRIB", ""), "desc": r.get("F2B_DESC", ""), "fim": fim})
+        st = r.get("F2B_STATUS")
+        if st is not None:
+            rot = (cbox.get("F2B_STATUS") or {}).get(st, st or "(vazio)")
+            out["status"][rot] = out["status"].get(rot, 0) + 1
+            if "teste" in _integ_norm(rot) and v == "vigente":
+                out["em_teste"].append({"filial": r.get("F2B_FILIAL", ""), "regra": r.get("F2B_REGRA", ""),
+                                        "trib": r.get("F2B_TRIB", ""), "desc": r.get("F2B_DESC", ""),
+                                        "status": rot})
+    usados = set()
+    for src, csrc, dst, cdst, rot, filtro in TRIB_REFS:
+        col_s, col_d = f"{src}_{csrc}", f"{dst}_{cdst}"
+        lst_s, lst_d = regs.get(src), regs.get(dst)
+        if lst_s is None or not lst_s or col_s not in lst_s[0]:
+            continue
+        if lst_d is None or (lst_d and col_d not in lst_d[0]):
+            continue
+        if filtro and lst_d and filtro[0] not in lst_d[0]:
+            filtro = None
+        fd = f"{dst}_FILIAL"
+        idx = {}
+        for d in lst_d:
+            if filtro and (d.get(filtro[0]) or "").strip() != filtro[1]:
+                continue
+            idx.setdefault((d.get(col_d) or "").strip(), []).append(d.get(fd, ""))
+        for r in lst_s:
+            cod = (r.get(col_s) or "").strip()
+            if not cod:
+                continue
+            usados.add((dst, filtro[1] if filtro else "", cod))
+            fils = idx.get(cod)
+            if not fils or not any(_trib_filial_casa(f, r.get(f"{src}_FILIAL", "")) for f in fils):
+                motivo = "não existe" if not fils else "existe em outra filial"
+                if not fils and filtro and any((d.get(col_d) or "").strip() == cod for d in lst_d):
+                    motivo = "existe, mas com outro tipo de perfil"
+                out["refs"].append({"filial": r.get(f"{src}_FILIAL", ""), "regra": r.get("F2B_REGRA", ""),
+                                    "trib": r.get("F2B_TRIB", ""), "campo": col_s, "rotulo": rot,
+                                    "valor": cod, "destino": dst, "motivo": motivo})
+    tipos_f20 = ((tabs.get("F20") or {}).get("cbox") or {}).get("F20_TIPO") or {}
+    for dst, colc in (("F20", "F20_CODIGO"), ("F27", "F27_CODIGO"), ("F28", "F28_CODIGO"),
+                      ("CJ2", "CJ2_CODIGO"), ("F2G", "F2G_CODIGO")):
+        lst = regs.get(dst)
+        if not f2b or not lst or colc not in lst[0]:
+            continue
+        vistos = set()
+        for d in lst:
+            cod = (d.get(colc) or "").strip()
+            tipo = (d.get("F20_TIPO") or "").strip() if dst == "F20" else ""
+            if cod and (dst, tipo, cod) not in usados and (dst, tipo, cod) not in vistos:
+                vistos.add((dst, tipo, cod))
+                out["orfaos"].append({"tabela": dst, "codigo": cod,
+                                      "tipo": tipos_f20.get(tipo, tipo) if tipo else "",
+                                      "desc": d.get(f"{dst}_DESC") or d.get(f"{dst}_DESCRI") or ""})
+    out["coerencia"] = _trib_coerencia(regs)
+    return out
+
+
+def _trib_reforma(regs_p, regs_t, filiais, hoje_s):
+    """Regras VIGENTES de CBS/IBS por tributo × filial, nas duas bases."""
+    def mapa(regs):
+        m = {}
+        for r in regs or []:
+            trib = (r.get("F2B_TRIB") or "").strip()
+            if not TRIB_RE_REFORMA.match(trib):
+                continue
+            if _trib_vigencia(r.get("F2B_VIGINI"), r.get("F2B_VIGFIM"), hoje_s) != "vigente":
+                continue
+            fil = (r.get("F2B_FILIAL") or "").strip()
+            m.setdefault(trib, {}).setdefault(fil, 0)
+            m[trib][fil] += 1
+        return m
+    mp, mt = mapa(regs_p), mapa(regs_t)
+    tribs = sorted(set(mp) | set(mt))
+    fils = [f["codigo"] for f in filiais or []]
+    vistas = sorted({f for m in (mp, mt) for d in m.values() for f in d})
+    for f in vistas:
+        if f and f not in fils and not any(x.startswith(f) for x in fils):
+            fils.append(f)
+    compart = "" in vistas
+    return {"tributos": tribs, "filiais": fils, "compartilhada": compart,
+            "producao": mp, "teste": mt}
+
+
+def _trib_migracao(itens_f2b, regs_t, regs_p):
+    """Para cada regra só em Teste (ou divergente), o que mais precisa subir:
+    os cadastros que ela referencia e que a Produção não tem."""
+    def existe(regs, tab, col, cod):
+        return any((d.get(col) or "").strip() == cod for d in regs.get(tab) or [])
+    out = []
+    for it in itens_f2b:
+        if it["sit"] not in ("so_teste", "diverg"):
+            continue
+        r = it["t"]
+        deps = []
+        for src, csrc, dst, cdst, rot, _f in TRIB_REFS:
+            if src != "F2B":
+                continue
+            cod = (r.get(f"F2B_{csrc}") or "").strip()
+            if not cod or not regs_t.get(dst):
+                continue
+            if existe(regs_t, dst, f"{dst}_{cdst}", cod) and not existe(regs_p, dst, f"{dst}_{cdst}", cod):
+                deps.append({"tabela": dst, "rotulo": rot, "codigo": cod})
+        out.append({"sit": it["sit"], "filial": r.get("F2B_FILIAL", ""), "regra": r.get("F2B_REGRA", ""),
+                    "trib": r.get("F2B_TRIB", ""), "desc": r.get("F2B_DESC", ""),
+                    "vigini": r.get("F2B_VIGINI", ""), "difs": it.get("difs") or [], "deps": deps,
+                    "par": it.get("par")})
+    return out
+
+
+def _trib_ind(chave, rotulo, valor, nivel, texto):
+    return {"chave": chave, "rotulo": rotulo, "valor": valor, "nivel": nivel, "texto": texto}
+
+
+def _trib_monta(col_p, col_t, hoje_s):
+    """Payload da aba a partir das duas coletas (qualquer uma pode faltar)."""
+    meta_p = (col_p or {}).get("meta") or {}
+    meta_t = (col_t or {}).get("meta") or {}
+    dad_p = (col_p or {}).get("dados") or {}
+    dad_t = (col_t or {}).get("dados") or {}
+    tp, tt = meta_p.get("tabelas") or {}, meta_t.get("tabelas") or {}
+    regs_p, regs_t, ver = {}, {}, {}
+    for c in TRIB_TABELAS:
+        regs_p[c], vp = _trib_registros(tp.get(c), dad_p.get(c), c)
+        regs_t[c], vt = _trib_registros(tt.get(c), dad_t.get(c), c)
+        ver[c] = {"p": vp, "t": vt}
+    # tabela que existe mas veio vazia (total 0) = lista vazia, não "não lida"
+    for c in TRIB_TABELAS:
+        if regs_p[c] is None and (tp.get(c) or {}).get("existe") and (tp.get(c) or {}).get("total") == 0:
+            regs_p[c] = []
+        if regs_t[c] is None and (tt.get(c) or {}).get("existe") and (tt.get(c) or {}).get("total") == 0:
+            regs_t[c] = []
+    quantidades, comparacao = [], {}
+    for cod, (rot, grupo, tipo) in TRIB_TABELAS.items():
+        a, b = tp.get(cod) or {}, tt.get(cod) or {}
+        fil = sorted(set((a.get("por_filial") or {})) | set((b.get("por_filial") or {})))
+        quantidades.append({
+            "tab": cod, "rotulo": rot, "grupo": grupo, "tipo": tipo,
+            "nome_sx2": a.get("nome_sx2") or b.get("nome_sx2"),
+            "existe": {"p": a.get("existe"), "t": b.get("existe")},
+            "modo": {"p": a.get("modo"), "t": b.get("modo")},
+            "p": a.get("total"), "t": b.get("total"),
+            "anteriores": ver[cod],
+            "filiais": [{"fil": f, "p": (a.get("por_filial") or {}).get(f), "t": (b.get("por_filial") or {}).get(f)}
+                        for f in fil]})
+        if tipo != "cad" or (regs_p[cod] is None and regs_t[cod] is None):
+            continue
+        base_meta = a if a.get("existe") else b
+        chave = _trib_chave(cod, base_meta) if base_meta.get("existe") else None
+        if chave and b.get("existe") and a.get("existe") and _trib_chave(cod, b) != chave:
+            chave = None                     # dicionários diferentes: compara por conteúdo
+        ign = _trib_ignorar(cod, regs_p[cod], regs_t[cod])
+        res, itens = _trib_compara_tabela(cod, chave, regs_p[cod], regs_t[cod], ign)
+        cols_p, cols_t = set(a.get("colunas") or []), set(b.get("colunas") or [])
+        iguais = [i for i in itens if i["sit"] == "iguais"]
+        outros = [i for i in itens if i["sit"] != "iguais"]
+        comparacao[cod] = {
+            "chave": chave, "ignoradas": ign, "resumo": res,
+            "lida": {"p": regs_p[cod] is not None, "t": regs_t[cod] is not None},
+            "truncada": {"p": bool((dad_p.get(cod) or {}).get("truncado")),
+                         "t": bool((dad_t.get(cod) or {}).get("truncado"))},
+            "colunas": [c for c in (a.get("colunas") or b.get("colunas") or [])
+                        if c not in _TRIB_TECNICAS and not _TRIB_RE_LOG.search(c)],
+            "so_dic": {"p": sorted(cols_p - cols_t), "t": sorted(cols_t - cols_p)} if cols_p and cols_t else None,
+            "titulos": {**(b.get("titulos") or {}), **(a.get("titulos") or {})},
+            "cbox": {**(b.get("cbox") or {}), **(a.get("cbox") or {})},
+            "itens": outros + iguais[:TRIB_ITENS_MAX],
+            "iguais_omitidos": max(0, len(iguais) - TRIB_ITENS_MAX)}
+    an_p = _trib_analisa_base(meta_p, {k: v or [] for k, v in regs_p.items() if v is not None}, hoje_s) if col_p else None
+    an_t = _trib_analisa_base(meta_t, {k: v or [] for k, v in regs_t.items() if v is not None}, hoje_s) if col_t else None
+    filiais = meta_p.get("filiais") or meta_t.get("filiais") or []
+    reforma = _trib_reforma(regs_p.get("F2B"), regs_t.get("F2B"), filiais, hoje_s)
+    # Tributos da Reforma CADASTRADOS (F2E) sem nenhuma regra vigente: informativo
+    # — em 2026 só CBS e IBS estadual têm alíquota de teste; o resto é cadastro.
+    cad = {(r.get("F2E_TRIB") or "").strip(): (r.get("F2E_DESC") or "").strip()
+           for regs in (regs_p.get("F2E") or [], regs_t.get("F2E") or []) for r in regs}
+    reforma["sem_regra"] = [{"trib": t, "desc": d} for t, d in sorted(cad.items())
+                            if TRIB_RE_REFORMA.match(t) and t not in reforma["tributos"]]
+    mig = _trib_migracao((comparacao.get("F2B") or {}).get("itens") or [],
+                         {k: v or [] for k, v in regs_t.items()}, {k: v or [] for k, v in regs_p.items()})
+    # indicadores
+    inds = []
+    c2b = (comparacao.get("F2B") or {}).get("resumo") or {}
+    if col_p and col_t and "F2B" in comparacao:
+        n = c2b.get("so_teste", 0)
+        inds.append(_trib_ind("migrar", "Regras só em Teste", n, "verde" if not n else "amarelo",
+                              "Regras de cálculo homologadas em Teste que ainda não estão na Produção."
+                              if n else "Toda regra de Teste já está na Produção."))
+        n = c2b.get("diverg", 0)
+        inds.append(_trib_ind("diverg", "Mesmo código, conteúdo diferente", n,
+                              "verde" if not n else "amarelo",
+                              "Regra com o mesmo código nas duas bases e algum campo diferente."))
+        n = c2b.get("so_prod", 0)
+        inds.append(_trib_ind("so_prod", "Regras só na Produção", n, "verde" if not n else "amarelo",
+                              "Regra criada direto na Produção, sem passar pelo Teste."))
+    else:
+        inds.append(_trib_ind("migrar", "Regras só em Teste", None, "cinza",
+                              "Colete as duas bases para comparar."))
+    for amb, an in (("p", an_p), ("t", an_t)):
+        if not an:
+            continue
+        sfx = "Produção" if amb == "p" else "Teste"
+        n = len(an["refs"])
+        inds.append(_trib_ind(f"refs_{amb}", f"Referências quebradas ({sfx})", n,
+                              "verde" if not n else "vermelho",
+                              "Regra apontando para tributo, perfil, base, alíquota ou escrituração que não existe."))
+    an_v = an_p or an_t
+    if an_v:
+        vence = an_v.get("vence") or []
+        n = len(vence)
+        inds.append(_trib_ind("vence", f"Regras que vencem em até {TRIB_VENCE_DIAS} dias"
+                              + (" (Produção)" if an_p else " (Teste)"), n, "verde" if not n else "amarelo",
+                              (f"{n} regra(s) vigente(s) com data final até "
+                               f"{max(v['fim'] for v in vence)[6:8]}/{max(v['fim'] for v in vence)[4:6]}/"
+                               f"{max(v['fim'] for v in vence)[:4]} — sem a regra do período seguinte, o "
+                               f"tributo deixa de ser calculado." if n else "Nenhuma regra vigente perto do fim.")))
+    if an_p:
+        n = len(an_p["em_teste"])
+        inds.append(_trib_ind("em_teste_prod", "Regras 'em teste' vigentes na Produção", n,
+                              "verde" if not n else "amarelo",
+                              "Status da regra ainda em teste numa base que fatura."))
+    tem = bool(reforma["tributos"])
+    if col_p:
+        faltam = [(t, f) for t in reforma["tributos"] for f in (reforma["filiais"] or [""])
+                  if not reforma["compartilhada"] and not (reforma["producao"].get(t) or {}).get(f)]
+        inds.append(_trib_ind("reforma", "CBS/IBS na Produção",
+                              f"{len(reforma['tributos'])} trib." if tem else 0,
+                              "cinza" if not tem else ("amarelo" if faltam else "verde"),
+                              ("Nenhuma regra CBS/IBS vigente cadastrada." if not tem else
+                               (f"{len(faltam)} combinação(ões) tributo × filial sem regra vigente na Produção."
+                                if faltam else "Toda filial tem regra vigente para cada tributo da Reforma."))))
+    return {"quantidades": quantidades, "comparacao": comparacao,
+            "analise": {"producao": an_p, "teste": an_t}, "reforma": reforma,
+            "migracao": mig, "indicadores": inds, "filiais": filiais,
+            "grupos": [{"id": g, "rotulo": r} for g, r in TRIB_GRUPOS]}
+
+
+def _trib_ultima(customer, amb):
+    """Última coleta concluída (ok/parcial) da base + a em andamento, se houver."""
+    fim = q("""select id, iniciado_em, concluido_em, status, environment, disparado_por, sufixo,
+                      duracao_ms, chamadas, meta, dados
+                 from cockpit.trib_coletas where customer=%s and ambiente=%s and status in ('ok','parcial')
+                order by iniciado_em desc limit 1""", (customer, amb), one=True)
+    andam = q("""select id, iniciado_em, pendentes from cockpit.trib_coletas
+                  where customer=%s and ambiente=%s and status='coletando'
+                    and iniciado_em > now() - interval '30 minutes'
+                  order by iniciado_em desc limit 1""", (customer, amb), one=True)
+    return fim, andam
+
+
+@app.get("/api/tributos/<customer>")
+def api_tributos(customer):
+    """Comparação Produção × Teste a partir da última coleta de cada base
+    (lida do Supabase, sem tocar nas bases)."""
+    if (r := _trib_guarda_leitura(customer)):
+        return r
+    hoje_s = _cp_hoje().strftime("%Y%m%d")
+    bases = {}
+    cols = {}
+    for amb in ("producao", "teste"):
+        cfg = _cfg_ambiente(customer, amb)
+        try:
+            fim, andam = _trib_ultima(customer, amb)
+        except psycopg2.errors.UndefinedTable:
+            return _err(503, "A tabela cockpit.trib_coletas ainda não existe no Supabase — "
+                             "rode docs/sql/2026-10-30-tributos.sql.")
+        cols[amb] = fim
+        bases[amb] = {
+            "cadastrada": bool(cfg), "ativo": bool(cfg and cfg.get("ativo")),
+            "environment_cfg": (cfg or {}).get("environment"),
+            "coleta": ({k: fim[k] for k in ("id", "iniciado_em", "concluido_em", "status", "environment",
+                                            "disparado_por", "sufixo", "duracao_ms", "chamadas")}
+                       if fim else None),
+            "erros": ({**((fim.get("meta") or {}).get("erros") or {}),
+                       **{k: v.get("erro") for k, v in (fim.get("dados") or {}).items() if not v.get("ok")}}
+                      if fim else {}),
+            "andamento": ({"id": andam["id"], "iniciado_em": andam["iniciado_em"],
+                           "pendentes": andam["pendentes"]} if andam else None)}
+    corpo = _trib_monta(cols["producao"], cols["teste"], hoje_s)
+    return _json({"ok": True, "customer": customer, "hoje": _cp_hoje().isoformat(),
+                  "interno": eh_interno(), "bases": bases, **corpo})
+
+
+@app.get("/api/tributos/<customer>/scripts")
+def api_tributos_scripts(customer):
+    """Os SQL da fase 0 (dicionário) — para conferir no console TCloud."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    amb = _amb_path(request.args.get("ambiente") or "producao")
+    if not amb:
+        return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    cfg = _cfg_ambiente(customer, amb) or {}
+    suf = (cfg.get("sufixo") or "010").strip()
+    return _json({"ok": True, "ambiente": amb, "sufixo": suf,
+                  "scripts": [{"id": s["id"], "sql": s["sqls"][0]} for s in _trib_scripts_meta(suf, cfg.get("banco"))]})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────
