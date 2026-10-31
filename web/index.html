@@ -7331,8 +7331,8 @@ function docViewProcesso() {
   };
   const grupo = (tit, ls) => ls.length ? `<p class="text-[10px] uppercase tracking-wider text-slate-400 px-3 mt-3 mb-1">${tit}</p>${ls.map(item).join('')}` : '';
   const nav = `<button data-docproc="todos" class="w-full text-left px-3 py-1.5 rounded-md text-sm ${doc.proc === 'todos' ? 'bg-cyan-50 font-semibold text-totvs-petroleo' : 'hover:bg-slate-50 text-slate-700'}">Todos <span class="text-xs text-slate-400">${F.length}</span></button>
-    ${grupo('Processos principais', procs.filter(p => p.grupo === 'principal'))}${grupo('Complementares', procs.filter(p => p.grupo !== 'principal'))}
-    ${grupo('Integrações entre processos', ligs.filter(l => conta(l.id) || D.interno))}`;
+    ${grupo('Integrações entre processos', ligs.filter(l => conta(l.id) || D.interno))}
+    ${grupo('Processos principais', procs.filter(p => p.grupo === 'principal'))}${grupo('Complementares', procs.filter(p => p.grupo !== 'principal'))}`;
   let corpo;
   if (!D.processos.length) {
     corpo = blocoVazioCad(D.interno ? 'Este cliente ainda não tem Processos Principais.' : 'Ainda não há documentos liberados para você.',
