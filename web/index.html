@@ -562,6 +562,7 @@
             <span class="w-px bg-slate-200 mx-2 my-2"></span>
             <button data-tab="radar"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Definições pendentes (interno TOTVS)">Radar</button>
             <button data-tab="pendencias" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Pendências de definição e retorno — visão do cliente">Pendências</button>
+            <button data-tab="documentos" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Documentação por processo — consultoria e cliente">Documentação</button>
             <button data-tab="gaps"     class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">GAPs</button>
             <button data-tab="tarefas"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Tarefas</button>
             <button data-tab="cadastros" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cadastros</button>
@@ -1014,6 +1015,34 @@
             <label class="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" id="pen-nogo"> só NoGo (impede a virada)</label>
           </div>
           <div id="pen-conteudo"></div>
+        </div>
+
+        <!-- Aba Documentação — casa única da documentação por processo
+             (substitui a Página Indexada e absorve o Portal de Processos).
+             Navegação pelos Processos Principais do Radar. O cliente só recebe
+             versão vigente liberada (recorte do servidor, /api/docs/<cliente>).
+             Spec 2026-10-30-aba-documentacao. -->
+        <div id="tab-documentos" class="p-5 hidden">
+          <div class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="doc-cliente-nome" class="font-medium"></span>
+            <span class="flex-1"></span>
+            <button id="doc-publicar" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">⬆ Publicar documento</button>
+            <button id="doc-pacote" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50" title="Importar vários documentos de uma vez (.zip com manifest.json)">📦 Importar pacote</button>
+            <button id="doc-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="doc-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3"></div>
+          <div class="flex items-center gap-1 mb-3 border-b border-slate-200">
+            <button data-docv="processo" class="doc-v px-3 py-1.5 text-sm border-b-2 -mb-px">Por processo</button>
+            <button data-docv="matriz" data-interno class="doc-v px-3 py-1.5 text-sm border-b-2 -mb-px">Matriz de cobertura</button>
+            <button data-docv="todos" class="doc-v px-3 py-1.5 text-sm border-b-2 -mb-px">Todos os documentos</button>
+          </div>
+          <div id="doc-filtros" class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <input id="doc-q" type="search" placeholder="Buscar título, tipo, processo…" class="px-3 py-1.5 border border-slate-300 rounded-md bg-white flex-1 min-w-[200px] max-w-md">
+            <select id="doc-tipo" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"><option value="">Todos os tipos</option></select>
+            <label data-interno class="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" id="doc-so-cliente"> só o que o cliente vê</label>
+          </div>
+          <div id="doc-conteudo"></div>
         </div>
       </div>
       </div>
@@ -2420,7 +2449,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'documentos', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2489,6 +2518,7 @@ function setTab(nome) {
   if (nome === 'transicao') initTransicao();
   if (nome === 'radar') initRadar();
   if (nome === 'pendencias') initPendencias();
+  if (nome === 'documentos') initDocumentos();
 }
 
 function setSub(nome) {
@@ -7162,6 +7192,405 @@ $$('#tab-pendencias .pen-v').forEach(b => b.addEventListener('click', () => { pe
 ['pen-q', 'pen-mod', 'pen-nogo'].forEach(id => $('#' + id).addEventListener(id === 'pen-q' ? 'input' : 'change', desenhaPendencias));
 $('#pen-reload').addEventListener('click', () => carregaPendencias(state.selected?.cli));
 
+// ============================================================================
+//  ABA DOCUMENTAÇÃO — casa única da documentação por processo
+//  Spec: docs/specs/2026-10-30-aba-documentacao.md
+// ============================================================================
+// O servidor já recorta para o cliente (só vigente + liberado). Aqui só se
+// desenha; quem barra visibilidade é /api/docs e a rota do arquivo.
+const doc = { customer: null, d: null, view: 'processo', proc: 'todos' };
+const DOC_FMT_ORDEM = ['html', 'jpeg', 'png', 'svg', 'pdf', 'md', 'txt', 'link'];
+const DOC_FMT = { html: ['🌐', 'Abrir página'], jpeg: ['🖼', 'Ver imagem'], png: ['🖼', 'Ver imagem'], svg: ['🖼', 'Ver imagem'],
+                  pdf: ['📄', 'Abrir PDF'], md: ['📝', 'Ler'], txt: ['📝', 'Ler'], link: ['🔗', 'Abrir link'] };
+const DOC_VIS = { rascunho: ['Rascunho', 'bg-slate-100 text-slate-600'], consultoria: ['Consultoria', 'bg-sky-100 text-sky-800'],
+                  cliente: ['Liberado ao cliente', 'bg-emerald-100 text-emerald-800'] };
+const docEnc = () => encodeURIComponent(doc.customer || '');
+const docArqUrl = (vid, baixar) => `/api/docs/${docEnc()}/arquivo/${vid}${baixar ? '?baixar=1' : ''}`;
+const docTipo = cod => (doc.d?.tipos || []).find(t => t.codigo === cod) || { nome: cod, nivel_max: 'consultoria' };
+const docProc = id => (doc.d?.processos || []).find(p => p.id === id);
+const docTam = n => n == null ? '' : n > 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB';
+const docVigentes = s => DOC_FMT_ORDEM.flatMap(f => s.versoes.filter(v => v.vigente && v.formato === f));
+
+async function initDocumentos() {
+  const cli = state.selected?.cli;
+  $('#doc-cliente-nome').textContent = (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (doc.customer === cli && doc.d) { desenhaDocs(); return; }
+  await carregaDocs(cli);
+}
+
+async function carregaDocs(customer) {
+  doc.customer = customer || null;
+  const box = $('#doc-conteudo');
+  if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver a documentação.'); return; }
+  box.innerHTML = '<p class="text-sm text-slate-400 p-6 text-center">Carregando documentação…</p>';
+  try { doc.d = await api(`/api/docs/${docEnc()}`); }
+  catch (e) { doc.d = null; box.innerHTML = blocoErro('Não foi possível carregar a documentação', e, () => carregaDocs(customer)); return; }
+  if (!doc.d.interno && doc.view === 'matriz') doc.view = 'processo';
+  const sel = $('#doc-tipo'), cur = sel.value;
+  sel.innerHTML = '<option value="">Todos os tipos</option>' + doc.d.tipos.map(t => `<option value="${t.codigo}">${escapeHtml(t.nome)}</option>`).join('');
+  sel.value = cur;
+  desenhaDocs();
+}
+
+function docFiltradas() {
+  const q = radNorm($('#doc-q').value.trim()), tipo = $('#doc-tipo').value, soCli = $('#doc-so-cliente').checked;
+  return (doc.d?.series || []).filter(s => (!tipo || s.tipo === tipo)
+    && (!soCli || s.versoes.some(v => v.vigente && v.visibilidade === 'cliente'))
+    && (!q || radNorm([s.titulo, s.descricao, docTipo(s.tipo).nome, ...s.processos.map(p => docProc(p)?.nome)].join(' ')).includes(q)));
+}
+
+function docBadge(txt, cls) { return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium ${cls}">${txt}</span>`; }
+
+function docBotoesFormato(s) {
+  return docVigentes(s).map(v => {
+    const [ic, rot] = DOC_FMT[v.formato] || ['📎', 'Abrir'];
+    const vis = doc.d.interno ? ` <span class="ml-1 w-2 h-2 rounded-full inline-block ${v.visibilidade === 'cliente' ? 'bg-emerald-500' : v.visibilidade === 'rascunho' ? 'bg-slate-400' : 'bg-sky-500'}" title="${DOC_VIS[v.visibilidade][0]}"></span>` : '';
+    return `<button data-docabre="${v.id}" class="px-2.5 py-1 rounded-md border border-slate-300 bg-white hover:bg-cyan-50 hover:border-totvs-blue text-xs text-totvs-petroleo" title="${escapeHtml((v.nome_arquivo || '') + (v.tamanho ? ' · ' + docTam(v.tamanho) : ''))}">${ic} ${rot}${v.formato === 'jpeg' || v.formato === 'png' || v.formato === 'svg' ? ` <span class="text-slate-400">${v.formato.toUpperCase()}</span>` : ''}${vis}</button>`;
+  }).join('');
+}
+
+function docControlesInternos(s) {
+  if (!doc.d.interno) return '';
+  const t = docTipo(s.tipo), vig = docVigentes(s), velhas = s.versoes.filter(v => !v.vigente);
+  const opt = v => Object.entries(DOC_VIS).map(([k, [r]]) => {
+    const trava = k === 'cliente' && (t.nivel_max !== 'cliente' || !doc.d.pode_liberar);
+    return `<option value="${k}" ${v.visibilidade === k ? 'selected' : ''} ${trava && v.visibilidade !== k ? 'disabled' : ''}>${r}${k === 'cliente' && t.nivel_max !== 'cliente' ? ' (tipo interno)' : ''}</option>`;
+  }).join('');
+  const linhaV = (v, velha) => `<div class="flex items-center gap-2 flex-wrap py-1 text-xs">
+      <span class="font-mono text-slate-500 w-12">${v.formato.toUpperCase()}</span>
+      <span class="text-slate-600">${escapeHtml(v.versao || '—')}${v.data_documento ? ' · ' + fmtData(String(v.data_documento).slice(0, 10)) : ''}${v.tamanho ? ' · ' + docTam(v.tamanho) : ''}</span>
+      <span class="text-slate-400 truncate max-w-[260px]" title="${escapeHtml(v.origem || v.nome_arquivo || '')}">${escapeHtml(v.nome_arquivo || v.url_externa || '')}</span>
+      <span class="flex-1"></span>
+      ${velha ? `<button data-docabre="${v.id}" class="text-cyan-700 hover:underline">abrir</button><button data-docvig="${v.id}" class="text-cyan-700 hover:underline">tornar vigente</button>`
+              : `<select data-docvis="${v.id}" class="px-1.5 py-0.5 border border-slate-300 rounded bg-white text-xs" ${t.nivel_max !== 'cliente' && v.visibilidade !== 'cliente' ? 'title="Tipo interno: não vai ao cliente"' : ''}>${opt(v)}</select>`}
+      ${doc.d.pode_liberar ? `<button data-docdel="${v.id}" class="text-rose-600 hover:underline" title="Excluir esta versão">excluir</button>` : ''}
+    </div>`;
+  return `<details class="mt-2 border-t border-slate-100 pt-1"><summary class="text-[11px] text-cyan-700 cursor-pointer select-none">versões e liberação (${s.versoes.length})</summary>
+      <div class="mt-1">${vig.map(v => linhaV(v, false)).join('')}
+      ${velhas.length ? `<p class="text-[10px] uppercase tracking-wider text-slate-400 mt-2">Versões anteriores</p>${velhas.map(v => linhaV(v, true)).join('')}` : ''}
+      <div class="flex gap-3 mt-2 text-xs"><button data-docnova="${s.id}" class="text-cyan-700 hover:underline">⬆ nova versão / outro formato</button>
+        <button data-docedit="${s.id}" class="text-cyan-700 hover:underline">✎ título e processos</button>
+        <button data-docarq="${s.id}" class="text-rose-600 hover:underline">arquivar</button></div></div></details>`;
+}
+
+function docCard(s) {
+  const t = docTipo(s.tipo), v0 = docVigentes(s)[0] || {};
+  const procs = s.processos.map(id => docProc(id)).filter(Boolean);
+  const liberado = s.versoes.some(v => v.vigente && v.visibilidade === 'cliente');
+  return `<div class="bg-white border border-slate-200 rounded-lg px-4 py-3" data-docserie="${s.id}">
+    <div class="flex items-start gap-3">
+      <div class="flex-1 min-w-0">
+        <div class="font-medium text-sm text-totvs-petroleo">${escapeHtml(s.titulo)}</div>
+        <div class="flex flex-wrap gap-1 mt-1 items-center text-xs text-slate-500">
+          ${docBadge(escapeHtml(t.nome), 'bg-violet-50 text-violet-700')}
+          ${v0.versao ? `<span>${escapeHtml(v0.versao)}</span>` : ''}${v0.data_documento ? `<span>· ${fmtData(String(v0.data_documento).slice(0, 10))}</span>` : ''}
+          ${doc.d.interno ? (liberado ? docBadge('👁 cliente vê', 'bg-emerald-100 text-emerald-800') : t.nivel_max === 'cliente' ? docBadge('só consultoria', 'bg-sky-50 text-sky-700') : docBadge('interno (tipo)', 'bg-slate-100 text-slate-600')) : ''}
+        </div>
+        ${s.descricao ? `<p class="text-xs text-slate-600 mt-1">${escapeHtml(s.descricao)}</p>` : ''}
+        ${procs.length ? `<div class="flex flex-wrap gap-1 mt-1.5">${procs.map(p => `<button data-docproc="${p.id}" class="text-[11px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 hover:bg-cyan-50">${p.tipo === 'ligacao' ? '⇄ ' : ''}${escapeHtml(p.nome)}</button>`).join('')}</div>` : ''}
+      </div>
+      <div class="flex flex-wrap gap-1.5 justify-end max-w-[50%]">${docBotoesFormato(s)}</div>
+    </div>${docControlesInternos(s)}</div>`;
+}
+
+function docKpis() {
+  const D = doc.d, S = D.series;
+  const lib = S.filter(s => s.versoes.some(v => v.vigente && v.visibilidade === 'cliente')).length;
+  if (!D.interno) {
+    $('#doc-kpis').innerHTML = [['Documentos disponíveis', S.length], ['Processos documentados', D.processos.length]].map(k =>
+      `<div class="rounded-lg px-3 py-2 bg-slate-50 text-totvs-petroleo border border-slate-200"><div class="text-xl font-bold leading-tight">${k[1]}</div><div class="text-[11px] opacity-80">${k[0]}</div></div>`).join('');
+    return;
+  }
+  const cob = D.cobertura || [], ex = cob.reduce((a, c) => a + c.exigidos, 0), ok = cob.reduce((a, c) => a + c.ok, 0);
+  const faltam = cob.reduce((a, c) => a + Object.values(c.celulas).filter(x => x.status === 'falta').length, 0);
+  $('#doc-kpis').innerHTML = [['Documentos', S.length, null], ['Liberados ao cliente', lib, null],
+    ['Cobertura dos obrigatórios', ex ? `${ok}/${ex}` : '—', 'matriz'], ['Obrigatórios faltando', faltam, 'matriz']].map(k =>
+    `<button ${k[2] ? `data-docv-k="${k[2]}"` : ''} class="text-left rounded-lg px-3 py-2 bg-slate-50 text-totvs-petroleo border border-slate-200 ${k[2] ? 'hover:ring-2 hover:ring-totvs-blue' : 'cursor-default'}">
+      <div class="text-xl font-bold leading-tight">${k[1]}</div><div class="text-[11px] opacity-80">${k[0]}</div></button>`).join('');
+  $$('#doc-kpis [data-docv-k]').forEach(b => b.onclick = () => { doc.view = b.dataset.docvK; desenhaDocs(); });
+}
+
+function docGrupoPorTipo(series) {
+  return doc.d.tipos.map(t => {
+    const ss = series.filter(s => s.tipo === t.codigo);
+    return ss.length ? `<p class="text-[11px] uppercase tracking-wider text-slate-400 mt-4 mb-1.5">${escapeHtml(t.nome)} <span class="normal-case tracking-normal">(${ss.length})</span></p>
+      <div class="space-y-2">${ss.map(docCard).join('')}</div>` : '';
+  }).join('');
+}
+
+function docViewProcesso() {
+  const D = doc.d, F = docFiltradas();
+  const conta = id => F.filter(s => s.processos.includes(id)).length;
+  const procs = D.processos.filter(p => p.tipo === 'processo'), ligs = D.processos.filter(p => p.tipo === 'ligacao');
+  const cob = id => (D.cobertura || []).find(c => c.processo_id === id);
+  const item = p => {
+    const n = conta(p.id), c = cob(p.id), on = String(doc.proc) === String(p.id);
+    const sel = c && c.exigidos ? `<span class="text-[10px] ${c.ok === c.exigidos ? 'text-emerald-700' : 'text-amber-700'}">${c.ok}/${c.exigidos}</span>` : '';
+    return `<button data-docproc="${p.id}" class="w-full text-left px-3 py-1.5 rounded-md text-sm flex items-center gap-2 ${on ? 'bg-cyan-50 text-totvs-petroleo font-semibold' : 'hover:bg-slate-50 text-slate-700'} ${n ? '' : 'opacity-60'}">
+      <span class="flex-1 truncate">${p.tipo === 'ligacao' ? '⇄ ' : ''}${escapeHtml(p.nome)}</span>${sel}<span class="text-xs text-slate-400">${n}</span></button>`;
+  };
+  const grupo = (tit, ls) => ls.length ? `<p class="text-[10px] uppercase tracking-wider text-slate-400 px-3 mt-3 mb-1">${tit}</p>${ls.map(item).join('')}` : '';
+  const nav = `<button data-docproc="todos" class="w-full text-left px-3 py-1.5 rounded-md text-sm ${doc.proc === 'todos' ? 'bg-cyan-50 font-semibold text-totvs-petroleo' : 'hover:bg-slate-50 text-slate-700'}">Todos <span class="text-xs text-slate-400">${F.length}</span></button>
+    ${grupo('Processos principais', procs.filter(p => p.grupo === 'principal'))}${grupo('Complementares', procs.filter(p => p.grupo !== 'principal'))}
+    ${grupo('Integrações entre processos', ligs.filter(l => conta(l.id) || D.interno))}`;
+  let corpo;
+  if (!D.processos.length) {
+    corpo = blocoVazioCad(D.interno ? 'Este cliente ainda não tem Processos Principais.' : 'Ainda não há documentos liberados para você.',
+      D.interno ? '<button id="doc-novo-proc" class="mt-3 px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-sm">＋ Cadastrar processo</button>' : '');
+  } else if (doc.proc === 'todos') {
+    corpo = docGrupoPorTipo(F) || blocoVazioCad('Nenhum documento com esses filtros.');
+  } else {
+    const pid = +doc.proc, p = docProc(pid), ss = F.filter(s => s.processos.includes(pid)), c = cob(pid);
+    const faltas = D.interno && c ? Object.entries(c.celulas).filter(([, x]) => x.status === 'falta' || x.status === 'dispensado').map(([t, x]) =>
+      `<div class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-md ${x.status === 'falta' ? 'bg-amber-50 text-amber-900' : 'bg-slate-50 text-slate-500'}">
+        <span>${x.status === 'falta' ? '⚠ Falta' : '— Dispensado'}: <b>${escapeHtml(docTipo(t).nome)}</b>${x.motivo ? ` · ${escapeHtml(x.motivo)}` : ''}</span><span class="flex-1"></span>
+        ${x.status === 'falta' ? `<button data-docpubtipo="${t}" class="text-cyan-700 hover:underline">publicar</button><button data-docdisp="${t}" class="text-slate-600 hover:underline">dispensar</button>`
+                               : `<button data-docreativa="${t}" class="text-cyan-700 hover:underline">voltar a exigir</button>`}</div>`).join('') : '';
+    corpo = `<div class="flex items-center gap-2 mb-1"><h3 class="font-totvs text-totvs-petroleo">${p?.tipo === 'ligacao' ? '⇄ ' : ''}${escapeHtml(p?.nome || '')}</h3>
+        ${c && c.exigidos ? `<span class="text-xs ${c.ok === c.exigidos ? 'text-emerald-700' : 'text-amber-700'}">${c.ok} de ${c.exigidos} obrigatórios</span>` : ''}</div>
+      ${faltas ? `<div class="space-y-1 mb-2">${faltas}</div>` : ''}
+      ${docGrupoPorTipo(ss) || blocoVazioCad('Nenhum documento neste processo ainda.')}`;
+  }
+  return `<div class="flex gap-4 items-start"><nav class="w-64 shrink-0 bg-white border border-slate-200 rounded-lg py-2 sticky top-2">${nav}</nav>
+    <div class="flex-1 min-w-0">${corpo}</div></div>`;
+}
+
+function docViewMatriz() {
+  const D = doc.d, procs = D.processos.filter(p => p.tipo === 'processo');
+  const tipos = D.tipos.filter(t => t.obrigatorio || (D.cobertura || []).some(c => c.celulas[t.codigo]));
+  const cel = (c, t) => {
+    const x = c?.celulas[t.codigo];
+    if (!x) return '<td class="px-2 py-2 text-center text-slate-300">·</td>';
+    if (x.status === 'ok') return `<td class="px-1.5 py-1.5"><button data-docproc="${c.processo_id}" class="w-full rounded-md px-2 py-1.5 text-xs font-semibold bg-emerald-100 text-emerald-800" title="${x.series.length} documento(s)${x.cliente ? ' · liberado ao cliente' : ''}">✓ ${x.series.length}${x.cliente ? ' 👁' : ''}</button></td>`;
+    if (x.status === 'dispensado') return `<td class="px-1.5 py-1.5"><button data-docreativa="${t.codigo}" data-docp="${c.processo_id}" class="w-full rounded-md px-2 py-1.5 text-xs bg-slate-100 text-slate-500" title="Dispensado: ${escapeHtml(x.motivo || '')} — clique para voltar a exigir">dispensado</button></td>`;
+    return `<td class="px-1.5 py-1.5"><button data-docdisp="${t.codigo}" data-docp="${c.processo_id}" class="w-full rounded-md px-2 py-1.5 text-xs font-semibold bg-rose-100 text-rose-700" title="Falta — clique para dispensar com motivo">✗ falta</button></td>`;
+  };
+  const linhas = procs.map(p => { const c = (D.cobertura || []).find(x => x.processo_id === p.id);
+    return `<tr class="border-t border-slate-100"><td class="px-3 py-2 text-sm font-medium text-totvs-petroleo whitespace-nowrap">${escapeHtml(p.nome)}
+      ${p.grupo !== 'principal' ? '<span class="text-[10px] text-slate-400">compl.</span>' : ''}</td>
+      <td class="px-2 py-2 text-center text-xs ${c && c.ok === c.exigidos ? 'text-emerald-700' : 'text-amber-700'}">${c ? `${c.ok}/${c.exigidos}` : ''}</td>${tipos.map(t => cel(c, t)).join('')}</tr>`; }).join('');
+  const matriz = `<table class="w-full text-sm"><thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 text-left">
+      <th class="px-3 py-2">Tipo de documento</th><th class="px-3 py-2">Obrigatório</th><th class="px-3 py-2">Quem vê</th><th class="px-3 py-2">Formatos</th></tr></thead><tbody>
+      ${D.tipos.map(t => `<tr class="border-t border-slate-100"><td class="px-3 py-1.5"><b class="text-totvs-petroleo">${escapeHtml(t.nome)}</b><div class="text-xs text-slate-500">${escapeHtml(t.descricao || '')}</div></td>
+        <td class="px-3 py-1.5 text-xs">${t.obrigatorio ? '✅ todo processo' : '—'}</td>
+        <td class="px-3 py-1.5 text-xs">${t.nivel_max === 'cliente' ? 'Consultoria + cliente <span class="text-slate-400">(após liberar)</span>' : '<b>Só consultoria</b> <span class="text-slate-400">(trava)</span>'}</td>
+        <td class="px-3 py-1.5 text-xs text-slate-500">${(t.formatos || []).map(f => f.toUpperCase()).join(' · ')}</td></tr>`).join('')}</tbody></table>`;
+  return `<div class="overflow-x-auto bg-white border border-slate-200 rounded-lg"><table class="w-full min-w-[720px]">
+      <thead><tr class="text-[11px] uppercase tracking-wider text-slate-400 text-left"><th class="px-3 py-2">Processo</th><th class="px-2 py-2 text-center">Obrig.</th>
+      ${tipos.map(t => `<th class="px-2 py-2 text-center" title="${escapeHtml(t.descricao || '')}">${escapeHtml(t.nome)}${t.obrigatorio ? ' *' : ''}</th>`).join('')}</tr></thead>
+      <tbody>${linhas || '<tr><td class="px-3 py-4 text-sm text-slate-400">Sem processos cadastrados.</td></tr>'}</tbody></table></div>
+    <p class="text-xs text-slate-500 mt-1">* obrigatório em todo processo (dispensável com motivo). ✓ n = documentos vigentes · 👁 = já liberado ao cliente.</p>
+    <p class="text-[11px] uppercase tracking-wider text-slate-400 mt-5 mb-1">Matriz de documentos — o que gerar e quem vê</p>
+    <div class="overflow-x-auto bg-white border border-slate-200 rounded-lg">${matriz}</div>`;
+}
+
+function desenhaDocs() {
+  const D = doc.d; if (!D) return;
+  docKpis();
+  $$('#tab-documentos .doc-v').forEach(b => {
+    const on = b.dataset.docv === doc.view;
+    b.classList.toggle('border-totvs-blue', on); b.classList.toggle('font-semibold', on);
+    b.classList.toggle('text-totvs-petroleo', on); b.classList.toggle('border-transparent', !on); b.classList.toggle('text-slate-500', !on);
+  });
+  $('#doc-filtros').classList.toggle('hidden', doc.view === 'matriz');
+  const box = $('#doc-conteudo');
+  const nota = D.interno ? '' : '<p class="mb-3 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">Documentos do projeto liberados pela Consultoria TOTVS SC, organizados por processo. Clique em um formato para abrir.</p>';
+  if (doc.view === 'matriz' && D.interno) box.innerHTML = docViewMatriz();
+  else if (doc.view === 'todos') box.innerHTML = nota + (docGrupoPorTipo(docFiltradas()) || blocoVazioCad('Nenhum documento com esses filtros.'));
+  else box.innerHTML = nota + docViewProcesso();
+  docLiga(box);
+}
+
+function docLiga(box) {
+  box.querySelectorAll('[data-docabre]').forEach(b => b.onclick = () => abreDocViewer(+b.dataset.docabre));
+  box.querySelectorAll('[data-docproc]').forEach(b => b.onclick = () => { doc.proc = b.dataset.docproc === 'todos' ? 'todos' : +b.dataset.docproc; doc.view = 'processo'; desenhaDocs(); });
+  box.querySelectorAll('[data-docvis]').forEach(sel => sel.onchange = () => docPost(`versao/${sel.dataset.docvis}`, { visibilidade: sel.value }));
+  box.querySelectorAll('[data-docvig]').forEach(b => b.onclick = () => docPost(`versao/${b.dataset.docvig}`, { vigente: true }));
+  box.querySelectorAll('[data-docdel]').forEach(b => b.onclick = () => { if (confirm('Excluir esta versão? O arquivo deixa de aparecer para todos.')) docPost(`versao/${b.dataset.docdel}`, { excluir: true }); });
+  box.querySelectorAll('[data-docarq]').forEach(b => b.onclick = () => { if (confirm('Arquivar este documento (todas as versões)?')) docPost(`serie/${b.dataset.docarq}`, { ativo: false }); });
+  box.querySelectorAll('[data-docnova]').forEach(b => b.onclick = () => abreDocPublicar({ serieId: +b.dataset.docnova }));
+  box.querySelectorAll('[data-docedit]').forEach(b => b.onclick = () => abreDocEditarSerie(+b.dataset.docedit));
+  box.querySelectorAll('[data-docpubtipo]').forEach(b => b.onclick = () => abreDocPublicar({ tipo: b.dataset.docpubtipo, processo: doc.proc }));
+  box.querySelectorAll('[data-docdisp]').forEach(b => b.onclick = () => {
+    const pid = +(b.dataset.docp || doc.proc), motivo = prompt(`Dispensar "${docTipo(b.dataset.docdisp).nome}" em ${docProc(pid)?.nome}? Motivo:`, 'Sem customização neste processo');
+    if (motivo) docPost('dispensa', { processo_id: pid, tipo: b.dataset.docdisp, motivo });
+  });
+  box.querySelectorAll('[data-docreativa]').forEach(b => b.onclick = () => docPost('dispensa', { processo_id: +(b.dataset.docp || doc.proc), tipo: b.dataset.docreativa, remover: true }));
+  const np = box.querySelector('#doc-novo-proc'); if (np) np.onclick = abreDocNovoProcesso;
+}
+
+async function docPost(rota, corpo) {
+  try { await api(`/api/docs/${docEnc()}/${rota}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) }); }
+  catch (e) { alert(e.message); }
+  await carregaDocs(doc.customer);
+}
+
+// ── Visualizador: HTML abre a página, imagem abre a imagem, PDF no leitor ──
+function docMdHtml(md) {
+  const inl = t => escapeHtml(t).replace(/`([^`]+)`/g, '<code class="px-1 bg-slate-100 rounded">$1</code>').replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>').replace(/\*([^*]+)\*/g, '<i>$1</i>');
+  const L = md.replace(/\r/g, '').split('\n'), out = [];
+  for (let i = 0; i < L.length; i++) {
+    const l = L[i];
+    if (/^\s*\|/.test(l)) {
+      const rows = []; while (i < L.length && /^\s*\|/.test(L[i])) rows.push(L[i++]); i--;
+      const cel = r => r.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+      const corpo = rows.filter(r => !/^\s*\|[\s:|-]+\|\s*$/.test(r));
+      out.push(`<table class="my-2 text-xs border-collapse">${corpo.map((r, k) => `<tr>${cel(r).map(c => `<${k ? 'td' : 'th'} class="border border-slate-200 px-2 py-1 text-left align-top">${inl(c)}</${k ? 'td' : 'th'}>`).join('')}</tr>`).join('')}</table>`);
+    } else if (/^#{1,4}\s/.test(l)) { const n = l.match(/^#+/)[0].length; out.push(`<h${n + 1} class="font-totvs text-totvs-petroleo mt-4 mb-1 ${n === 1 ? 'text-xl' : n === 2 ? 'text-lg' : 'text-base'}">${inl(l.replace(/^#+\s/, ''))}</h${n + 1}>`); }
+    else if (/^\s*[-*]\s/.test(l)) out.push(`<li class="ml-5 list-disc">${inl(l.replace(/^\s*[-*]\s/, ''))}</li>`);
+    else if (/^\s*\d+\.\s/.test(l)) out.push(`<li class="ml-5 list-decimal">${inl(l.replace(/^\s*\d+\.\s/, ''))}</li>`);
+    else if (/^>\s?/.test(l)) out.push(`<blockquote class="border-l-4 border-totvs-blue pl-3 text-slate-600 my-1">${inl(l.replace(/^>\s?/, ''))}</blockquote>`);
+    else if (l.trim()) out.push(`<p class="my-1">${inl(l)}</p>`);
+  }
+  return out.join('\n');
+}
+
+async function abreDocViewer(vid) {
+  const s = doc.d.series.find(x => x.versoes.some(v => v.id === vid)); if (!s) return;
+  const v = s.versoes.find(x => x.id === vid);
+  if (v.formato === 'link') { window.open(v.url_externa, '_blank', 'noopener'); return; }
+  const url = docArqUrl(vid);
+  const fundo = document.createElement('div');
+  fundo.id = 'doc-viewer';
+  fundo.className = 'fixed inset-0 z-50 bg-black/60 flex flex-col p-3 md:p-6';
+  fundo.innerHTML = `<div class="bg-white rounded-t-lg px-4 py-2.5 flex items-center gap-3">
+      <div class="flex-1 min-w-0"><div class="font-totvs text-totvs-petroleo truncate">${escapeHtml(s.titulo)}</div>
+        <div class="text-xs text-slate-500">${escapeHtml(docTipo(s.tipo).nome)} · ${v.formato.toUpperCase()}${v.versao ? ' · ' + escapeHtml(v.versao) : ''}${v.data_documento ? ' · ' + fmtData(String(v.data_documento).slice(0, 10)) : ''}</div></div>
+      ${(v.formato === 'jpeg' || v.formato === 'png' || v.formato === 'svg') ? '<button data-zoom class="px-2.5 py-1 rounded-md border border-slate-300 text-xs hover:bg-slate-50">🔍 Tamanho real</button>' : ''}
+      <a href="${url}" target="_blank" rel="noopener" class="px-2.5 py-1 rounded-md border border-slate-300 text-xs hover:bg-slate-50">↗ Nova aba</a>
+      <a href="${docArqUrl(vid, true)}" class="px-2.5 py-1 rounded-md border border-slate-300 text-xs hover:bg-slate-50">⬇ Baixar</a>
+      <button data-fechar class="text-slate-400 hover:text-slate-700 text-2xl leading-none px-1" title="Fechar (Esc)">×</button></div>
+    <div data-corpo class="flex-1 min-h-0 bg-slate-100 rounded-b-lg overflow-auto"></div>`;
+  document.body.appendChild(fundo);
+  const corpo = fundo.querySelector('[data-corpo]');
+  const fecha = () => { fundo.remove(); document.removeEventListener('keydown', esc); };
+  const esc = e => { if (e.key === 'Escape') fecha(); };
+  document.addEventListener('keydown', esc);
+  fundo.querySelector('[data-fechar]').onclick = fecha;
+  fundo.addEventListener('click', e => { if (e.target === fundo) fecha(); });
+  if (v.formato === 'html') {
+    // sandbox SEM allow-same-origin: a página roda em origem opaca e não
+    // enxerga a sessão do dashboard (o servidor também manda CSP sandbox).
+    corpo.innerHTML = `<iframe src="${url}" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads allow-forms" class="w-full h-full bg-white border-0" title="${escapeHtml(s.titulo)}"></iframe>`;
+  } else if (v.formato === 'pdf') {
+    corpo.innerHTML = `<iframe src="${url}" class="w-full h-full bg-white border-0" title="${escapeHtml(s.titulo)}"></iframe>`;
+  } else if (['jpeg', 'png', 'svg'].includes(v.formato)) {
+    corpo.classList.add('flex', 'items-start', 'justify-center');
+    corpo.innerHTML = `<img src="${url}" alt="${escapeHtml(s.titulo)}" class="max-w-full h-auto m-auto bg-white shadow cursor-zoom-in">`;
+    const img = corpo.querySelector('img'), z = fundo.querySelector('[data-zoom]');
+    const alterna = () => { const real = img.classList.toggle('max-w-none'); img.classList.toggle('max-w-full', !real); img.classList.toggle('cursor-zoom-out', real); z.textContent = real ? '🔍 Ajustar à tela' : '🔍 Tamanho real'; };
+    img.onclick = alterna; z.onclick = alterna;
+  } else {
+    corpo.innerHTML = '<p class="p-6 text-sm text-slate-400">Carregando…</p>';
+    try {
+      const r = await fetch(url); if (!r.ok) throw new Error('HTTP ' + r.status);
+      const txt = await r.text();
+      corpo.innerHTML = `<article class="max-w-4xl mx-auto bg-white my-4 p-6 rounded shadow text-sm text-slate-800">${v.formato === 'md' ? docMdHtml(txt) : `<pre class="whitespace-pre-wrap font-sans">${escapeHtml(txt)}</pre>`}</article>`;
+    } catch (e) { corpo.innerHTML = `<p class="p-6 text-sm text-rose-600">Não foi possível abrir: ${escapeHtml(e.message)}</p>`; }
+  }
+}
+
+// ── Publicar (arquivo ou link) ────────────────────────────────────────────
+function docChecksProcessos(marcados) {
+  const D = doc.d, grupo = (tit, ls) => ls.length ? `<p class="text-[10px] uppercase tracking-wider text-slate-400 mt-1">${tit}</p>
+    <div class="grid grid-cols-2 gap-x-3">${ls.map(p => `<label class="flex items-center gap-1.5 text-xs py-0.5"><input type="checkbox" data-docpck value="${p.id}" ${marcados.includes(p.id) ? 'checked' : ''}>${p.tipo === 'ligacao' ? '⇄ ' : ''}${escapeHtml(p.nome)}</label>`).join('')}</div>` : '';
+  return grupo('Processos', D.processos.filter(p => p.tipo === 'processo')) + grupo('Integrações entre processos', D.processos.filter(p => p.tipo === 'ligacao'));
+}
+
+function abreDocPublicar({ serieId = null, tipo = '', processo = null } = {}) {
+  const D = doc.d, s = serieId ? D.series.find(x => x.id === serieId) : null;
+  const opTipo = D.tipos.map(t => `<option value="${t.codigo}" ${t.codigo === tipo ? 'selected' : ''}>${escapeHtml(t.nome)}${t.nivel_max === 'cliente' ? '' : ' — só consultoria'}</option>`).join('');
+  const m = modal(s ? 'Nova versão — ' + escapeHtml(s.titulo) : 'Publicar documento', `
+    <label class="block"><span class="text-xs text-slate-500">Arquivo (HTML, JPEG, PNG, SVG, PDF, MD, TXT — até ${docTam(D.max_bytes)})</span>
+      <input id="docp-arq" type="file" accept=".html,.htm,.jpg,.jpeg,.png,.svg,.pdf,.md,.txt" class="mt-1 block w-full text-sm"></label>
+    <label class="block"><span class="text-xs text-slate-500">…ou link externo (vídeo, Drive, TDN)</span>
+      <input id="docp-url" type="url" placeholder="https://" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md"></label>
+    ${s ? '' : `${campo('docp-titulo', 'Título', '')}
+    <label class="block"><span class="text-xs text-slate-500">Tipo (da matriz)</span><select id="docp-tipo" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md bg-white"><option value="">Escolha…</option>${opTipo}</select></label>
+    <div><span class="text-xs text-slate-500">Processos</span><div class="mt-1 max-h-48 overflow-y-auto border border-slate-200 rounded-md px-2 py-1">${docChecksProcessos(processo && processo !== 'todos' ? [+processo] : [])}</div></div>`}
+    <div class="grid grid-cols-2 gap-3">${campo('docp-versao', 'Versão', '', 'text', 'ex.: v2 · 30/10')}${campo('docp-data', 'Data do documento', new Date().toISOString().slice(0, 10), 'date')}</div>
+    <label class="block"><span class="text-xs text-slate-500">Visibilidade</span><select id="docp-vis" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md bg-white">
+      <option value="consultoria" selected>Consultoria (equipe TOTVS)</option><option value="rascunho">Rascunho (só eu)</option>
+      ${D.pode_liberar ? '<option value="cliente">Liberar ao cliente agora</option>' : ''}</select></label>
+    <p class="text-xs text-slate-500">A nova versão substitui a vigente do <b>mesmo formato</b> (o HTML novo não tira a imagem do ar). A anterior fica no histórico.</p>`, 'Publicar');
+  larguraModal(m, 'max-w-2xl');
+  m.aoConfirmar(async () => {
+    const fd = new FormData(), arq = m.campo('docp-arq').files[0], url = m.campo('docp-url').value.trim();
+    if (!arq && !url) return m.erro('Escolha um arquivo ou informe o link.');
+    if (arq && arq.size > D.max_bytes) return m.erro(`Arquivo de ${docTam(arq.size)} — o teto é ${docTam(D.max_bytes)}. Comprima o PDF ou publique como link.`);
+    if (arq) fd.append('arquivo', arq); else fd.append('url', url);
+    if (s) fd.append('serie_id', s.id);
+    else {
+      fd.append('titulo', m.campo('docp-titulo').value.trim()); fd.append('tipo', m.campo('docp-tipo').value);
+      fd.append('processos', [...m.el.querySelectorAll('[data-docpck]:checked')].map(c => c.value).join(','));
+    }
+    fd.append('versao', m.campo('docp-versao').value.trim()); fd.append('data_documento', m.campo('docp-data').value);
+    fd.append('visibilidade', m.campo('docp-vis').value);
+    m.ocupado(true, 'Publicando…');
+    try { await api(`/api/docs/${docEnc()}/publicar`, { method: 'POST', body: fd }); m.fecha(); await carregaDocs(doc.customer); }
+    catch (e) { m.erro(e.message); m.ocupado(false, 'Publicar'); }
+  });
+}
+
+function abreDocEditarSerie(sid) {
+  const s = doc.d.series.find(x => x.id === sid); if (!s) return;
+  const m = modal('Editar documento', `${campo('doce-titulo', 'Título', s.titulo)}
+    <label class="block"><span class="text-xs text-slate-500">Descrição (aparece no cartão)</span><textarea id="doce-desc" rows="2" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">${escapeHtml(s.descricao || '')}</textarea></label>
+    <div><span class="text-xs text-slate-500">Processos</span><div class="mt-1 max-h-56 overflow-y-auto border border-slate-200 rounded-md px-2 py-1">${docChecksProcessos(s.processos)}</div></div>`, 'Salvar');
+  larguraModal(m, 'max-w-2xl');
+  m.aoConfirmar(async () => {
+    m.ocupado(true, 'Salvando…');
+    try {
+      await api(`/api/docs/${docEnc()}/serie/${sid}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
+        titulo: m.campo('doce-titulo').value, descricao: m.campo('doce-desc').value,
+        processos: [...m.el.querySelectorAll('[data-docpck]:checked')].map(c => +c.value) }) });
+      m.fecha(); await carregaDocs(doc.customer);
+    } catch (e) { m.erro(e.message); m.ocupado(false, 'Salvar'); }
+  });
+}
+
+function abreDocPacote() {
+  const m = modal('Importar pacote de documentos', `
+    <p>Um <b>.zip</b> com <code>manifest.json</code> na raiz e os arquivos (até ${docTam(doc.d.max_pacote)} por pacote). Tudo entra como <b>Consultoria</b>; liberar ao cliente é sempre um passo seu. Reimportar o mesmo pacote não duplica.</p>
+    <input id="docz-arq" type="file" accept=".zip" class="block w-full text-sm">
+    <details><summary class="text-xs text-cyan-700 cursor-pointer">formato do manifest.json</summary><pre class="text-[11px] bg-slate-50 p-2 rounded mt-1 overflow-x-auto">{ "series": [ {
+    "serie": "fluxo-painel-projetos", "tipo": "fluxo",
+    "titulo": "Fluxo sistêmico do Painel de Projetos",
+    "processos": ["PNL"],            ← id, prefixo ou nome
+    "versoes": [ { "arquivo": "fluxo.html", "versao": "v1",
+                   "data": "2026-10-30", "vigente": true } ] } ] }</pre></details>`, 'Importar');
+  m.aoConfirmar(async () => {
+    const f = m.campo('docz-arq').files[0]; if (!f) return m.erro('Escolha o .zip.');
+    if (f.size > doc.d.max_pacote) return m.erro(`Pacote de ${docTam(f.size)} — o teto é ${docTam(doc.d.max_pacote)}. Divida em mais de um zip.`);
+    const fd = new FormData(); fd.append('pacote', f);
+    m.ocupado(true, 'Importando…');
+    try { const r = await api(`/api/docs/${docEnc()}/pacote`, { method: 'POST', body: fd });
+      m.fecha(); await carregaDocs(doc.customer);
+      alert(`Pacote importado: ${r.series} documento(s), ${r.versoes_novas} versão(ões) nova(s)${r.ja_existiam ? `, ${r.ja_existiam} já existia(m)` : ''}.`); }
+    catch (e) { m.erro(e.message); m.ocupado(false, 'Importar'); }
+  });
+}
+
+function abreDocNovoProcesso() {
+  const m = modal('Cadastrar Processo Principal', `${campo('docn-nome', 'Nome', '', 'text', 'ex.: Contratos, Comissões e Metas, CNAB')}
+    <div class="grid grid-cols-2 gap-3">${campo('docn-pref', 'Prefixo (opcional)', '', 'text', '3–4 letras, ex.: CTR')}
+    <label class="block"><span class="text-xs text-slate-500">Grupo</span><select id="docn-grupo" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md bg-white"><option value="principal">Principal</option><option value="complementar">Complementar</option></select></label></div>
+    <p class="text-xs text-slate-500">É a mesma lista do Radar de Definições — o processo aparece lá também.</p>`, 'Cadastrar');
+  m.aoConfirmar(async () => {
+    m.ocupado(true, 'Salvando…');
+    try { await api(`/api/docs/${docEnc()}/processo`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ nome: m.campo('docn-nome').value, prefixo: m.campo('docn-pref').value, grupo: m.campo('docn-grupo').value }) });
+      m.fecha(); await carregaDocs(doc.customer); }
+    catch (e) { m.erro(e.message); m.ocupado(false, 'Cadastrar'); }
+  });
+}
+
+$$('#tab-documentos .doc-v').forEach(b => b.addEventListener('click', () => { doc.view = b.dataset.docv; desenhaDocs(); }));
+['doc-q', 'doc-tipo', 'doc-so-cliente'].forEach(id => $('#' + id).addEventListener(id === 'doc-q' ? 'input' : 'change', desenhaDocs));
+$('#doc-reload').addEventListener('click', () => carregaDocs(state.selected?.cli));
+$('#doc-publicar').addEventListener('click', () => doc.d && abreDocPublicar({ processo: doc.proc }));
+$('#doc-pacote').addEventListener('click', () => doc.d && abreDocPacote());
+
 async function initTransicao() {
   const cli = state.selected?.cli;
   $('#tr-cliente-nome').textContent =
@@ -7589,6 +8018,7 @@ const RELATORIOS = {
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
   radar:     { titulo: 'Radar de Definições',     alvo: '#rad-conteudo' },
   pendencias: { titulo: 'Pendências e Retornos', alvo: '#tab-pendencias' },
+  documentos: { titulo: 'Documentação', alvo: '#doc-conteudo' },
 };
 
 /** Cabeçalho/rodapé comuns — o que identifica de QUEM e de QUANDO é o número.

@@ -20,7 +20,7 @@ Porte do Projetos/server.py + pci_client.py para função serverless.
 from __future__ import annotations
 
 import base64, csv, email.message, hashlib, hmac, imaplib, io, json, os, re, secrets, \
-    time, unicodedata, urllib.parse
+    time, unicodedata, urllib.parse, zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -316,6 +316,11 @@ ABAS = [
     # itens do Radar marcados "visível ao cliente" e a prontidão por processo
     # do Diagnóstico (sem SQL, amostra nem nota interna).
     {"id": "pendencias", "label": "Pendências e Retornos", "cliente": True},
+    # Documentação (30/10/2026): casa única da documentação por processo
+    # (substitui a Página Indexada e absorve o Portal de Processos). Liberável:
+    # o cliente só recebe as versões vigentes marcadas "cliente" — o recorte é
+    # do servidor (_doc_payload), não da tela.
+    {"id": "documentos", "label": "Documentação", "cliente": True},
 ]
 ABAS_IDS = [a["id"] for a in ABAS]
 # 23/10/2026: TODAS as abas passaram a ser liberáveis para o perfil cliente
@@ -11805,6 +11810,586 @@ def api_pendencias(customer):
                                           "where customer=%s order by ordem", (customer,)),
                   "processos": procs, "itens": itens, "mit006": mit,
                   "checks": _diag_payload(customer, completo=False)})
+
+
+# ── DOCUMENTAÇÃO (aba "documentos") ─────────────────────────────────────────
+# Spec: docs/specs/2026-10-30-aba-documentacao.md · SQL: docs/sql/2026-10-30-documentacao.sql
+#
+# Casa única da documentação por processo. A navegação é a dos Processos
+# Principais do Radar (cockpit.radar_processos) — mesma taxonomia, mesmo nome.
+#
+# TRÊS TRAVAS, e todas no servidor:
+#   1. o TIPO define até onde o documento pode chegar (doc_tipos.nivel_max):
+#      parecer, desenho técnico e registro interno nunca vão ao cliente;
+#   2. só ADMIN libera ao cliente (visibilidade 'cliente');
+#   3. o cliente só recebe a versão VIGENTE e liberada — _doc_payload recorta
+#      os campos e a rota do arquivo confere de novo (link copiado não fura).
+#
+# Arquivo mora em bytea (doc_arquivos), deduplicado por sha256. Teto de 3,5 MB
+# por arquivo: a função da Vercel não devolve corpo acima de 4,5 MB. PDF maior
+# → comprimir (150 dpi) ou publicar como link externo.
+DOC_FORMATOS = {
+    "html": "text/html; charset=utf-8", "jpeg": "image/jpeg", "png": "image/png",
+    "svg": "image/svg+xml", "pdf": "application/pdf",
+    "md": "text/markdown; charset=utf-8", "txt": "text/plain; charset=utf-8",
+}
+DOC_EXT = {".html": "html", ".htm": "html", ".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png",
+           ".svg": "svg", ".pdf": "pdf", ".md": "md", ".txt": "txt"}
+DOC_VIS = ("rascunho", "consultoria", "cliente")
+DOC_MAX_BYTES = 3_500_000
+DOC_MAX_PACOTE = 4_400_000
+# Formatos que executam script se abertos direto numa aba: vão com CSP sandbox
+# (origem opaca — não leem cookie nem chamam /api com a sessão do usuário).
+DOC_SANDBOX = {"html", "svg"}
+DOC_CSP = ("sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox "
+           "allow-modals allow-downloads allow-forms")
+
+
+def _doc_formato(nome, url=None):
+    """Formato pelo nome do arquivo. Sem extensão (as transcrições do Gemini
+    chegam assim) vira txt; extensão desconhecida devolve None."""
+    if url and not nome:
+        return "link"
+    ext = os.path.splitext((nome or "").strip().lower())[1]
+    if not ext:
+        return "txt"
+    return DOC_EXT.get(ext)
+
+
+def _doc_serie_slug(titulo):
+    s = unicodedata.normalize("NFKD", titulo or "").encode("ascii", "ignore").decode().lower()
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", s)).strip("-")[:80] or "documento"
+
+
+def _doc_vis_erro(vis, nivel_max, admin):
+    """None = pode. Ordem importa: a trava do TIPO vale até para admin."""
+    if vis not in DOC_VIS:
+        return "Visibilidade inválida."
+    if vis == "cliente" and nivel_max != "cliente":
+        return "Este tipo de documento é interno da consultoria — não pode ser liberado ao cliente."
+    if vis == "cliente" and not admin:
+        return "Só administrador libera documento para o cliente."
+    return None
+
+
+def _doc_data(v):
+    v = (v or "").strip() if isinstance(v, str) else v
+    if not v:
+        return None, None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v)):
+        return None, "Data inválida (use AAAA-MM-DD)."
+    return str(v), None
+
+
+def _doc_ids(v):
+    """processos chegam como lista, '1,2,3' ou JSON — devolve lista de int."""
+    if isinstance(v, str):
+        v = v.strip()
+        if v.startswith("["):
+            try:
+                v = json.loads(v)
+            except ValueError:
+                v = []
+        else:
+            v = re.split(r"[,;\s]+", v)
+    out = []
+    for x in v or []:
+        try:
+            out.append(int(x))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(out))
+
+
+def _doc_cobertura(processos, series, tipos, dispensas):
+    """Matriz processo × tipo obrigatório. Célula: 'ok' (tem versão vigente),
+    'falta', 'dispensado'. Só processos (não ligações) entram. 'cliente' diz
+    se ao menos uma versão vigente da célula já foi liberada ao cliente."""
+    obrig = [t["codigo"] for t in tipos if t["obrigatorio"]]
+    disp = {(d["processo_id"], d["tipo"]): d for d in dispensas}
+    linhas = []
+    for p in processos:
+        if p.get("tipo") != "processo":
+            continue
+        cel, ok_n, req_n = {}, 0, 0
+        for t in [x["codigo"] for x in tipos]:
+            ss = [s for s in series if s["tipo"] == t and p["id"] in s["processos"]
+                  and any(v["vigente"] for v in s["versoes"])]
+            if ss:
+                st = "ok"
+            elif (p["id"], t) in disp:
+                st = "dispensado"
+            elif t in obrig:
+                st = "falta"
+            else:
+                st = None
+            if t in obrig and st != "dispensado":
+                req_n += 1
+                ok_n += st == "ok"
+            if st:
+                cel[t] = {"status": st, "series": [s["id"] for s in ss],
+                          "cliente": any(v["vigente"] and v["visibilidade"] == "cliente"
+                                         for s in ss for v in s["versoes"]),
+                          "motivo": (disp.get((p["id"], t)) or {}).get("motivo")}
+        linhas.append({"processo_id": p["id"], "celulas": cel, "ok": ok_n, "exigidos": req_n})
+    return linhas
+
+
+def _doc_recorte_cliente(series, tipos):
+    """O que o CLIENTE recebe: só versão vigente + liberada + de tipo liberável,
+    sem quem publicou, origem, nota interna nem histórico."""
+    pode = {t["codigo"] for t in tipos if t["nivel_max"] == "cliente"}
+    out = []
+    for s in series:
+        if s["tipo"] not in pode:
+            continue
+        vs = [{k: v[k] for k in ("id", "formato", "versao", "data_documento", "tamanho",
+                                  "nome_arquivo", "url_externa", "liberado_em") if k in v}
+              for v in s["versoes"] if v["vigente"] and v["visibilidade"] == "cliente"]
+        if vs:
+            out.append({k: s[k] for k in ("id", "serie", "tipo", "titulo", "descricao",
+                                          "ordem", "processos")} | {"versoes": vs})
+    return out
+
+
+def _doc_load(customer, email):
+    tipos = q("select codigo, nome, descricao, obrigatorio, nivel_max, formatos, ordem "
+              "from cockpit.doc_tipos where ativo order by ordem")
+    procs = q("select id, tipo, grupo, nome, prefixo, ordem, origem_id, destino_id "
+              "from cockpit.radar_processos where customer=%s and ativo order by tipo desc, ordem",
+              (customer,))
+    series = q("""select s.id, s.serie, s.tipo, s.titulo, s.descricao, s.ordem, s.updated_at,
+                         coalesce((select array_agg(sp.processo_id order by sp.processo_id)
+                                     from cockpit.doc_serie_processos sp where sp.serie_id=s.id),
+                                  '{}') as processos
+                    from cockpit.doc_series s
+                   where s.customer=%s and s.ativo order by s.ordem, s.titulo""", (customer,))
+    vers = q("""select v.id, v.serie_id, v.formato, v.versao, v.data_documento, v.vigente,
+                       v.visibilidade, v.url_externa, v.nome_arquivo, v.origem, v.nota,
+                       v.publicado_por, v.publicado_em, v.liberado_por, v.liberado_em,
+                       a.tamanho
+                  from cockpit.doc_versoes v
+                  join cockpit.doc_series s on s.id = v.serie_id
+             left join cockpit.doc_arquivos a on a.id = v.arquivo_id
+                 where s.customer=%s and s.ativo
+                   and (v.visibilidade <> 'rascunho' or lower(coalesce(v.publicado_por,''))=%s)
+              order by v.vigente desc, v.publicado_em desc""", (customer, (email or "").lower()))
+    por = {}
+    for v in vers:
+        por.setdefault(v["serie_id"], []).append(v)
+    for s in series:
+        s["processos"] = list(s["processos"] or [])
+        s["versoes"] = por.get(s["id"], [])
+    series = [s for s in series if s["versoes"]]
+    return tipos, procs, series
+
+
+def _doc_serie_do_cliente(customer, serie_id):
+    return q("select s.id, s.tipo, t.nivel_max from cockpit.doc_series s "
+             "join cockpit.doc_tipos t on t.codigo=s.tipo where s.id=%s and s.customer=%s",
+             (serie_id, customer), one=True)
+
+
+def _doc_versao_do_cliente(customer, vid):
+    return q("""select v.*, s.customer, s.tipo, s.titulo, t.nivel_max
+                  from cockpit.doc_versoes v
+                  join cockpit.doc_series s on s.id=v.serie_id
+                  join cockpit.doc_tipos t on t.codigo=s.tipo
+                 where v.id=%s and s.customer=%s and s.ativo""", (vid, customer), one=True)
+
+
+def _doc_grava_arquivo(dados, formato):
+    sha = hashlib.sha256(dados).hexdigest()
+    r = q("""insert into cockpit.doc_arquivos (sha256, mime, tamanho, conteudo)
+             values (%s,%s,%s,%s) on conflict (sha256) do nothing returning id""",
+          (sha, DOC_FORMATOS.get(formato, "application/octet-stream"), len(dados),
+           psycopg2.Binary(dados)), one=True)
+    if not r:
+        r = q("select id from cockpit.doc_arquivos where sha256=%s", (sha,), one=True)
+    return r["id"], sha
+
+
+def _doc_nova_versao(serie_id, formato, arquivo_id=None, url=None, versao=None, data=None,
+                     vigente=True, vis="consultoria", nome=None, origem=None, nota=None, por=None):
+    """Publica uma versão. Vigente = derruba a vigente anterior do MESMO formato
+    (o HTML novo não tira a imagem do ar). Mesmo arquivo já publicado na série e
+    formato não duplica: devolve a versão existente (importar duas vezes é seguro)."""
+    if arquivo_id:
+        ja = q("select id from cockpit.doc_versoes where serie_id=%s and formato=%s and arquivo_id=%s",
+               (serie_id, formato, arquivo_id), one=True)
+        if ja:
+            return ja["id"], False
+    if vigente:
+        execute("update cockpit.doc_versoes set vigente=false, updated_at=now() "
+                "where serie_id=%s and formato=%s and vigente", (serie_id, formato))
+    r = q("""insert into cockpit.doc_versoes (serie_id, formato, versao, data_documento, vigente,
+                visibilidade, arquivo_id, url_externa, nome_arquivo, origem, nota, publicado_por,
+                liberado_por, liberado_em)
+             values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, case when %s then now() end)
+             returning id""",
+          (serie_id, formato, versao, data, vigente, vis, arquivo_id, url, nome, origem, nota, por,
+           por if vis == "cliente" else None, vis == "cliente"), one=True)
+    execute("update cockpit.doc_series set updated_at=now() where id=%s", (serie_id,))
+    return r["id"], True
+
+
+def _doc_upsert_serie(customer, serie, tipo, titulo, descricao=None, processos=None, ordem=None, por=None):
+    r = q("""insert into cockpit.doc_series (customer, serie, tipo, titulo, descricao, ordem, criado_por)
+             values (%s,%s,%s,%s,%s,coalesce(%s,0),%s)
+             on conflict (customer, serie) do update set
+               tipo=excluded.tipo, titulo=excluded.titulo,
+               descricao=coalesce(excluded.descricao, cockpit.doc_series.descricao),
+               ordem=coalesce(%s, cockpit.doc_series.ordem), ativo=true, updated_at=now()
+             returning id""", (customer, serie, tipo, titulo, descricao, ordem, por, ordem), one=True)
+    if processos is not None:
+        _doc_liga_processos(customer, r["id"], processos)
+    return r["id"]
+
+
+def _doc_liga_processos(customer, serie_id, ids):
+    validos = {r["id"] for r in q("select id from cockpit.radar_processos where customer=%s and id = any(%s)",
+                                  (customer, list(ids) or [0]))}
+    execute("delete from cockpit.doc_serie_processos where serie_id=%s", (serie_id,))
+    for pid in sorted(validos):
+        execute("insert into cockpit.doc_serie_processos (serie_id, processo_id) values (%s,%s) "
+                "on conflict do nothing", (serie_id, pid))
+
+
+@app.get("/api/docs/<customer>")
+def api_docs(customer):
+    """Aba Documentação. Interno recebe tudo (histórico, visibilidade, matriz de
+    cobertura, dispensas); o cliente recebe o recorte de _doc_recorte_cliente."""
+    if (d := require_auth()):
+        return d
+    if (d := deny_aba(customer, "documentos")):
+        return d
+    email = current_user()
+    interno = eh_interno()
+    tipos, procs, series = _doc_load(customer, email)
+    if not interno:
+        series = _doc_recorte_cliente(series, tipos)
+        usados = {p for s in series for p in s["processos"]}
+        return _json({"ok": True, "interno": False,
+                      "tipos": [t for t in tipos if t["nivel_max"] == "cliente"],
+                      "processos": [p for p in procs if p["id"] in usados], "series": series})
+    disp = q("select processo_id, tipo, motivo, dispensado_por, dispensado_em "
+             "from cockpit.doc_dispensas where customer=%s", (customer,))
+    return _json({"ok": True, "interno": True, "pode_liberar": is_admin(email),
+                  "usuario": email, "max_bytes": DOC_MAX_BYTES, "max_pacote": DOC_MAX_PACOTE,
+                  "tipos": tipos, "processos": procs, "series": series, "dispensas": disp,
+                  "cobertura": _doc_cobertura(procs, series, tipos, disp)})
+
+
+@app.get("/api/docs/<customer>/arquivo/<int:vid>")
+def api_docs_arquivo(customer, vid):
+    """Entrega o arquivo. Confere de NOVO o que o payload já recortou — o link
+    pode ter sido copiado e aberto por quem não devia."""
+    if (d := require_auth()):
+        return d
+    if (d := deny_aba(customer, "documentos")):
+        return d
+    v = _doc_versao_do_cliente(customer, vid)
+    nao = _err(404, "Documento não encontrado.")
+    if not v or not v["arquivo_id"]:
+        return nao
+    if v["visibilidade"] == "rascunho" and (v["publicado_por"] or "").lower() != (current_user() or "").lower():
+        return nao
+    if not eh_interno() and not (v["vigente"] and v["visibilidade"] == "cliente"
+                                 and v["nivel_max"] == "cliente"):
+        return nao
+    a = q("select mime, conteudo from cockpit.doc_arquivos where id=%s", (v["arquivo_id"],), one=True)
+    if not a:
+        return nao
+    nome = v["nome_arquivo"] or f"documento-{vid}"
+    disp = "attachment" if request.args.get("baixar") else "inline"
+    resp = Response(bytes(a["conteudo"]), mimetype=a["mime"].split(";")[0])
+    resp.headers["Content-Type"] = a["mime"]
+    resp.headers["Content-Disposition"] = (
+        f"{disp}; filename=\"{_slug(nome) or 'documento'}\"; "
+        f"filename*=UTF-8''{urllib.parse.quote(nome)}")
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cache-Control"] = "private, max-age=300"
+    if v["formato"] in DOC_SANDBOX:
+        resp.headers["Content-Security-Policy"] = DOC_CSP
+    return resp
+
+
+@app.post("/api/docs/<customer>/publicar")
+def api_docs_publicar(customer):
+    """Publica um arquivo (multipart 'arquivo') ou link ('url') numa série
+    existente (serie_id) ou nova (titulo + tipo + processos)."""
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    f = request.form
+    email = current_user()
+    url = (f.get("url") or "").strip() or None
+    up = request.files.get("arquivo")
+    if not up and not url:
+        return _err(400, "Escolha um arquivo ou informe o link.")
+    if url and not re.match(r"https?://", url):
+        return _err(400, "O link precisa começar com http:// ou https://.")
+    nome = (up.filename if up else None) or None
+    formato = _doc_formato(nome, url)
+    if not formato:
+        return _err(400, "Formato não aceito. Use HTML, JPEG, PNG, SVG, PDF, MD ou TXT.")
+    data, e = _doc_data(f.get("data_documento"))
+    if e:
+        return _err(400, e)
+    sid = f.get("serie_id")
+    if sid:
+        s = _doc_serie_do_cliente(customer, int(sid))
+        if not s:
+            return _err(404, "Série não encontrada neste cliente.")
+        serie_id, nivel_max = s["id"], s["nivel_max"]
+    else:
+        titulo = (f.get("titulo") or "").strip()
+        tipo = q("select codigo, nivel_max from cockpit.doc_tipos where codigo=%s and ativo",
+                 (f.get("tipo") or "",), one=True)
+        if not titulo:
+            return _err(400, "Dê um título ao documento.")
+        if not tipo:
+            return _err(400, "Escolha o tipo do documento.")
+        procs = _doc_ids(f.get("processos"))
+        if not procs:
+            return _err(400, "Ligue o documento a pelo menos um processo.")
+        slug = _doc_serie_slug(titulo)
+        if q("select 1 from cockpit.doc_series where customer=%s and serie=%s", (customer, slug), one=True):
+            slug = f"{slug}-{secrets.token_hex(2)}"
+        serie_id = _doc_upsert_serie(customer, slug, tipo["codigo"], titulo,
+                                     (f.get("descricao") or "").strip() or None, procs, por=email)
+        nivel_max = tipo["nivel_max"]
+    vis = f.get("visibilidade") or "consultoria"
+    if (e := _doc_vis_erro(vis, nivel_max, is_admin(email))):
+        return _err(400 if vis not in ("cliente",) else 403, e)
+    arq = None
+    if up:
+        dados = up.read()
+        if not dados:
+            return _err(400, "Arquivo vazio.")
+        if len(dados) > DOC_MAX_BYTES:
+            return _err(413, f"Arquivo de {len(dados)/1e6:.1f} MB — o teto é {DOC_MAX_BYTES/1e6:.1f} MB. "
+                             "Comprima o PDF (150 dpi) ou publique como link.")
+        arq, _ = _doc_grava_arquivo(dados, formato)
+    vid, novo = _doc_nova_versao(serie_id, formato, arq, url, (f.get("versao") or "").strip() or None,
+                                 data, f.get("vigente", "1") not in ("0", "false"), vis, nome,
+                                 None, (f.get("nota") or "").strip() or None, email)
+    return _json({"ok": True, "serie_id": serie_id, "versao_id": vid, "novo": novo})
+
+
+@app.post("/api/docs/<customer>/serie/<int:sid>")
+def api_docs_serie(customer, sid):
+    """Edita título, descrição, tipo e processos — ou arquiva (ativo=false)."""
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    s = _doc_serie_do_cliente(customer, sid)
+    if not s:
+        return _err(404, "Série não encontrada neste cliente.")
+    b = request.get_json(silent=True) or {}
+    sets, vals = [], []
+    if "titulo" in b:
+        if not str(b["titulo"]).strip():
+            return _err(400, "O título é obrigatório.")
+        sets.append("titulo=%s"); vals.append(str(b["titulo"]).strip())
+    if "descricao" in b:
+        sets.append("descricao=%s"); vals.append(str(b["descricao"] or "").strip() or None)
+    if "tipo" in b:
+        t = q("select nivel_max from cockpit.doc_tipos where codigo=%s and ativo", (b["tipo"],), one=True)
+        if not t:
+            return _err(400, "Tipo inválido.")
+        if t["nivel_max"] != "cliente" and q(
+                "select 1 from cockpit.doc_versoes where serie_id=%s and visibilidade='cliente'", (sid,), one=True):
+            return _err(409, "Há versão liberada ao cliente: recolha a liberação antes de mudar para um tipo interno.")
+        sets.append("tipo=%s"); vals.append(b["tipo"])
+    if "ativo" in b:
+        sets.append("ativo=%s"); vals.append(bool(b["ativo"]))
+    if sets:
+        execute(f"update cockpit.doc_series set {', '.join(sets)}, updated_at=now() where id=%s", (*vals, sid))
+    if "processos" in b:
+        ids = _doc_ids(b["processos"])
+        if not ids:
+            return _err(400, "Ligue o documento a pelo menos um processo.")
+        _doc_liga_processos(customer, sid, ids)
+    return _json({"ok": True})
+
+
+@app.post("/api/docs/<customer>/versao/<int:vid>")
+def api_docs_versao(customer, vid):
+    """Visibilidade, vigência, rótulo/nota — ou excluir (só admin)."""
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    v = _doc_versao_do_cliente(customer, vid)
+    if not v:
+        return _err(404, "Versão não encontrada neste cliente.")
+    email = current_user()
+    b = request.get_json(silent=True) or {}
+    if b.get("excluir"):
+        if not is_admin(email):
+            return _err(403, "Só administrador exclui versão.")
+        execute("delete from cockpit.doc_versoes where id=%s", (vid,))
+        return _json({"ok": True, "excluida": True})
+    if "visibilidade" in b and b["visibilidade"] != v["visibilidade"]:
+        vis = b["visibilidade"]
+        if (e := _doc_vis_erro(vis, v["nivel_max"], is_admin(email))):
+            return _err(403 if vis == "cliente" else 400, e)
+        if v["visibilidade"] == "cliente" and not is_admin(email):
+            return _err(403, "Só administrador recolhe uma liberação ao cliente.")
+        execute("""update cockpit.doc_versoes set visibilidade=%s,
+                     liberado_por=case when %s='cliente' then %s end,
+                     liberado_em=case when %s='cliente' then now() end, updated_at=now()
+                   where id=%s""", (vis, vis, email, vis, vid))
+    if b.get("vigente") is True and not v["vigente"]:
+        execute("update cockpit.doc_versoes set vigente=false, updated_at=now() "
+                "where serie_id=%s and formato=%s and vigente", (v["serie_id"], v["formato"]))
+        execute("update cockpit.doc_versoes set vigente=true, updated_at=now() where id=%s", (vid,))
+    for k in ("versao", "nota"):
+        if k in b:
+            execute(f"update cockpit.doc_versoes set {k}=%s, updated_at=now() where id=%s",
+                    (str(b[k] or "").strip() or None, vid))
+    return _json({"ok": True})
+
+
+@app.post("/api/docs/<customer>/dispensa")
+def api_docs_dispensa(customer):
+    """'Este processo não precisa deste tipo' (ex.: sem customização → sem MIT044)."""
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    b = request.get_json(silent=True) or {}
+    try:
+        pid = int(b.get("processo_id"))
+    except (TypeError, ValueError):
+        return _err(400, "Processo inválido.")
+    if not q("select 1 from cockpit.radar_processos where id=%s and customer=%s", (pid, customer), one=True):
+        return _err(404, "Processo não encontrado neste cliente.")
+    if not q("select 1 from cockpit.doc_tipos where codigo=%s", (b.get("tipo"),), one=True):
+        return _err(400, "Tipo inválido.")
+    if b.get("remover"):
+        execute("delete from cockpit.doc_dispensas where customer=%s and processo_id=%s and tipo=%s",
+                (customer, pid, b["tipo"]))
+    else:
+        motivo = str(b.get("motivo") or "").strip()
+        if not motivo:
+            return _err(400, "Diga o motivo da dispensa.")
+        execute("""insert into cockpit.doc_dispensas (customer, processo_id, tipo, motivo, dispensado_por)
+                   values (%s,%s,%s,%s,%s) on conflict (customer, processo_id, tipo)
+                   do update set motivo=excluded.motivo, dispensado_por=excluded.dispensado_por,
+                                 dispensado_em=now()""", (customer, pid, b["tipo"], motivo, current_user()))
+    return _json({"ok": True})
+
+
+@app.post("/api/docs/<customer>/processo")
+def api_docs_processo(customer):
+    """Cria um Processo Principal para o cliente que ainda não tem a taxonomia
+    (é a mesma tabela do Radar — o processo aparece lá também)."""
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    b = request.get_json(silent=True) or {}
+    nome = str(b.get("nome") or "").strip()
+    if not nome:
+        return _err(400, "Dê um nome ao processo.")
+    grupo = b.get("grupo") if b.get("grupo") in ("principal", "complementar") else "principal"
+    prefixo = re.sub(r"[^A-Z0-9]", "", str(b.get("prefixo") or "").upper())[:4] or \
+        re.sub(r"[^A-Z0-9]", "", _slug(nome).upper())[:3] or None
+    r = q("""insert into cockpit.radar_processos (customer, tipo, grupo, nome, prefixo, ordem)
+             values (%s,'processo',%s,%s,%s,
+                     coalesce((select max(ordem) from cockpit.radar_processos where customer=%s),0)+10)
+             on conflict (customer, tipo, nome) do update set ativo=true returning id""",
+          (customer, grupo, nome, prefixo, customer), one=True)
+    return _json({"ok": True, "id": r["id"]})
+
+
+def _doc_manifesto(man, procs):
+    """Valida o manifest.json do pacote. Processo por id, prefixo ou nome (de
+    processo ou de ligação). Devolve (series, erros)."""
+    chave = {}
+    for p in procs:
+        chave[str(p["id"])] = p["id"]
+        if p.get("prefixo"):
+            chave[p["prefixo"].upper()] = p["id"]
+        chave[_slug(p["nome"])] = p["id"]
+    erros, out = [], []
+    for i, s in enumerate((man or {}).get("series") or []):
+        rot = s.get("titulo") or f"série {i + 1}"
+        ids, faltou = [], []
+        for ref in s.get("processos") or []:
+            pid = chave.get(str(ref).upper()) or chave.get(str(ref)) or chave.get(_slug(str(ref)))
+            (ids if pid else faltou).append(pid or ref)
+        if faltou:
+            erros.append(f"{rot}: processo não encontrado ({', '.join(map(str, faltou))}).")
+        if not s.get("titulo") or not s.get("tipo"):
+            erros.append(f"{rot}: título e tipo são obrigatórios.")
+        vs = []
+        for v in s.get("versoes") or []:
+            fmt = v.get("formato") or _doc_formato(v.get("arquivo"), v.get("url"))
+            if fmt not in list(DOC_FORMATOS) + ["link"]:
+                erros.append(f"{rot}: formato não aceito ({v.get('arquivo')}).")
+                continue
+            if v.get("data") and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(v["data"])):
+                erros.append(f"{rot}: data inválida ({v['data']}).")
+            vs.append({**v, "formato": fmt})
+        if not vs:
+            erros.append(f"{rot}: nenhuma versão.")
+        out.append({**s, "serie": s.get("serie") or _doc_serie_slug(s.get("titulo")),
+                    "processo_ids": sorted(set(ids)), "versoes": vs})
+    if not out:
+        erros.append("manifest.json sem séries.")
+    return out, erros
+
+
+@app.post("/api/docs/<customer>/pacote")
+def api_docs_pacote(customer):
+    """Importa um .zip com manifest.json + arquivos (até 4,4 MB por pacote).
+    Idempotente: reimportar o mesmo pacote não duplica versão. Tudo entra
+    como 'consultoria' — liberar ao cliente é sempre um ato explícito."""
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    up = request.files.get("pacote")
+    if not up:
+        return _err(400, "Envie o pacote .zip.")
+    try:
+        z = zipfile.ZipFile(io.BytesIO(up.read()))
+        man = json.loads(z.read("manifest.json").decode("utf-8"))   # na raiz do zip
+    except (zipfile.BadZipFile, KeyError, ValueError) as e:
+        return _err(400, f"Pacote inválido: {e}")
+    procs = q("select id, nome, prefixo from cockpit.radar_processos where customer=%s and ativo", (customer,))
+    series, erros = _doc_manifesto(man, procs)
+    tipos = {r["codigo"] for r in q("select codigo from cockpit.doc_tipos where ativo")}
+    erros += [f"{s.get('titulo')}: tipo '{s['tipo']}' não existe." for s in series if s.get("tipo") not in tipos]
+    for s in series:
+        for v in s["versoes"]:
+            if v.get("arquivo") and v["arquivo"] not in z.namelist():
+                erros.append(f"{s.get('titulo')}: arquivo ausente no zip ({v['arquivo']}).")
+    if erros:
+        return _err(400, " · ".join(erros))
+    email, novos, iguais = current_user(), 0, 0
+    for s in series:
+        sid = _doc_upsert_serie(customer, s["serie"], s["tipo"], s["titulo"], s.get("descricao"),
+                                s["processo_ids"], s.get("ordem"), email)
+        for v in s["versoes"]:
+            arq = None
+            if v.get("arquivo"):
+                dados = z.read(v["arquivo"])
+                if len(dados) > DOC_MAX_BYTES:
+                    return _err(413, f"{v['arquivo']}: acima de {DOC_MAX_BYTES/1e6:.1f} MB.")
+                arq, _ = _doc_grava_arquivo(dados, v["formato"])
+            _, criou = _doc_nova_versao(sid, v["formato"], arq, v.get("url"), v.get("versao"), v.get("data"),
+                                        bool(v.get("vigente", True)), "consultoria",
+                                        v.get("nome") or (v.get("arquivo") or "").split("/")[-1] or None,
+                                        v.get("origem"), v.get("nota"), email)
+            novos += criou
+            iguais += not criou
+    return _json({"ok": True, "series": len(series), "versoes_novas": novos, "ja_existiam": iguais})
 
 
 # ── PLANO DE TRABALHO (aba "plano") ─────────────────────────────────────────
