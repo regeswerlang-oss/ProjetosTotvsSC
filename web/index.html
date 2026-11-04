@@ -561,6 +561,7 @@
             <button data-tab="resumo"   class="tab-btn px-3 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Resumo</button>
             <button data-tab="crono"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
             <button data-tab="plano"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Plano de Trabalho</button>
+            <button data-tab="virada"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Cargas de dados, inventários, conferências e layouts do go-live">Plano de Virada</button>
             <button data-tab="modulos"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
             <button data-tab="etapas"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
             <button data-tab="consumo"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
@@ -601,6 +602,36 @@
         <div id="tab-crono" class="p-5 hidden">
           <div id="d-crono-loading" class="text-slate-400 text-sm py-4">Carregando cronograma…</div>
           <div id="d-crono"></div>
+        </div>
+
+        <!-- Aba Plano de Virada — fases do go-live, atividades com dono e datas,
+             critérios de Go/No-Go e a janela recomendada para a virada. Foco
+             (04/11): importação de dados, inventários, conferências e layouts.
+             Spec 2026-11-04-aba-plano-virada. Escrita só da equipe TOTVS. -->
+        <div id="tab-virada" class="p-5 hidden">
+          <div class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="vir-cliente-nome" class="font-medium"></span>
+            <span class="flex-1"></span>
+            <button id="vir-novo" data-interno class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde">＋ Incluir item</button>
+            <button id="vir-datas" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50" title="Data da virada, Go/No-Go, congelamento, corte, fim da operação assistida e recomendação">📅 Datas e recomendação</button>
+            <button id="vir-reload" class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50">↻ Atualizar</button>
+          </div>
+          <div id="vir-filtros" class="mb-3 flex items-center gap-2 flex-wrap text-sm">
+            <input id="vir-q" type="search" placeholder="Buscar atividade, frente, responsável, referência…" class="flex-1 min-w-[220px] max-w-md px-3 py-1.5 border border-slate-300 rounded-md bg-white">
+            <select id="vir-f-fase" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"></select>
+            <select id="vir-f-frente" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white"></select>
+            <select id="vir-f-lado" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white">
+              <option value="">Todo responsável</option><option value="TOTVS">TOTVS</option><option value="CLIENTE">Cliente</option><option value="AMBOS">Ambos</option>
+            </select>
+            <select id="vir-f-status" class="px-2 py-1.5 border border-slate-300 rounded-md bg-white">
+              <option value="">Todo status</option><option value="_aberto">Em aberto</option><option value="_atrasado">Atrasados</option>
+              <option value="planejado">Planejado</option><option value="em_andamento">Em andamento</option><option value="bloqueado">Bloqueado</option>
+              <option value="concluido">Concluído</option><option value="cancelado">Cancelado</option>
+            </select>
+            <label class="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" id="vir-f-go"> só critérios de Go/No-Go</label>
+          </div>
+          <div id="vir-conteudo"></div>
         </div>
 
         <!-- Aba Plano de Trabalho — substitui a planilha de atividades do CP.
@@ -2469,7 +2500,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'plano', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'documentos', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'tributos', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'plano', 'virada', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'documentos', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'tributos', 'prototipo', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2527,6 +2558,7 @@ function setTab(nome) {
   if (nome === 'gaps') initGaps();
   if (nome === 'tarefas') initTarefas();
   if (nome === 'plano') initPlano();
+  if (nome === 'virada') initVirada();
   if (nome === 'cadastros') setSub(state.sub || 'cad_prod');
   if (nome === 'cobertura') initCobertura();
   if (nome === 'empresas') initEmpresas(emp.ambiente);
@@ -7214,6 +7246,348 @@ $$('#tab-pendencias .pen-v').forEach(b => b.addEventListener('click', () => { pe
 $('#pen-reload').addEventListener('click', () => carregaPendencias(state.selected?.cli));
 
 // ============================================================================
+//  ABA PLANO DE VIRADA — fases do go-live, atividades e janela recomendada
+//  Spec: docs/specs/2026-11-04-aba-plano-virada.md
+// ============================================================================
+// Consulta para quem tem a aba; incluir/editar/excluir e as datas do plano são
+// da equipe TOTVS (o servidor barra — os botões data-interno só somem da tela).
+const vir = { customer: null, d: null };
+const VIR_FASES = [
+  ['preparacao', 'Mapeamento, de-para e layouts', '#0ea5e9'],
+  ['testes', 'Ensaio 1 de carga', '#6366f1'],
+  ['go_nogo', 'Go/No-Go das cargas', '#a855f7'],
+  ['congelamento', 'Ensaio geral e plano de inventário', '#f59e0b'],
+  ['corte', 'Inventário e extração final', '#f97316'],
+  ['carga', 'Carga definitiva e conferência', '#ef4444'],
+  ['dia_d', 'Dia D', '#be123c'],
+  ['assistida', 'Conferência pós-virada', '#10b981'],
+  ['fechamento', '1º fechamento e conciliação', '#14b8a6'],
+];
+const VIR_FASE = Object.fromEntries(VIR_FASES.map(([k, r, c]) => [k, { rot: r, cor: c }]));
+const VIR_STATUS = { planejado: ['Planejado', 'bg-slate-100 text-slate-700'], em_andamento: ['Em andamento', 'bg-sky-100 text-sky-800'],
+                     concluido: ['Concluído', 'bg-emerald-100 text-emerald-800'], bloqueado: ['Bloqueado', 'bg-rose-100 text-rose-800'],
+                     cancelado: ['Cancelado', 'bg-slate-200 text-slate-500 line-through'] };
+const VIR_LADO = { TOTVS: ['TOTVS', 'bg-cyan-100 text-cyan-800'], CLIENTE: ['Cliente', 'bg-violet-100 text-violet-800'], AMBOS: ['Ambos', 'bg-amber-100 text-amber-900'] };
+const VIR_CRIT = { alta: ['Alta', 'text-rose-700'], media: ['Média', 'text-amber-700'], baixa: ['Baixa', 'text-slate-500'] };
+const VIR_AVAL = { recomendado: ['Recomendado', 'bg-emerald-100 text-emerald-800 border-emerald-300'],
+                   alternativa: ['Plano B', 'bg-amber-100 text-amber-900 border-amber-300'],
+                   evitar: ['Evitar', 'bg-rose-100 text-rose-800 border-rose-300'] };
+// Feriados nacionais da janela (dias úteis até a virada)
+const VIR_FERIADOS = new Set(['2026-11-02', '2026-11-15', '2026-11-20', '2026-12-25', '2027-01-01',
+                              '2027-02-08', '2027-02-09', '2027-04-02', '2027-04-21']);
+const virEnc = () => encodeURIComponent(vir.customer || '');
+const virISO = v => v ? String(v).slice(0, 10) : '';
+const virDia = s => { const [y, m, d] = s.split('-').map(Number); return Date.UTC(y, m - 1, d) / 864e5; };
+const virFmt = v => v ? fmtData(virISO(v)) : '—';
+const virFmtCurto = v => v ? fmtData(virISO(v)).slice(0, 5) : '';
+
+function virUteis(de, ate) {
+  let n = 0;
+  for (let t = virDia(de) + 1; t <= virDia(ate); t++) {
+    const d = new Date(t * 864e5), w = d.getUTCDay(), iso = d.toISOString().slice(0, 10);
+    if (w !== 0 && w !== 6 && !VIR_FERIADOS.has(iso)) n++;
+  }
+  return n;
+}
+function virRelD(data) {
+  const D = virISO(vir.d?.plano?.data_virada);
+  if (!D || !data) return '';
+  const n = virDia(virISO(data)) - virDia(D);
+  return n === 0 ? 'D' : n < 0 ? `D${n}` : `D+${n}`;
+}
+const virAberto = it => it.status !== 'concluido' && it.status !== 'cancelado';
+const virAtrasado = it => virAberto(it) && it.data_fim && virISO(it.data_fim) < vir.d.hoje;
+
+async function initVirada() {
+  const cli = state.selected?.cli;
+  $('#vir-cliente-nome').textContent = (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  if (vir.customer === cli && vir.d) { desenhaVirada(); return; }
+  await carregaVirada(cli);
+}
+
+async function carregaVirada(customer) {
+  vir.customer = customer || null;
+  const box = $('#vir-conteudo');
+  if (!customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver o plano de virada.'); return; }
+  box.innerHTML = '<p class="text-sm text-slate-400 p-6 text-center">Carregando plano de virada…</p>';
+  try { vir.d = await api(`/api/virada/${virEnc()}`); }
+  catch (e) { vir.d = null; box.innerHTML = blocoErro('Não foi possível carregar o plano de virada', e, () => carregaVirada(customer)); return; }
+  const sf = $('#vir-f-fase'), cf = sf.value;
+  sf.innerHTML = '<option value="">Todas as fases</option>' + VIR_FASES.map(([k, r]) => `<option value="${k}">${escapeHtml(r)}</option>`).join('');
+  sf.value = cf;
+  const fr = $('#vir-f-frente'), cfr = fr.value;
+  const frentes = [...new Set(vir.d.itens.map(i => i.frente))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  fr.innerHTML = '<option value="">Todas as frentes</option>' + frentes.map(f => `<option>${escapeHtml(f)}</option>`).join('');
+  fr.value = frentes.includes(cfr) ? cfr : '';
+  desenhaVirada();
+}
+
+function virFiltrados() {
+  const q = radNorm($('#vir-q').value.trim()), fase = $('#vir-f-fase').value, frente = $('#vir-f-frente').value,
+        lado = $('#vir-f-lado').value, st = $('#vir-f-status').value, go = $('#vir-f-go').checked;
+  return vir.d.itens.filter(it => (!fase || it.fase === fase) && (!frente || it.frente === frente)
+    && (!lado || it.resp_lado === lado) && (!go || it.criterio_go)
+    && (!st || (st === '_aberto' ? virAberto(it) : st === '_atrasado' ? virAtrasado(it) : it.status === st))
+    && (!q || radNorm([it.codigo, it.frente, it.atividade, it.detalhe, it.resp_nome, it.referencia, it.dependencia, it.observacao].join(' ')).includes(q)));
+}
+
+function virBadge(txt, cls) { return `<span class="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-medium whitespace-nowrap ${cls}">${txt}</span>`; }
+
+function virJanelaHTML() {
+  const p = vir.d.plano, hoje = vir.d.hoje;
+  if (!p) return `<div class="rounded-lg border border-dashed border-slate-300 p-4 mb-4 text-sm text-slate-500">Ainda não há data de virada para este cliente.${vir.d.interno ? ' Use <b>📅 Datas e recomendação</b> para definir.' : ''}</div>`;
+  const D = virISO(p.data_virada), corridos = virDia(D) - virDia(hoje), uteis = corridos > 0 ? virUteis(hoje, D) : 0;
+  const marcos = [['Go/No-Go', p.data_go_nogo], ['Congelamento', p.data_congelamento], ['Corte do legado', p.data_corte],
+                  ['Dia D · virada', p.data_virada], ['Fim da operação assistida', p.fim_assistida]].filter(m => m[1]);
+  const chip = ([r, d]) => {
+    const passou = virISO(d) < hoje;
+    return `<div class="rounded-md border ${r.startsWith('Dia D') ? 'border-rose-300 bg-rose-50' : 'border-slate-200 bg-white'} px-3 py-1.5">
+      <div class="text-[11px] text-slate-500">${r}</div>
+      <div class="font-semibold ${passou ? 'text-slate-400' : 'text-totvs-petroleo'}">${virFmt(d)} <span class="text-xs font-normal text-slate-500">${virRelD(d)}</span></div></div>`;
+  };
+  const jan = (p.janelas || []).map(j => {
+    const [rot, cls] = VIR_AVAL[j.avaliacao] || [j.avaliacao || '—', 'bg-slate-100 text-slate-700 border-slate-300'];
+    return `<tr class="border-t border-slate-100 align-top">
+      <td class="py-2 pr-3 font-medium text-slate-800">${escapeHtml(j.periodo || '')}</td>
+      <td class="py-2 pr-3"><span class="inline-block px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${cls}">${rot}</span></td>
+      <td class="py-2 pr-3 text-slate-700">${escapeHtml(j.pros || '')}</td>
+      <td class="py-2 text-slate-700">${escapeHtml(j.contras || '')}</td></tr>`;
+  }).join('');
+  return `<div class="rounded-lg border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white p-4 mb-4">
+    <div class="flex items-start gap-4 flex-wrap">
+      <div class="min-w-[180px]">
+        <div class="text-[11px] uppercase tracking-wider text-emerald-700 font-semibold">Melhor período · virada</div>
+        <div class="text-2xl font-bold text-totvs-petroleo">${virFmt(D)}</div>
+        <div class="text-xs text-slate-600">${corridos > 0 ? `faltam <b>${corridos}</b> dias corridos · <b>${uteis}</b> úteis` : corridos === 0 ? '<b>hoje é o Dia D</b>' : `virada há ${-corridos} dias`}</div>
+      </div>
+      <div class="flex-1 min-w-[280px] text-sm text-slate-700">${escapeHtml(p.recomendacao || '')}</div>
+    </div>
+    <div class="flex flex-wrap gap-2 mt-3">${marcos.map(chip).join('')}</div>
+    ${jan ? `<details class="mt-3" open><summary class="text-xs font-semibold text-emerald-800 cursor-pointer select-none">Janelas avaliadas</summary>
+      <div class="overflow-x-auto"><table class="w-full text-xs mt-1"><thead><tr class="text-left text-slate-500">
+        <th class="py-1 pr-3 w-48">Janela</th><th class="py-1 pr-3 w-24">Avaliação</th><th class="py-1 pr-3">A favor</th><th class="py-1">Contra</th></tr></thead><tbody>${jan}</tbody></table></div></details>` : ''}
+  </div>`;
+}
+
+function virLinhaTempoHTML() {
+  const its = vir.d.itens.filter(i => i.data_inicio || i.data_fim);
+  if (!its.length) return '';
+  const di = its.map(i => virDia(virISO(i.data_inicio || i.data_fim))), df = its.map(i => virDia(virISO(i.data_fim || i.data_inicio)));
+  const D = vir.d.plano ? virDia(virISO(vir.d.plano.data_virada)) : null;
+  // a linha do tempo mostra até ~5 semanas depois da virada; o que vai além (obrigações anuais) só encosta no fim
+  const min = Math.min(...di), max = Math.min(Math.max(...df), D != null ? D + 50 : Infinity), span = Math.max(1, max - min + 1);
+  const pct = t => Math.max(0, Math.min(100, (t - min) / span * 100));
+  const hoje = virDia(vir.d.hoje);
+  const linhas = VIR_FASES.map(([k, rot, cor]) => {
+    const f = its.filter(i => i.fase === k);
+    if (!f.length) return '';
+    const a = Math.min(...f.map(i => virDia(virISO(i.data_inicio || i.data_fim)))), b = Math.max(...f.map(i => virDia(virISO(i.data_fim || i.data_inicio))));
+    const ok = f.filter(i => i.status === 'concluido').length;
+    const l = pct(a), w = Math.max(1.2, pct(b + 1) - l);
+    const ini = new Date(a * 864e5).toISOString().slice(0, 10), fim = new Date(b * 864e5).toISOString().slice(0, 10);
+    return `<div class="flex items-center gap-2 text-xs">
+      <div class="w-48 shrink-0 truncate text-slate-700" title="${escapeHtml(rot)}">${escapeHtml(rot)}</div>
+      <div class="relative flex-1 h-5 bg-slate-50 rounded">
+        <div class="absolute top-0.5 h-4 rounded" style="left:${l}%;width:${w}%;background:${cor};opacity:.85" title="${escapeHtml(rot)}: ${virFmt(ini)} a ${virFmt(fim)}"></div>
+      </div>
+      <div class="w-40 shrink-0 text-slate-500 whitespace-nowrap">${virFmtCurto(ini)}${fim !== ini ? '–' + virFmtCurto(fim) : ''} · ${ok}/${f.length}</div></div>`;
+  }).join('');
+  const marca = (t, cls, rot) => t >= min && t <= max ? `<div class="absolute top-0 bottom-0 border-l-2 ${cls}" style="left:${pct(t)}%"><span class="absolute -top-4 -translate-x-1/2 text-[10px] font-semibold whitespace-nowrap ${cls.replace('border-', 'text-')}">${rot}</span></div>` : '';
+  return `<div class="rounded-lg border border-slate-200 p-4 mb-4">
+    <div class="text-xs font-semibold text-slate-600 mb-5">Linha do tempo por fase <span class="font-normal text-slate-400">(período · concluídos/total)</span></div>
+    <div class="relative">
+      <div class="absolute inset-y-0 left-[12.5rem] right-[10.5rem] pointer-events-none">${marca(hoje, 'border-sky-500', 'hoje')}${D != null ? marca(D, 'border-rose-600', 'Dia D') : ''}</div>
+      <div class="space-y-1.5">${linhas}</div>
+    </div></div>`;
+}
+
+function virKpisHTML(lista) {
+  const its = vir.d.itens, ab = its.filter(virAberto);
+  const goPend = its.filter(i => i.criterio_go && virAberto(i)).length, goTot = its.filter(i => i.criterio_go && i.status !== 'cancelado').length;
+  const conc = its.filter(i => i.status === 'concluido').length, base = its.filter(i => i.status !== 'cancelado').length;
+  const k = (rot, val, sub, cls, filtro) => `<button type="button" ${filtro ? `data-virk="${filtro}"` : ''} class="text-left rounded-lg border ${cls} px-3 py-2 ${filtro ? 'hover:ring-2 hover:ring-totvs-blue/40' : ''}">
+      <div class="text-[11px] text-slate-500">${rot}</div><div class="text-xl font-bold text-totvs-petroleo">${val}</div><div class="text-[11px] text-slate-500">${sub}</div></button>`;
+  return `<div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3">
+    ${k('Itens no plano', its.length, `${lista.length} no filtro`, 'border-slate-200 bg-white', '')}
+    ${k('Concluídos', `${base ? Math.round(conc / base * 100) : 0}%`, `${conc} de ${base}`, 'border-emerald-200 bg-emerald-50', 'concluido')}
+    ${k('Go/No-Go pendentes', goPend, `de ${goTot} critérios`, 'border-violet-200 bg-violet-50', '_go')}
+    ${k('Atrasados', its.filter(virAtrasado).length, 'fim já passou', 'border-rose-200 bg-rose-50', '_atrasado')}
+    ${k('Bloqueados', its.filter(i => i.status === 'bloqueado').length, 'precisam de decisão', 'border-amber-200 bg-amber-50', 'bloqueado')}
+    ${k('Com o cliente', ab.filter(i => i.resp_lado !== 'TOTVS').length, `em aberto · TOTVS ${ab.filter(i => i.resp_lado === 'TOTVS').length}`, 'border-slate-200 bg-white', '_cliente')}
+  </div>`;
+}
+
+function virLinhaHTML(it) {
+  const [stR, stC] = VIR_STATUS[it.status] || [it.status, ''];
+  const [ldR, ldC] = VIR_LADO[it.resp_lado] || [it.resp_lado, ''];
+  const [crR, crC] = VIR_CRIT[it.criticidade] || ['', ''];
+  const atras = virAtrasado(it);
+  const periodo = it.data_inicio && it.data_fim && virISO(it.data_inicio) !== virISO(it.data_fim)
+    ? `${virFmt(it.data_inicio)}<br><span class="text-slate-400">a</span> ${virFmt(it.data_fim)}` : virFmt(it.data_fim || it.data_inicio);
+  const status = vir.d.interno
+    ? `<select data-virst="${it.id}" class="px-1 py-0.5 border border-slate-300 rounded bg-white text-xs">${Object.entries(VIR_STATUS).map(([k, [r]]) => `<option value="${k}" ${k === it.status ? 'selected' : ''}>${r}</option>`).join('')}</select>`
+    : virBadge(stR, stC);
+  return `<tr class="border-t border-slate-100 align-top ${atras ? 'bg-rose-50/60' : ''}">
+    <td class="py-2 px-2 font-mono text-[11px] text-slate-500 whitespace-nowrap">${escapeHtml(it.codigo)}${it.origem === 'manual' ? '<br><span class="text-[10px] text-sky-600">manual</span>' : ''}</td>
+    <td class="py-2 px-2 text-xs text-slate-600 whitespace-nowrap">${escapeHtml(it.frente)}</td>
+    <td class="py-2 px-2">
+      <div class="text-sm text-slate-800 font-medium">${it.criterio_go ? '<span class="text-violet-700" title="Critério de Go/No-Go">◆</span> ' : ''}${escapeHtml(it.atividade)}</div>
+      ${it.detalhe ? `<div class="text-xs text-slate-500 mt-0.5">${escapeHtml(it.detalhe)}</div>` : ''}
+      ${it.observacao ? `<div class="text-xs text-amber-800 mt-0.5">Obs.: ${escapeHtml(it.observacao)}</div>` : ''}
+      ${(it.referencia || it.dependencia) ? `<div class="text-[11px] text-slate-400 mt-0.5">${it.referencia ? 'Ref.: ' + escapeHtml(it.referencia) : ''}${it.referencia && it.dependencia ? ' · ' : ''}${it.dependencia ? 'Depende de: ' + escapeHtml(it.dependencia) : ''}</div>` : ''}
+    </td>
+    <td class="py-2 px-2 text-xs">${virBadge(ldR, ldC)}<div class="text-slate-600 mt-0.5">${escapeHtml(it.resp_nome || '')}</div></td>
+    <td class="py-2 px-2 text-xs whitespace-nowrap ${atras ? 'text-rose-700 font-semibold' : 'text-slate-700'}">${periodo}<div class="text-[10px] text-slate-400">${virRelD(it.data_fim || it.data_inicio)}${atras ? ' · atrasado' : ''}</div></td>
+    <td class="py-2 px-2 text-xs ${crC} font-medium">${crR}</td>
+    <td class="py-2 px-2">${status}</td>
+    ${vir.d.interno ? `<td class="py-2 px-2 whitespace-nowrap text-right">
+      <button data-viredit="${it.id}" class="px-1.5 py-0.5 rounded hover:bg-slate-100 text-slate-600" title="Editar a linha">✎</button>
+      <button data-virdel="${it.id}" class="px-1.5 py-0.5 rounded hover:bg-rose-50 text-rose-600" title="Excluir a linha">🗑</button></td>` : ''}
+  </tr>`;
+}
+
+function desenhaVirada() {
+  const box = $('#vir-conteudo');
+  if (!vir.d) return;
+  const lista = virFiltrados();
+  const grupos = VIR_FASES.map(([k, rot, cor]) => {
+    const f = lista.filter(i => i.fase === k);
+    if (!f.length) return '';
+    const ok = f.filter(i => i.status === 'concluido').length;
+    return `<tr><td colspan="${vir.d.interno ? 8 : 7}" class="pt-4 pb-1 px-2">
+        <span class="inline-block w-2.5 h-2.5 rounded-sm mr-1.5 align-middle" style="background:${cor}"></span>
+        <b class="text-sm text-totvs-petroleo align-middle">${escapeHtml(rot)}</b>
+        <span class="text-xs text-slate-500 align-middle"> · ${f.length} ${f.length === 1 ? 'item' : 'itens'} · ${ok} concluído${ok === 1 ? '' : 's'}</span></td></tr>
+      ${f.map(virLinhaHTML).join('')}`;
+  }).join('');
+  box.innerHTML = virJanelaHTML() + virLinhaTempoHTML() + virKpisHTML(lista)
+    + (lista.length ? `<div class="overflow-x-auto border border-slate-200 rounded-lg"><table class="w-full text-left">
+        <thead class="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500"><tr>
+          <th class="py-2 px-2 w-16">Código</th><th class="py-2 px-2 w-28">Frente</th><th class="py-2 px-2">Atividade</th>
+          <th class="py-2 px-2 w-40">Responsável</th><th class="py-2 px-2 w-28">Período</th><th class="py-2 px-2 w-16">Crit.</th>
+          <th class="py-2 px-2 w-32">Status</th>${vir.d.interno ? '<th class="py-2 px-2 w-16"></th>' : ''}</tr></thead>
+        <tbody>${grupos}</tbody></table></div>
+        <p class="text-[11px] text-slate-400 mt-2">◆ critério de Go/No-Go · D−n / D+n = dias corridos em relação à data da virada.</p>`
+      : blocoVazioCad(vir.d.itens.length ? 'Nenhum item com esses filtros.' : 'O plano ainda não tem itens.'));
+  box.querySelectorAll('[data-virk]').forEach(b => b.onclick = () => {
+    const f = b.dataset.virk;
+    $('#vir-f-go').checked = f === '_go';
+    $('#vir-f-lado').value = '';
+    $('#vir-f-status').value = f === '_go' ? '_aberto' : f === '_cliente' ? '_aberto' : f;
+    if (f === '_cliente') $('#vir-f-lado').value = 'CLIENTE';
+    desenhaVirada();
+  });
+  box.querySelectorAll('[data-viredit]').forEach(b => b.onclick = () => abreVirItem(+b.dataset.viredit));
+  box.querySelectorAll('[data-virdel]').forEach(b => b.onclick = () => excluiVirItem(+b.dataset.virdel));
+  box.querySelectorAll('[data-virst]').forEach(s => s.onchange = async () => {
+    s.disabled = true;
+    try { const r = await api(`/api/virada/item/${s.dataset.virst}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: s.value }) });
+          virTroca(r.item); desenhaVirada(); }
+    catch (e) { alert(e.message); s.disabled = false; }
+  });
+}
+
+function virTroca(item) {
+  const i = vir.d.itens.findIndex(x => x.id === item.id);
+  if (i >= 0) vir.d.itens[i] = item; else vir.d.itens.push(item);
+}
+
+function abreVirItem(id) {
+  const it = id ? vir.d.itens.find(x => x.id === id) : null;
+  if (id && !it) return;
+  const v = it || { fase: $('#vir-f-fase').value || 'preparacao', resp_lado: 'TOTVS', status: 'planejado', criticidade: 'media' };
+  const sel = (idc, rot, dom, atual) => `<label class="block"><span class="text-xs text-slate-500">${rot}</span>
+    <select id="${idc}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md bg-white">${dom.map(([k, r]) => `<option value="${k}" ${k === atual ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}</select></label>`;
+  const area = (idc, rot, val, linhas = 2) => `<label class="block"><span class="text-xs text-slate-500">${rot}</span>
+    <textarea id="${idc}" rows="${linhas}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">${escapeHtml(val || '')}</textarea></label>`;
+  const frentes = [...new Set(vir.d.itens.map(i => i.frente))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const m = modal(it ? `Editar ${escapeHtml(it.codigo)}` : 'Incluir item no Plano de Virada', `
+    <div class="grid grid-cols-2 gap-3">
+      ${sel('vi-fase', 'Fase', VIR_FASES.map(([k, r]) => [k, r]), v.fase)}
+      <label class="block"><span class="text-xs text-slate-500">Frente (processo/área)</span>
+        <input id="vi-frente" list="vi-frentes" value="${escapeHtml(v.frente || '')}" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">
+        <datalist id="vi-frentes">${frentes.map(f => `<option value="${escapeHtml(f)}">`).join('')}</datalist></label>
+    </div>
+    ${campo('vi-atividade', 'Atividade', v.atividade || '')}
+    ${area('vi-detalhe', 'Detalhe / como fazer', v.detalhe, 3)}
+    <div class="grid grid-cols-2 gap-3">
+      ${sel('vi-lado', 'Responsável (lado)', Object.entries(VIR_LADO).map(([k, [r]]) => [k, r]), v.resp_lado)}
+      ${campo('vi-resp', 'Responsável (nomes)', v.resp_nome || '')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${campo('vi-ini', 'Início', virISO(v.data_inicio), 'date')}
+      ${campo('vi-fim', 'Fim', virISO(v.data_fim), 'date')}
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      ${sel('vi-status', 'Status', Object.entries(VIR_STATUS).map(([k, [r]]) => [k, r]), v.status)}
+      ${sel('vi-crit', 'Criticidade', Object.entries(VIR_CRIT).map(([k, [r]]) => [k, r]), v.criticidade)}
+    </div>
+    <label class="flex items-center gap-2 text-sm"><input type="checkbox" id="vi-go" ${v.criterio_go ? 'checked' : ''}> Critério de Go/No-Go (precisa estar concluído para virar)</label>
+    <div class="grid grid-cols-2 gap-3">
+      ${campo('vi-ref', 'Referência', v.referencia || '', 'text', 'Radar, Task, MIT006…')}
+      ${campo('vi-dep', 'Depende de', v.dependencia || '', 'text', 'ex.: PV-010')}
+    </div>
+    ${area('vi-obs', 'Observação', v.observacao, 2)}`, it ? 'Salvar' : 'Incluir');
+  larguraModal(m, 'max-w-2xl');
+  m.aoConfirmar(async () => {
+    const corpo = {
+      fase: m.campo('vi-fase').value, frente: m.campo('vi-frente').value.trim(), atividade: m.campo('vi-atividade').value.trim(),
+      detalhe: m.campo('vi-detalhe').value, resp_lado: m.campo('vi-lado').value, resp_nome: m.campo('vi-resp').value,
+      data_inicio: m.campo('vi-ini').value, data_fim: m.campo('vi-fim').value, status: m.campo('vi-status').value,
+      criticidade: m.campo('vi-crit').value, criterio_go: m.campo('vi-go').checked, referencia: m.campo('vi-ref').value,
+      dependencia: m.campo('vi-dep').value, observacao: m.campo('vi-obs').value,
+    };
+    if (!corpo.frente) return m.erro('Informe a frente.');
+    if (!corpo.atividade) return m.erro('Descreva a atividade.');
+    if (corpo.data_inicio && corpo.data_fim && corpo.data_fim < corpo.data_inicio) return m.erro('A data fim não pode ser antes do início.');
+    m.ocupado(true, 'Gravando…');
+    try {
+      const url = it ? `/api/virada/item/${it.id}` : `/api/virada/${virEnc()}/item`;
+      const r = await api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+      m.fecha(); virTroca(r.item); await carregaVirada(vir.customer);
+    } catch (e) { m.erro(e.message); m.ocupado(false, it ? 'Salvar' : 'Incluir'); }
+  });
+}
+
+async function excluiVirItem(id) {
+  const it = vir.d.itens.find(x => x.id === id); if (!it) return;
+  if (!confirm(`Excluir ${it.codigo} — ${it.atividade}?\n\nA linha sai do plano.`)) return;
+  try { await api(`/api/virada/item/${id}/excluir`, { method: 'POST' }); vir.d.itens = vir.d.itens.filter(x => x.id !== id); desenhaVirada(); }
+  catch (e) { alert(e.message); }
+}
+
+function abreVirDatas() {
+  const p = vir.d?.plano || {};
+  const m = modal('Datas e recomendação da virada', `
+    <div class="grid grid-cols-2 gap-3">
+      ${campo('vd-virada', 'Data da virada (Dia D)', virISO(p.data_virada), 'date')}
+      ${campo('vd-go', 'Go/No-Go', virISO(p.data_go_nogo), 'date')}
+      ${campo('vd-cong', 'Congelamento', virISO(p.data_congelamento), 'date')}
+      ${campo('vd-corte', 'Corte do legado', virISO(p.data_corte), 'date')}
+      ${campo('vd-fim', 'Fim da operação assistida', virISO(p.fim_assistida), 'date')}
+    </div>
+    <label class="block"><span class="text-xs text-slate-500">Recomendação (por que este período)</span>
+      <textarea id="vd-rec" rows="5" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">${escapeHtml(p.recomendacao || '')}</textarea></label>
+    <p class="text-xs text-slate-500">As datas das atividades não mudam sozinhas: ao trocar a data da virada, revise os itens (a coluna D−n ajuda).</p>`, 'Salvar');
+  larguraModal(m, 'max-w-2xl');
+  m.aoConfirmar(async () => {
+    const corpo = { data_virada: m.campo('vd-virada').value, data_go_nogo: m.campo('vd-go').value, data_congelamento: m.campo('vd-cong').value,
+                    data_corte: m.campo('vd-corte').value, fim_assistida: m.campo('vd-fim').value, recomendacao: m.campo('vd-rec').value };
+    if (!corpo.data_virada) return m.erro('Informe a data da virada.');
+    m.ocupado(true, 'Gravando…');
+    try { const r = await api(`/api/virada/${virEnc()}/plano`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+          m.fecha(); vir.d.plano = r.plano || vir.d.plano; desenhaVirada(); }
+    catch (e) { m.erro(e.message); m.ocupado(false, 'Salvar'); }
+  });
+}
+
+['vir-q'].forEach(id => $('#' + id).addEventListener('input', desenhaVirada));
+['vir-f-fase', 'vir-f-frente', 'vir-f-lado', 'vir-f-status', 'vir-f-go'].forEach(id => $('#' + id).addEventListener('change', desenhaVirada));
+$('#vir-reload').addEventListener('click', () => carregaVirada(state.selected?.cli));
+$('#vir-novo').addEventListener('click', () => vir.d && abreVirItem(null));
+$('#vir-datas').addEventListener('click', () => vir.d && abreVirDatas());
+
+// ============================================================================
 //  ABA DOCUMENTAÇÃO — casa única da documentação por processo
 //  Spec: docs/specs/2026-10-30-aba-documentacao.md
 // ============================================================================
@@ -8025,6 +8399,7 @@ const RELATORIOS = {
   resumo:    { titulo: 'Resumo do Projeto',       alvo: '#tab-resumo' },
   crono:     { titulo: 'Cronograma',              alvo: '#d-crono' },
   plano:     { titulo: 'Plano de Trabalho',       alvo: '#tab-plano', curado: relatorioPlanoHTML },
+  virada:    { titulo: 'Plano de Virada',         alvo: '#vir-conteudo' },
   modulos:   { titulo: 'Apontamentos por Módulo', alvo: '#d-modulos' },
   etapas:    { titulo: 'Apontamentos por Etapa',  alvo: '#d-etapas' },
   consumo:   { titulo: 'Consumo por Etapa',       alvo: '#tab-consumo' },
