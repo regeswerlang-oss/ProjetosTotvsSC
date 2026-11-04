@@ -20,7 +20,10 @@ ainda impede o Go?"**
    `recomendado | alternativa | evitar`, prós, contras).
 2. **Atividades por fase** (`virada_itens`), em nove fases fixas:
    `preparacao → testes → go_nogo → congelamento → corte → carga → dia_d →
-   assistida → fechamento`. Cada item tem frente, responsável (lado TOTVS /
+   assistida → fechamento` (na tela: mapeamento, de-para e layouts → ensaio 1 →
+   Go/No-Go das cargas → ensaio geral e plano de inventário → inventário e
+   extração final → carga definitiva e conferência → Dia D → conferência
+   pós-virada → 1º fechamento e conciliação). Cada item tem frente, responsável (lado TOTVS /
    CLIENTE / AMBOS + nomes), início/fim, status, criticidade, **critério de
    Go/No-Go**, referência (Radar, Task, MIT006) e dependência.
 3. **Código fixo** `PV-nnn` gerado no servidor (lock por cliente). Excluir é
@@ -28,10 +31,14 @@ ainda impede o Go?"**
 4. **Liberável ao cliente para consulta** (`"cliente": True`). Incluir, editar,
    trocar status, excluir e mudar as datas do plano: só a equipe TOTVS
    (`require_interno` + `deny_customer`). Os botões têm `data-interno`.
-5. **Carga inicial da Dígitro** (`origem='historico'`): 55 itens, 32 critérios
-   de Go/No-Go, tirados do comitê de 14/10, reuniões de 01–23/10, inventário de
-   e-mails do CP (28/10), Radar (30/10), dossiê de transição (03/11) e
-   respostas devidas (04/11). Itens novos pela tela entram como `manual`.
+5. **Foco em dados (revisão de 04/11, pedido do Reges):** o plano lista só
+   importação de dados (cadastros, saldos, títulos, terceiros, ativo, contratos,
+   pedidos em aberto, saldos fiscais e contábeis), inventários, ensaios e
+   conferências de carga e validação de layouts (CNAB, extrato, XML NF-e/NFS-e,
+   impressos, folha, Redmine, Transmite, iPaaS/EAI, PVA). Gestão,
+   parametrização e desenvolvimento ficam no Radar e no Plano de Trabalho.
+   Carga inicial da Dígitro (`origem='historico'`): 61 itens, 35 critérios de
+   Go/No-Go, 17 frentes. Itens novos pela tela entram como `manual`.
 6. **Melhor período (Dígitro): 04/01/2027**, corte em 31/12 e carga de 01 a
    03/01. Justificativa gravada no plano: começa com o exercício contábil e com
    a CBS plena (PIS/COFINS extintos em 01/01/2027), corte em dias sem operação.

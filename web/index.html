@@ -561,7 +561,7 @@
             <button data-tab="resumo"   class="tab-btn px-3 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Resumo</button>
             <button data-tab="crono"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
             <button data-tab="plano"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Plano de Trabalho</button>
-            <button data-tab="virada"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Fases, atividades e janela recomendada do go-live">Plano de Virada</button>
+            <button data-tab="virada"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Cargas de dados, inventários, conferências e layouts do go-live">Plano de Virada</button>
             <button data-tab="modulos"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Módulo</button>
             <button data-tab="etapas"   class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Por Etapa</button>
             <button data-tab="consumo"  class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Consumo</button>
@@ -605,7 +605,8 @@
         </div>
 
         <!-- Aba Plano de Virada — fases do go-live, atividades com dono e datas,
-             critérios de Go/No-Go e a janela recomendada para a virada.
+             critérios de Go/No-Go e a janela recomendada para a virada. Foco
+             (04/11): importação de dados, inventários, conferências e layouts.
              Spec 2026-11-04-aba-plano-virada. Escrita só da equipe TOTVS. -->
         <div id="tab-virada" class="p-5 hidden">
           <div class="mb-3 flex items-center gap-2 flex-wrap text-sm">
@@ -7252,15 +7253,15 @@ $('#pen-reload').addEventListener('click', () => carregaPendencias(state.selecte
 // da equipe TOTVS (o servidor barra — os botões data-interno só somem da tela).
 const vir = { customer: null, d: null };
 const VIR_FASES = [
-  ['preparacao', 'Preparação e prontidão', '#0ea5e9'],
-  ['testes', 'Protótipo integrado e 2º ciclo', '#6366f1'],
-  ['go_nogo', 'Go/No-Go', '#a855f7'],
-  ['congelamento', 'Congelamento e ensaio geral', '#f59e0b'],
-  ['corte', 'Corte do legado', '#f97316'],
-  ['carga', 'Carga e conferência', '#ef4444'],
+  ['preparacao', 'Mapeamento, de-para e layouts', '#0ea5e9'],
+  ['testes', 'Ensaio 1 de carga', '#6366f1'],
+  ['go_nogo', 'Go/No-Go das cargas', '#a855f7'],
+  ['congelamento', 'Ensaio geral e plano de inventário', '#f59e0b'],
+  ['corte', 'Inventário e extração final', '#f97316'],
+  ['carga', 'Carga definitiva e conferência', '#ef4444'],
   ['dia_d', 'Dia D', '#be123c'],
-  ['assistida', 'Operação assistida', '#10b981'],
-  ['fechamento', '1º fechamento', '#14b8a6'],
+  ['assistida', 'Conferência pós-virada', '#10b981'],
+  ['fechamento', '1º fechamento e conciliação', '#14b8a6'],
 ];
 const VIR_FASE = Object.fromEntries(VIR_FASES.map(([k, r, c]) => [k, { rot: r, cor: c }]));
 const VIR_STATUS = { planejado: ['Planejado', 'bg-slate-100 text-slate-700'], em_andamento: ['Em andamento', 'bg-sky-100 text-sky-800'],

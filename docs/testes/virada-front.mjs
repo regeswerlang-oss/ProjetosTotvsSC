@@ -83,17 +83,17 @@ await pag.click('[data-tab="virada"]');
 await pag.waitForSelector('#vir-conteudo table', { timeout: 5000 });
 await pag.screenshot({ path: `${SHOTS}/virada-interno.png`, fullPage: true });
 const linhas = () => pag.$$eval('#vir-conteudo [data-viredit]', e => e.length);
-confere('55 linhas', await linhas() === 55);
+confere('61 linhas', await linhas() === 61);
 const txt = await pag.textContent('#vir-conteudo');
 confere('janela recomendada', txt.includes('Melhor período') && txt.includes('04/01/2027'));
 confere('dias até a virada', /faltam 61 dias corridos/.test(txt));
 confere('janelas avaliadas', txt.includes('Plano B') && txt.includes('Evitar'));
 confere('linha do tempo com Dia D', txt.includes('Linha do tempo') && txt.includes('Dia D'));
-confere('D-61 na coluna', txt.includes('D-61') || txt.includes('D-55'));
+confere('coluna D-n', /D-4[0-9]/.test(txt) && txt.includes('D+'));
 
 // filtros
 await pag.check('#vir-f-go'); await pag.waitForTimeout(100);
-confere('filtro Go/No-Go', await linhas() === 32);
+confere('filtro Go/No-Go', await linhas() === 35);
 await pag.uncheck('#vir-f-go');
 await pag.fill('#vir-q', 'cnab'); await pag.waitForTimeout(100);
 const nCnab = await linhas();
@@ -114,19 +114,19 @@ confere('valida fim antes do início', (await pag.textContent('[data-erro]')).in
 await pag.fill('#vi-fim', '2027-01-03');
 await pag.check('#vi-go');
 await pag.click('[data-ok]'); await pag.waitForTimeout(400);
-confere('incluiu PV-056', ITENS.some(i => i.codigo === 'PV-056' && i.criterio_go === true && i.fase === 'carga'));
-confere('56 linhas', await linhas() === 56);
+confere('incluiu PV-062', ITENS.some(i => i.codigo === 'PV-062' && i.criterio_go === true && i.fase === 'carga'));
+confere('62 linhas', await linhas() === 62);
 confere('html escapado', !(await pag.$('#vir-conteudo td b:text("plaqueta")')) && (await pag.content()).includes('&lt;b&gt;plaqueta'));
 
 // editar
-const id56 = ITENS.find(i => i.codigo === 'PV-056').id;
-await pag.click(`[data-viredit="${id56}"]`);
+const idNovo = ITENS.find(i => i.codigo === 'PV-062').id;
+await pag.click(`[data-viredit="${idNovo}"]`);
 await pag.waitForSelector('#vi-atividade');
 confere('modal traz valores', await pag.inputValue('#vi-frente') === 'Ativo Fixo');
 await pag.fill('#vi-resp', 'Fabrício');
 await pag.fill('#vi-obs', 'Plaqueta obrigatória');
 await pag.click('[data-ok]'); await pag.waitForTimeout(400);
-confere('editou', ITENS.find(i => i.id === id56).resp_nome === 'Fabrício');
+confere('editou', ITENS.find(i => i.id === idNovo).resp_nome === 'Fabrício');
 confere('observação aparece', (await pag.textContent('#vir-conteudo')).includes('Plaqueta obrigatória'));
 
 // status na linha
@@ -134,8 +134,8 @@ await pag.selectOption('[data-virst="1"]', 'concluido'); await pag.waitForTimeou
 confere('status pela linha', ITENS.find(i => i.id === 1).status === 'concluido');
 
 // excluir
-await pag.click(`[data-virdel="${id56}"]`); await pag.waitForTimeout(400);
-confere('excluiu', ITENS.find(i => i.id === id56).ativo === false && await linhas() === 55);
+await pag.click(`[data-virdel="${idNovo}"]`); await pag.waitForTimeout(400);
+confere('excluiu', ITENS.find(i => i.id === idNovo).ativo === false && await linhas() === 61);
 
 // datas do plano
 await pag.click('#vir-datas'); await pag.waitForSelector('#vd-virada');
