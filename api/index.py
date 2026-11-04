@@ -499,7 +499,11 @@ def serve(name, ctype="text/html; charset=utf-8"):
     f = WEB_DIR / name
     if not f.exists():
         return _err(404, f"{name} não encontrado.")
-    return Response(f.read_bytes(), mimetype=ctype)
+    resp = Response(f.read_bytes(), mimetype=ctype)
+    # A tela é um arquivo só e troca a cada deploy: sem no-store, aba ou
+    # navegador com a versão antiga continuava sem as abas novas (04/11/2026).
+    resp.headers["Cache-Control"] = "no-store, max-age=0"
+    return resp
 
 
 @app.get("/login")
