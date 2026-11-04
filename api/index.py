@@ -3376,6 +3376,241 @@ def api_protheus_coletar(customer, ambiente):
                   "tempo_base_ms": dados.get("tempo_ms"), **res})
 
 
+# ── TRANSFERÊNCIA DE CADASTROS ENTRE BASES (Produção ↔ Teste) ───────────────
+# 04/11/2026. Até aqui a REST da base só LIA (TSCMONITREST, só SELECT/WITH). A
+# transferência usa um fonte IRMÃO, o TSCTRANSREST.tlpp (fontes/tlpp/), com as
+# rotas /tsctrans/ler e /tsctrans/gravar no mesmo prefixo REST. A trava do
+# TSCMONITREST NÃO foi afrouxada: quem grava é outro fonte, com outra trava.
+#
+# Um lote = uma invocação da Vercel (60 s): lê até N registros na ORIGEM
+# (paginado por R_E_C_N_O_) e manda para a gravação no DESTINO. O navegador
+# repete com o ultimo_recno até `fim`. Simulação é o padrão nas duas pontas.
+#
+# Proteções, de fora para dentro:
+#   1. só interno, fora do "ver como", origem ≠ destino, ambos ativos com token;
+#   2. tabela de 3 letras, nada de dicionário (SX*, XX*, SIX); tabela de
+#      MOVIMENTO só com `forcar_movimento` (a aba é de cadastros);
+#   3. gravar em PRODUÇÃO exige admin e a frase "PRODUCAO <TABELA>";
+#   4. na base destino, a gravação só existe com MV_TSCGRAV = .T. (o fonte
+#      recusa com 403 se o parâmetro não existir) — produção nasce fechada.
+# Spec: docs/specs/2026-11-04-transferencia-cadastros-entre-bases.md
+
+TRANS_TABELA_RE = re.compile(r"^[A-Z][A-Z0-9]{2}$")
+TRANS_LOTE_MAX = 500
+TRANS_PROIBIDAS = {"INSERT", "UPDATE", "DELETE", "MERGE", "DROP", "CREATE", "ALTER",
+                   "TRUNCATE", "GRANT", "REVOKE", "EXEC", "EXECUTE", "CALL", "INTO",
+                   "BEGIN", "DECLARE", "COMMIT", "ROLLBACK", "UNION"}
+
+
+class _TransErro(Exception):
+    def __init__(self, status, msg):
+        super().__init__(msg)
+        self.status = status
+
+
+def _trans_url(cfg):
+    """…/rest/tscmonit → …/rest/tsctrans: os dois fontes moram no mesmo
+    [HTTPURI], então a URL cadastrada no ⚙ Ambiente serve aos dois."""
+    return re.sub(r"/tscmonit$", "", (cfg.get("url_rest") or "").rstrip("/"), flags=re.I) + "/tsctrans"
+
+
+def _trans_tabela(v):
+    t = (v or "").strip().upper()
+    if not TRANS_TABELA_RE.match(t):
+        return None, "Tabela inválida — informe o alias de 3 caracteres (ex.: SA1)."
+    if t.startswith(("SX", "XX")) or t == "SIX":
+        return None, f"{t} é tabela de dicionário — não se transfere por aqui."
+    return t, None
+
+
+def _trans_filtro(v):
+    """Mesma trava do fonte, repetida aqui de propósito: recusar antes de gastar
+    uma chamada REST (e licença) com um filtro que a base vai recusar."""
+    f = " ".join((v or "").split())
+    if not f:
+        return "", None
+    if len(f) > 500:
+        return None, "Filtro acima de 500 caracteres."
+    if ";" in f or "--" in f or "/*" in f:
+        return None, "Filtro não pode ter ';', '--' nem '/*'."
+    for tok in re.split(r"[^A-Z0-9_]+", f.upper()):
+        if tok in TRANS_PROIBIDAS or tok.startswith(("DBMS_", "UTL_", "XP_", "SP_")):
+            return None, f"Filtro recusado: palavra '{tok}' não é permitida."
+    return f, None
+
+
+def _trans_campos(v):
+    if isinstance(v, list):
+        itens = v
+    else:
+        itens = re.split(r"[,;\s]+", v or "")
+    return sorted({c.strip().upper() for c in itens if re.match(r"^[A-Za-z0-9_]{3,10}$", c.strip())})
+
+
+def _trans_norm(s):
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    return " ".join(s.upper().split())
+
+
+def _trans_chamar(cfg, customer, amb, rota, corpo, tmo):
+    heads, auth, tok, _t = _sessao_protheus(cfg, customer, amb)
+    if not tok:
+        raise _TransErro(409, f"Sem token cadastrado na {amb} — a REST da base recusa sem o X-TSC-Token.")
+    url = f"{_trans_url(cfg)}/{rota}"
+    try:
+        r = requests.post(url, json={"token": tok, **corpo}, headers=heads, auth=auth,
+                          params={"empresa": cfg.get("empresa") or "01",
+                                  "filial": cfg.get("filial") or "01"},
+                          timeout=tmo, verify=_verifica_tls(cfg))
+    except requests.RequestException as e:
+        raise _TransErro(502, f"{amb}: {_motivo_rede(e)}")
+    dados = _json_da_resposta(r)
+    if r.status_code >= 400 or not dados.get("ok"):
+        msg = dados.get("erro")
+        if not msg and r.status_code == 404:
+            msg = (f"HTTP 404 em /tsctrans/{rota}: o TSCTRANSREST.tlpp não está compilado no RPO "
+                   f"desta base ({cfg.get('environment') or '?'}) ou o REST não foi reiniciado "
+                   f"depois de compilar. Ele é um fonte separado do TSCMONITREST.")
+        raise _TransErro(502 if r.status_code < 400 else r.status_code,
+                         f"{amb}: {msg or f'HTTP {r.status_code} — {_trecho(r)}'}")
+    return dados
+
+
+@app.post("/api/protheus/<customer>/transferir")
+def api_protheus_transferir(customer):
+    """Um LOTE da transferência: lê na origem, grava (ou simula) no destino.
+
+        POST /api/protheus/HSABV6/transferir
+        {origem, destino, tabela, filtro?, apos_recno, lote, modo, simular,
+         filial_de?, filial_para?, campos_excluir?, confirmacao?, forcar_movimento?}
+    """
+    b = request.get_json(silent=True) or {}
+    erro, origem = _guarda_ambiente(customer, b.get("origem"), escrita=True)
+    if erro:
+        return erro
+    erro, destino = _guarda_ambiente(customer, b.get("destino"), escrita=True)
+    if erro:
+        return erro
+    if origem == destino:
+        return _err(400, "Origem e destino são a mesma base.")
+
+    tabela, msg = _trans_tabela(b.get("tabela"))
+    if msg:
+        return _err(400, msg)
+    if _painel_da_tabela(tabela) == "movimento" and not b.get("forcar_movimento"):
+        return _err(409, f"{tabela} é tabela de MOVIMENTO. Esta função é de cadastros — "
+                         f"marque 'É movimento, transferir assim mesmo' se for isso mesmo.")
+    filtro, msg = _trans_filtro(b.get("filtro"))
+    if msg:
+        return _err(400, msg)
+    modo = (b.get("modo") or "incluir").strip().lower()
+    if modo not in ("incluir", "incluir_alterar"):
+        return _err(400, "Modo inválido — use 'incluir' ou 'incluir_alterar'.")
+    simular = b.get("simular") is not False          # padrão: simular
+    try:
+        lote = max(1, min(int(b.get("lote") or 100), TRANS_LOTE_MAX))
+        apos = max(0, int(b.get("apos_recno") or 0))
+    except (TypeError, ValueError):
+        return _err(400, "lote/apos_recno precisam ser números.")
+
+    if destino == "producao" and not simular:
+        if not is_admin(current_user()):
+            return _err(403, "Gravar na Base Produção é só para administrador.")
+        if _trans_norm(b.get("confirmacao")) != f"PRODUCAO {tabela}":
+            return _err(409, f"Para gravar na Base Produção digite exatamente: PRODUCAO {tabela}")
+
+    cfg_o, cfg_d = _cfg_ambiente(customer, origem), _cfg_ambiente(customer, destino)
+    for amb, cfg in ((origem, cfg_o), (destino, cfg_d)):
+        if not cfg:
+            return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer} (⚙ Ambiente).")
+        if not cfg.get("ativo"):
+            return _err(409, f"Ambiente {amb} está inativo — reative antes de transferir.")
+
+    ini = time.time()
+    try:
+        lido = _trans_chamar(cfg_o, customer, origem, "ler",
+                             {"tabela": tabela, "filtro": filtro, "apos_recno": apos,
+                              "limite": lote},
+                             min(int(cfg_o.get("timeout_s") or 45), 22))
+    except RuntimeError as e:
+        return _err(500, str(e))
+    except _TransErro as e:
+        return _err(e.status, f"Leitura na origem falhou — {e}")
+
+    regs = lido.get("registros") or []
+    res = {"incluidos": 0, "alterados": 0, "ignorados": 0, "erros": [], "campos_sem_destino": []}
+    if regs:
+        corpo = {"tabela": tabela, "modo": modo, "simular": simular, "registros": regs,
+                 "filial_de": (b.get("filial_de") or "").strip(),
+                 "filial_para": (b.get("filial_para") or "").strip(),
+                 "campos_excluir": _trans_campos(b.get("campos_excluir"))}
+        resta = TIMEOUT_TETO - (time.time() - ini) - 3
+        if resta < 5:
+            return _err(504, "A leitura na origem consumiu o tempo do lote — reduza o tamanho do lote.")
+        try:
+            res = _trans_chamar(cfg_d, customer, destino, "gravar", corpo,
+                                min(int(cfg_d.get("timeout_s") or 45), int(resta)))
+        except RuntimeError as e:
+            return _err(500, str(e))
+        except _TransErro as e:
+            if not simular:
+                _log_coleta(customer, destino, "transferencia", ini, False,
+                            http_status=e.status, linhas=len(regs),
+                            erro=f"{tabela} {origem}→{destino}: {e}")
+            return _err(e.status, f"Gravação no destino falhou — {e}")
+
+    erros = res.get("erros") or []
+    if not simular and regs:
+        _log_coleta(customer, destino, "transferencia", ini, not erros,
+                    linhas=len(regs), itens=int(res.get("incluidos") or 0) + int(res.get("alterados") or 0),
+                    erro=(f"{tabela} {origem}→{destino}: {len(erros)} erro(s); "
+                          f"1º: {erros[0].get('chave')} — {erros[0].get('erro')}") if erros else None)
+    return _json({"ok": True, "customer": customer, "origem": origem, "destino": destino,
+                  "tabela": tabela, "simular": simular, "modo": modo,
+                  "lidos": len(regs), "ultimo_recno": lido.get("ultimo_recno") or apos,
+                  "fim": bool(lido.get("fim", True)) or not regs,
+                  "chave": res.get("chave") or lido.get("chave"),
+                  "env_origem": lido.get("environment"), "env_destino": res.get("environment"),
+                  "incluidos": int(res.get("incluidos") or 0),
+                  "alterados": int(res.get("alterados") or 0),
+                  "ignorados": int(res.get("ignorados") or 0),
+                  "erros": erros[:50], "qtd_erros": len(erros),
+                  "campos_sem_destino": res.get("campos_sem_destino") or []})
+
+
+@app.post("/api/protheus/<customer>/<ambiente>/transferir-ping")
+def api_protheus_transferir_ping(customer, ambiente):
+    """GET /tsctrans/ping da base: o fonte está compilado? token ok? a gravação
+    está liberada (MV_TSCGRAV)? A tela mostra antes do primeiro lote."""
+    erro, amb = _guarda_ambiente(customer, ambiente)
+    if erro:
+        return erro
+    cfg = _cfg_ambiente(customer, amb)
+    if not cfg:
+        return _err(404, f"Ambiente {amb} ainda não cadastrado para {customer}.")
+    try:
+        heads, auth, _tok, tmo = _sessao_protheus(cfg, customer, amb)
+        r = requests.get(f"{_trans_url(cfg)}/ping", headers=heads, auth=auth,
+                         params={"empresa": cfg.get("empresa") or "01",
+                                 "filial": cfg.get("filial") or "01"},
+                         timeout=min(tmo, 20), verify=_verifica_tls(cfg))
+    except RuntimeError as e:
+        return _err(500, str(e))
+    except requests.RequestException as e:
+        return _json({"ok": False, "ambiente": amb, "mensagem": _motivo_rede(e)})
+    d = _json_da_resposta(r)
+    if r.status_code == 404:
+        return _json({"ok": False, "ambiente": amb,
+                      "mensagem": "TSCTRANSREST não publicado nesta base (HTTP 404) — compile o "
+                                  "fonte no RPO e reinicie o REST."})
+    if r.status_code >= 400 or not d.get("ok"):
+        return _json({"ok": False, "ambiente": amb,
+                      "mensagem": d.get("erro") or f"HTTP {r.status_code} — {_trecho(r)}"})
+    return _json({"ok": True, "ambiente": amb, "environment": d.get("environment"),
+                  "versao": d.get("versao"), "token_ok": bool(d.get("token_ok")),
+                  "gravacao_liberada": bool(d.get("gravacao_liberada")),
+                  "empresa": d.get("empresa"), "filial": d.get("filial")})
+
 
 
 # ── PERFIL DE COLETA DE MOVIMENTOS — particularidades de cada cliente ───────

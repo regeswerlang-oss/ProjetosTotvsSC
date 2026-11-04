@@ -1,0 +1,597 @@
+#include "tlpp-core.th"
+#include "totvs.ch"
+
+/*/{Protheus.doc} TSCTRANSREST
+REST de TRANSFERÊNCIA de cadastros entre bases (Produção x Teste), irmã do
+TSCMONITREST. O TSCMONITREST continua SÓ DE LEITURA: a trava dele (só
+SELECT/WITH) não foi afrouxada. Gravação mora aqui, num fonte separado, com
+trava própria.
+
+Rotas (mesmo prefixo do [HTTPURI] do TSCMONITREST, ex.: .../rest/tsctrans):
+  GET  /tsctrans/ping    identidade da base + token_ok + gravacao_liberada
+  POST /tsctrans/ler     lê registros de UMA tabela, paginado por R_E_C_N_O_,
+                         em JSON tipado pela estrutura física (DbStruct)
+  POST /tsctrans/gravar  inclui (ou inclui e altera) os registros recebidos,
+                         pela chave do índice 1 da tabela na base DESTINO
+
+Segurança, em três camadas:
+  1. Token: header X-TSC-Token (ou "token" no corpo) = MV_TSCTOKN. Sem o
+     parâmetro preenchido a rota fica FECHADA — o mesmo token do TSCMONITREST.
+  2. Gravação só com MV_TSCGRAV (tipo L) = .T. NA BASE DESTINO. Sem ele, a
+     rota /gravar só aceita simulação. Produção nasce protegida: basta não
+     criar o parâmetro lá.
+  3. Simulação é o PADRÃO: "simular" ausente = .T. Gravar exige
+     "simular": false explícito.
+
+O que a gravação faz e o que NÃO faz:
+  - Grava direto na tabela (RecLock/FieldPut/MsUnlock), campo a campo, só os
+    campos que existem nas DUAS bases (os que faltam no destino voltam em
+    campos_sem_destino). Converte pelo tipo/tamanho do DESTINO.
+  - NÃO roda ExecAuto/MVC: validações de tela, gatilhos e pontos de entrada da
+    rotina não são executados. É cópia de cadastro, não digitação.
+  - Modo "incluir": registro que já existe no destino (mesma chave do
+    índice 1) é IGNORADO. Modo "incluir_alterar": sobrescreve os campos
+    recebidos.
+  - Filial: "filial_de"/"filial_para" troca o conteúdo de <PREFIXO>_FILIAL
+    quando a máscara muda entre as bases.
+
+@type  namespace
+@author Consultoria TOTVS SC
+@since  04/11/2026
+@version 1.0
+/*/
+namespace tsc.trans
+
+#define VERSAO      "1.0"
+#define LIM_LER     500
+#define LIM_GRAVAR  500
+
+//------------------------------------------------------------------------------
+@Get("/tsctrans/ping")
+User Function tscTrPing() as Logical
+    Local jResp := JsonObject():New() as Json
+
+    jResp["ok"]                := .T.
+    jResp["fonte"]             := "TSCTRANSREST"
+    jResp["versao"]            := VERSAO
+    jResp["environment"]       := GetEnvServer()
+    jResp["banco"]             := Lower(AllTrim(TCGetDB()))
+    jResp["empresa"]           := cEmpAnt
+    jResp["filial"]            := cFilAnt
+    jResp["token_ok"]          := tokenOk(tokenReq(Nil))
+    jResp["gravacao_liberada"] := gravacaoLiberada()
+Return responde(200, jResp)
+
+//------------------------------------------------------------------------------
+@Post("/tsctrans/ler")
+User Function tscTrLer() as Logical
+    Local jBody    := lerCorpo()
+    Local jResp    := Nil as Json
+    Local cAlias   := "" as Character
+    Local cFiltro  := "" as Character
+    Local cMsg     := "" as Character
+    Local cSql     := "" as Character
+    Local cQry     := "" as Character
+    Local nApos    := 0 as Numeric
+    Local nLimite  := 100 as Numeric
+    Local nRec     := 0 as Numeric
+    Local nUltimo  := 0 as Numeric
+    Local nI       := 0 as Numeric
+    Local lFim     := .T. as Logical
+    Local aStru    := {} as Array
+    Local aRegs    := {} as Array
+    Local aCampos  := {} as Array
+    Local oStmt    := Nil as Object
+    Local jCpo     := Nil as Json
+    Local oErr     := Nil as Object
+
+    If jBody == Nil
+        Return erro(400, "Corpo da requisição não é um JSON válido.")
+    EndIf
+    If !tokenOk(tokenReq(jBody))
+        Return erro(401, "Token recusado (X-TSC-Token <> MV_TSCTOKN, ou MV_TSCTOKN vazio).")
+    EndIf
+
+    cAlias := Upper(AllTrim(cValToChar(jGet(jBody, "tabela", ""))))
+    If !Empty(cMsg := validaAlias(cAlias))
+        Return erro(400, cMsg)
+    EndIf
+    cFiltro := AllTrim(cValToChar(jGet(jBody, "filtro", "")))
+    If !Empty(cMsg := filtroSeguro(cFiltro))
+        Return erro(400, cMsg)
+    EndIf
+    nApos   := Max(0, Int(nVal(jGet(jBody, "apos_recno", 0))))
+    nLimite := Min(LIM_LER, Max(1, Int(nVal(jGet(jBody, "limite", 100)))))
+
+    DbSelectArea(cAlias)
+    aStru := (cAlias)->(DbStruct())
+
+    cSql := "SELECT R_E_C_N_O_ RECNO FROM " + RetSqlName(cAlias) + ;
+            " WHERE D_E_L_E_T_ = ' ' AND R_E_C_N_O_ > ?"
+    If !Empty(cFiltro)
+        cSql += " AND (" + cFiltro + ")"
+    EndIf
+    cSql += " ORDER BY R_E_C_N_O_"
+
+    cMsg := ""
+    Try
+        oStmt := FWExecStatement():New(cSql)
+        oStmt:SetNumeric(1, nApos)
+        cQry := oStmt:OpenAlias()
+        While !(cQry)->(Eof()) .And. Len(aRegs) < nLimite
+            nRec := (cQry)->RECNO
+            (cAlias)->(DbGoto(nRec))
+            If !(cAlias)->(Eof())
+                aAdd(aRegs, regParaJson(cAlias, aStru, nRec))
+            EndIf
+            nUltimo := nRec
+            (cQry)->(DbSkip())
+        EndDo
+        lFim := (cQry)->(Eof())
+        (cQry)->(DbCloseArea())
+        oStmt:Destroy()
+    Catch oErr
+        cMsg := "Falha na leitura de " + cAlias + ": " + AllTrim(oErr:Description)
+    EndTry
+    If !Empty(cMsg)
+        FWLogMsg("ERROR", , "TSCTRANSREST", "tscTrLer", "", "01", cMsg)
+        Return erro(500, cMsg)
+    EndIf
+
+    For nI := 1 To Len(aStru)
+        jCpo := JsonObject():New()
+        jCpo["campo"]   := aStru[nI][1]
+        jCpo["tipo"]    := aStru[nI][2]
+        jCpo["tamanho"] := aStru[nI][3]
+        jCpo["decimal"] := aStru[nI][4]
+        aAdd(aCampos, jCpo)
+    Next nI
+
+    jResp := JsonObject():New()
+    jResp["ok"]           := .T.
+    jResp["tabela"]       := cAlias
+    jResp["sqlname"]      := RetSqlName(cAlias)
+    jResp["environment"]  := GetEnvServer()
+    jResp["empresa"]      := cEmpAnt
+    jResp["filial"]       := cFilAnt
+    jResp["chave"]        := (cAlias)->(IndexKey(1))
+    jResp["campos"]       := aCampos
+    jResp["registros"]    := aRegs
+    jResp["lidos"]        := Len(aRegs)
+    jResp["ultimo_recno"] := nUltimo
+    jResp["fim"]          := lFim
+Return responde(200, jResp)
+
+//------------------------------------------------------------------------------
+@Post("/tsctrans/gravar")
+User Function tscTrGrava() as Logical
+    Local jBody     := lerCorpo()
+    Local jResp     := Nil as Json
+    Local jReg      := Nil as Json
+    Local jPos      := JsonObject():New() as Json
+    Local cAlias    := "" as Character
+    Local cModo     := "" as Character
+    Local cMsg      := "" as Character
+    Local cChave    := "" as Character
+    Local cKey      := "" as Character
+    Local cCpoFil   := "" as Character
+    Local cFilDe    := "" as Character
+    Local cFilPara  := "" as Character
+    Local cCampo    := "" as Character
+    Local lSimular  := .T. as Logical
+    Local lExiste   := .F. as Logical
+    Local nI        := 0 as Numeric
+    Local nJ        := 0 as Numeric
+    Local nPos      := 0 as Numeric
+    Local nPosFil   := 0 as Numeric
+    Local nIncl     := 0 as Numeric
+    Local nAlter    := 0 as Numeric
+    Local nIgn      := 0 as Numeric
+    Local aRegs     := {} as Array
+    Local aStru     := {} as Array
+    Local aExc      := {} as Array
+    Local aNomes    := {} as Array
+    Local aVals     := {} as Array
+    Local aPres     := {} as Array
+    Local aErros    := {} as Array
+    Local aSemDest  := {} as Array
+    Local bChave    := Nil as Codeblock
+    Local oErr      := Nil as Object
+
+    If jBody == Nil
+        Return erro(400, "Corpo da requisição não é um JSON válido.")
+    EndIf
+    If !tokenOk(tokenReq(jBody))
+        Return erro(401, "Token recusado (X-TSC-Token <> MV_TSCTOKN, ou MV_TSCTOKN vazio).")
+    EndIf
+
+    If ValType(jBody["simular"]) == "L"
+        lSimular := jBody["simular"]
+    EndIf
+    If !lSimular .And. !gravacaoLiberada()
+        Return erro(403, "Gravação desligada nesta base (" + GetEnvServer() + "). " + ;
+                         "Para liberar, crie o parâmetro MV_TSCGRAV (tipo L) = .T. NESTA base. " + ;
+                         "A simulação continua disponível.")
+    EndIf
+
+    cAlias := Upper(AllTrim(cValToChar(jGet(jBody, "tabela", ""))))
+    If !Empty(cMsg := validaAlias(cAlias))
+        Return erro(400, cMsg)
+    EndIf
+    cModo := Lower(AllTrim(cValToChar(jGet(jBody, "modo", "incluir"))))
+    If cModo != "incluir" .And. cModo != "incluir_alterar"
+        Return erro(400, "Modo inválido — use 'incluir' ou 'incluir_alterar'.")
+    EndIf
+    aRegs := jBody["registros"]
+    If ValType(aRegs) != "A"
+        Return erro(400, "Envie 'registros' como lista de objetos {campo: valor}.")
+    EndIf
+    If Len(aRegs) > LIM_GRAVAR
+        Return erro(400, "Lote acima de " + cValToChar(LIM_GRAVAR) + " registros — divida o lote.")
+    EndIf
+    cFilDe   := AllTrim(cValToChar(jGet(jBody, "filial_de", "")))
+    cFilPara := AllTrim(cValToChar(jGet(jBody, "filial_para", "")))
+    If ValType(jBody["campos_excluir"]) == "A"
+        For nI := 1 To Len(jBody["campos_excluir"])
+            aAdd(aExc, Upper(AllTrim(cValToChar(jBody["campos_excluir"][nI]))))
+        Next nI
+    EndIf
+
+    DbSelectArea(cAlias)
+    (cAlias)->(DbSetOrder(1))
+    cChave  := (cAlias)->(IndexKey(1))
+    aStru   := (cAlias)->(DbStruct())
+    cCpoFil := PrefixoCpo(cAlias) + "_FILIAL"
+    For nI := 1 To Len(aStru)
+        jPos[aStru[nI][1]] := nI
+    Next nI
+    If jPos[cCpoFil] != Nil
+        nPosFil := jPos[cCpoFil]
+    EndIf
+    bChave := montaBloco(cChave, aStru)
+
+    For nI := 1 To Len(aRegs)
+        jReg := aRegs[nI]
+        If ValType(jReg) != "J"
+            aAdd(aErros, itemErro("#" + cValToChar(nI), "item não é um objeto JSON"))
+            Loop
+        EndIf
+
+        aVals  := valoresPadrao(aStru)
+        aPres  := Array(Len(aStru))
+        aFill(aPres, .F.)
+        aNomes := jReg:GetNames()
+        For nJ := 1 To Len(aNomes)
+            cCampo := Upper(AllTrim(aNomes[nJ]))
+            If cCampo == "__RECNO" .Or. aScan(aExc, cCampo) > 0
+                Loop
+            EndIf
+            nPos := 0
+            If jPos[cCampo] != Nil
+                nPos := jPos[cCampo]
+            EndIf
+            If nPos == 0
+                If aScan(aSemDest, cCampo) == 0
+                    aAdd(aSemDest, cCampo)
+                EndIf
+                Loop
+            EndIf
+            aVals[nPos] := converte(jReg[aNomes[nJ]], aStru[nPos])
+            aPres[nPos] := .T.
+        Next nJ
+
+        If nPosFil > 0 .And. !Empty(cFilDe) .And. AllTrim(aVals[nPosFil]) == cFilDe
+            aVals[nPosFil] := PadR(cFilPara, aStru[nPosFil][3])
+            aPres[nPosFil] := .T.
+        EndIf
+
+        cMsg := ""
+        Try
+            cKey := Eval(bChave, aVals)
+        Catch oErr
+            cMsg := "chave " + cChave + " não montou: " + AllTrim(oErr:Description)
+        EndTry
+        If !Empty(cMsg)
+            aAdd(aErros, itemErro("#" + cValToChar(nI), cMsg))
+            Loop
+        EndIf
+
+        lExiste := (cAlias)->(DbSeek(cKey))
+        If lExiste .And. cModo == "incluir"
+            nIgn++
+            Loop
+        EndIf
+        If lSimular
+            If lExiste
+                nAlter++
+            Else
+                nIncl++
+            EndIf
+            Loop
+        EndIf
+
+        Try
+            If RecLock(cAlias, !lExiste)
+                For nJ := 1 To Len(aStru)
+                    If aPres[nJ] .Or. !lExiste
+                        (cAlias)->(FieldPut(nJ, aVals[nJ]))
+                    EndIf
+                Next nJ
+                (cAlias)->(MsUnlock())
+                If lExiste
+                    nAlter++
+                Else
+                    nIncl++
+                EndIf
+            Else
+                cMsg := "registro bloqueado por outro usuário"
+            EndIf
+        Catch oErr
+            (cAlias)->(MsUnlock())
+            cMsg := AllTrim(oErr:Description)
+        EndTry
+        If !Empty(cMsg)
+            aAdd(aErros, itemErro(AllTrim(cKey), cMsg))
+            FWLogMsg("ERROR", , "TSCTRANSREST", "tscTrGrava", "", "02", cAlias + " " + AllTrim(cKey) + ": " + cMsg)
+        EndIf
+    Next nI
+
+    jResp := JsonObject():New()
+    jResp["ok"]                 := .T.
+    jResp["simular"]            := lSimular
+    jResp["modo"]               := cModo
+    jResp["tabela"]             := cAlias
+    jResp["sqlname"]            := RetSqlName(cAlias)
+    jResp["chave"]              := cChave
+    jResp["environment"]        := GetEnvServer()
+    jResp["empresa"]            := cEmpAnt
+    jResp["filial"]             := cFilAnt
+    jResp["recebidos"]          := Len(aRegs)
+    jResp["incluidos"]          := nIncl
+    jResp["alterados"]          := nAlter
+    jResp["ignorados"]          := nIgn
+    jResp["erros"]              := aErros
+    jResp["campos_sem_destino"] := aSemDest
+Return responde(200, jResp)
+
+//==============================================================================
+//  Auxiliares
+//==============================================================================
+
+Static Function regParaJson(cAlias as Character, aStru as Array, nRec as Numeric) as Json
+    Local jReg := JsonObject():New() as Json
+    Local nI   := 0 as Numeric
+    Local xVal := Nil
+
+    For nI := 1 To Len(aStru)
+        xVal := (cAlias)->(FieldGet(nI))
+        Do Case
+            Case aStru[nI][2] $ "CM"
+                jReg[aStru[nI][1]] := RTrim(xVal)
+            Case aStru[nI][2] == "N"
+                jReg[aStru[nI][1]] := xVal
+            Case aStru[nI][2] == "D"
+                jReg[aStru[nI][1]] := DToS(xVal)
+            Case aStru[nI][2] == "L"
+                jReg[aStru[nI][1]] := xVal
+        EndCase
+    Next nI
+    jReg["__recno"] := nRec
+Return jReg
+
+Static Function valoresPadrao(aStru as Array) as Array
+    Local aVals := Array(Len(aStru)) as Array
+    Local nI    := 0 as Numeric
+
+    For nI := 1 To Len(aStru)
+        Do Case
+            Case aStru[nI][2] == "C"
+                aVals[nI] := Space(aStru[nI][3])
+            Case aStru[nI][2] == "N"
+                aVals[nI] := 0
+            Case aStru[nI][2] == "D"
+                aVals[nI] := SToD("")
+            Case aStru[nI][2] == "L"
+                aVals[nI] := .F.
+            Otherwise
+                aVals[nI] := ""
+        EndCase
+    Next nI
+Return aVals
+
+// Converte o valor do JSON para o tipo e o tamanho do campo NA BASE DESTINO
+Static Function converte(xVal, aCampo as Array)
+    Local cTipo := aCampo[2] as Character
+    Local cTxt  := "" as Character
+
+    If xVal == Nil
+        xVal := ""
+    EndIf
+    Do Case
+        Case cTipo == "C"
+            If ValType(xVal) == "C"
+                cTxt := xVal
+            Else
+                cTxt := cValToChar(xVal)
+            EndIf
+            Return PadR(cTxt, aCampo[3])
+        Case cTipo == "N"
+            If ValType(xVal) == "N"
+                Return xVal
+            EndIf
+            Return Val(cValToChar(xVal))
+        Case cTipo == "D"
+            If ValType(xVal) == "D"
+                Return xVal
+            EndIf
+            Return SToD(AllTrim(cValToChar(xVal)))
+        Case cTipo == "L"
+            If ValType(xVal) == "L"
+                Return xVal
+            EndIf
+            cTxt := Upper(AllTrim(cValToChar(xVal)))
+            Return !Empty(cTxt) .And. cTxt $ "T|.T.|TRUE|S|SIM|1"
+    EndCase
+    If ValType(xVal) == "C"
+        Return xVal
+    EndIf
+Return cValToChar(xVal)
+
+// Bloco que monta a chave do índice 1 a partir do vetor de valores. Os nomes
+// dos campos são trocados do MAIOR para o menor: B1_CODBAR antes de B1_COD.
+Static Function montaBloco(cChave as Character, aStru as Array) as Codeblock
+    Local cExpr := Upper(cChave) as Character
+    Local aOrd  := {} as Array
+    Local nI    := 0 as Numeric
+
+    For nI := 1 To Len(aStru)
+        aAdd(aOrd, {aStru[nI][1], nI})
+    Next nI
+    aSort(aOrd, , , {|x, y| Len(x[1]) > Len(y[1])})
+    For nI := 1 To Len(aOrd)
+        If aOrd[nI][1] $ cExpr
+            cExpr := StrTran(cExpr, aOrd[nI][1], "_aV[" + cValToChar(aOrd[nI][2]) + "]")
+        EndIf
+    Next nI
+Return &("{|_aV| " + cExpr + " }")
+
+Static Function validaAlias(cAlias as Character) as Character
+    If Len(cAlias) != 3 .Or. !IsAlpha(Left(cAlias, 1))
+        Return "Tabela inválida: informe o alias de 3 caracteres (ex.: SA1)."
+    EndIf
+    If Left(cAlias, 2) == "SX" .Or. Left(cAlias, 2) == "XX" .Or. cAlias == "SIX"
+        Return "Tabela de dicionário (" + cAlias + ") não se transfere por esta rota."
+    EndIf
+    If !AliasInDic(cAlias)
+        Return "Tabela " + cAlias + " não existe no dicionário (SX2) desta base."
+    EndIf
+Return ""
+
+// Mesma ideia da trava do TSCMONITREST: o filtro vira WHERE de um SELECT, e
+// não pode carregar outro comando. A comparação é por PALAVRA inteira — senão
+// D_E_L_E_T_ bloquearia tudo.
+Static Function filtroSeguro(cFiltro as Character) as Character
+    Local cUp    := Upper(cFiltro) as Character
+    Local cTmp   := "" as Character
+    Local cCh    := "" as Character
+    Local aTok   := {} as Array
+    Local aProib := {"INSERT","UPDATE","DELETE","MERGE","DROP","CREATE","ALTER","TRUNCATE",;
+                     "GRANT","REVOKE","EXEC","EXECUTE","CALL","INTO","BEGIN","DECLARE",;
+                     "COMMIT","ROLLBACK","UNION"} as Array
+    Local nI     := 0 as Numeric
+
+    If Empty(cUp)
+        Return ""
+    EndIf
+    If Len(cUp) > 500
+        Return "Filtro acima de 500 caracteres."
+    EndIf
+    If ";" $ cUp .Or. "--" $ cUp .Or. "/*" $ cUp
+        Return "Filtro não pode ter ';', '--' nem '/*'."
+    EndIf
+    For nI := 1 To Len(cUp)
+        cCh := SubStr(cUp, nI, 1)
+        If IsAlpha(cCh) .Or. IsDigit(cCh) .Or. cCh == "_"
+            cTmp += cCh
+        Else
+            cTmp += " "
+        EndIf
+    Next nI
+    aTok := StrTokArr2(cTmp, " ", .F.)
+    For nI := 1 To Len(aTok)
+        If aScan(aProib, aTok[nI]) > 0 .Or. Left(aTok[nI], 5) == "DBMS_" .Or. ;
+           Left(aTok[nI], 4) == "UTL_" .Or. Left(aTok[nI], 3) == "XP_" .Or. Left(aTok[nI], 3) == "SP_"
+            Return "Filtro recusado: palavra '" + aTok[nI] + "' não é permitida."
+        EndIf
+    Next nI
+Return ""
+
+Static Function tokenReq(jBody as Json) as Character
+    Local jHead  := oRest:getHeaderRequest() as Json
+    Local aNomes := {} as Array
+    Local nI     := 0 as Numeric
+
+    If ValType(jHead) == "J"
+        aNomes := jHead:GetNames()
+        For nI := 1 To Len(aNomes)
+            If Upper(aNomes[nI]) == "X-TSC-TOKEN"
+                Return AllTrim(cValToChar(jHead[aNomes[nI]]))
+            EndIf
+        Next nI
+    EndIf
+    If ValType(jBody) == "J" .And. ValType(jBody["token"]) == "C"
+        Return AllTrim(jBody["token"])
+    EndIf
+Return ""
+
+Static Function tokenOk(cTok as Character) as Logical
+    Local cParam := AllTrim(cValToChar(SuperGetMV("MV_TSCTOKN", .F., ""))) as Character
+Return !Empty(cParam) .And. cParam == AllTrim(cTok)
+
+Static Function gravacaoLiberada() as Logical
+    Local xPar := SuperGetMV("MV_TSCGRAV", .F., .F.)
+
+    If ValType(xPar) == "L"
+        Return xPar
+    EndIf
+    If ValType(xPar) == "C"
+        Return Upper(AllTrim(xPar)) == ".T." .Or. Upper(AllTrim(xPar)) == "T"
+    EndIf
+Return .F.
+
+Static Function lerCorpo()
+    Local cBody := oRest:getBodyRequest() as Character
+    Local cDec  := "" as Character
+    Local jBody := JsonObject():New() as Json
+    Local xRet  := Nil
+
+    If Empty(cBody)
+        Return Nil
+    EndIf
+    cDec := DecodeUTF8(cBody)
+    If ValType(cDec) == "C"
+        cBody := cDec
+    EndIf
+    xRet := jBody:FromJson(cBody)
+    If ValType(xRet) == "C"
+        Return Nil
+    EndIf
+Return jBody
+
+Static Function jGet(jObj as Json, cChave as Character, xPad)
+    Local xVal := jObj[cChave]
+
+    If xVal == Nil
+        Return xPad
+    EndIf
+Return xVal
+
+Static Function nVal(xVal) as Numeric
+    If ValType(xVal) == "N"
+        Return xVal
+    EndIf
+Return Val(cValToChar(xVal))
+
+Static Function itemErro(cChave as Character, cMsg as Character) as Json
+    Local jErr := JsonObject():New() as Json
+
+    jErr["chave"] := cChave
+    jErr["erro"]  := cMsg
+Return jErr
+
+Static Function erro(nCode as Numeric, cMsg as Character) as Logical
+    Local jResp := JsonObject():New() as Json
+
+    jResp["ok"]   := .F.
+    jResp["erro"] := cMsg
+Return responde(nCode, jResp)
+
+Static Function responde(nCode as Numeric, jResp as Json) as Logical
+    Local cJson := jResp:ToJson() as Character
+    Local cUtf  := EncodeUTF8(cJson)
+
+    If ValType(cUtf) == "C"
+        cJson := cUtf
+    EndIf
+    oRest:setKeyHeaderResponse("Content-Type", "application/json; charset=utf-8")
+Return oRest:setStatusResponse(nCode, cJson)
