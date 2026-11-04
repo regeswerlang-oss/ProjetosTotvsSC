@@ -426,6 +426,7 @@
           <button id="cad-sql"      data-interno class="rail-btn">🗄 Script SQL</button>
           <button id="cad-ambiente" data-interno class="rail-btn">⚙ Ambiente</button>
           <button id="cad-coletar"  data-interno class="rail-btn">⚡ Coletar agora</button>
+          <button id="cad-transferir" data-interno class="rail-btn">⇄ Transferir entre bases<span class="rail-sub">produção ↔ teste</span></button>
           <label id="cad-upload-wrap" data-interno class="rail-btn rail-btn-cta">
             ⬆ Subir medição<span class="rail-sub">.csv / .json</span>
             <input id="cad-file" type="file" accept=".csv,.json,text/csv,application/json" class="hidden">
@@ -9043,6 +9044,181 @@ async function coletaAgora(tipo) {
 $('#cad-ambiente').addEventListener('click', () => abreModalAmbiente(cad.ambiente));
 $('#mov-ambiente').addEventListener('click', () => abreModalAmbiente(mov.ambiente));
 $('#cad-coletar').addEventListener('click', () => coletaAgora('cadastros'));
+
+// ============================================================================
+//  ⇄ TRANSFERIR CADASTROS ENTRE BASES (Produção ↔ Teste)
+//  Lê a tabela na origem e grava no destino pela REST TSCTRANSREST — fonte
+//  IRMÃO do TSCMONITREST (que continua só de leitura). Cada lote é uma chamada
+//  ao backend (≤ 60 s); o navegador repete até a origem acabar. Simulação é o
+//  padrão; gravar em Produção pede admin + frase de confirmação, e a base
+//  destino só aceita com MV_TSCGRAV = .T.
+//  Spec: docs/specs/2026-11-04-transferencia-cadastros-entre-bases.md
+// ============================================================================
+function abreTransferencia() {
+  const cli = state.selected?.cli;
+  if (!cli) { alert('Abra um projeto antes de transferir.'); return; }
+  const origem0 = cad.ambiente || 'producao';
+  const destino0 = origem0 === 'producao' ? 'teste' : 'producao';
+  const tabs = (cad.dados?.tabelas || []).map(t =>
+    `<option value="${escapeHtml(t.tabela)}">${escapeHtml(t.descricao || '')}</option>`).join('');
+  const optAmb = sel => Object.entries(AMB).map(([k, v]) =>
+    `<option value="${k}" ${k === sel ? 'selected' : ''}>${v.label}</option>`).join('');
+  const inp = 'mt-1 w-full px-3 py-2 border border-slate-300 rounded-md focus:outline-none focus:ring-2 focus:ring-totvs-blue/40';
+  const m = modal('⇄ Transferir cadastros entre bases', `
+    <p class="text-xs text-slate-500">Lê a tabela na base de <b>origem</b> e grava na base de <b>destino</b>
+      pela REST <b>TSCTRANSREST</b> (fonte separado do TSCMONITREST, compilado nas duas bases).
+      A gravação é direta na tabela, pela chave do índice 1 do destino: <b>não</b> roda validações,
+      gatilhos nem pontos de entrada da rotina.</p>
+    <div class="grid grid-cols-2 gap-3">
+      <label class="block"><span class="text-xs text-slate-500">Origem (lê)</span>
+        <select id="tr-origem" class="${inp}">${optAmb(origem0)}</select></label>
+      <label class="block"><span class="text-xs text-slate-500">Destino (grava)</span>
+        <select id="tr-destino" class="${inp}">${optAmb(destino0)}</select></label>
+    </div>
+    <div id="tr-ping" class="text-xs space-y-0.5"></div>
+    <div class="grid grid-cols-3 gap-3">
+      <label class="block col-span-1"><span class="text-xs text-slate-500">Tabela</span>
+        <input id="tr-tabela" list="tr-tabelas" maxlength="3" placeholder="SA1" class="${inp} uppercase">
+        <datalist id="tr-tabelas">${tabs}</datalist></label>
+      <label class="block col-span-2"><span class="text-xs text-slate-500">Modo</span>
+        <select id="tr-modo" class="${inp}">
+          <option value="incluir">Só incluir novos (padrão)</option>
+          <option value="incluir_alterar">Incluir e sobrescrever existentes</option>
+        </select></label>
+    </div>
+    <label class="block"><span class="text-xs text-slate-500">Filtro na origem (opcional — vira o WHERE do SELECT)</span>
+      <input id="tr-filtro" placeholder="ex.: A1_MSBLQL <> '1' AND A1_EST = 'SC'" class="${inp} font-mono text-xs">
+      <span class="text-xs text-slate-400">Deletados ficam sempre de fora. Sem ';', '--' nem comandos de escrita.</span></label>
+    <div class="grid grid-cols-3 gap-3">
+      <label class="block"><span class="text-xs text-slate-500">Filial de</span>
+        <input id="tr-fil-de" placeholder="01" class="${inp}"></label>
+      <label class="block"><span class="text-xs text-slate-500">Filial para</span>
+        <input id="tr-fil-para" placeholder="010101" class="${inp}"></label>
+      <label class="block"><span class="text-xs text-slate-500">Registros/lote</span>
+        <input id="tr-lote" type="number" min="1" max="500" value="100" class="${inp}"></label>
+    </div>
+    <label class="block"><span class="text-xs text-slate-500">Campos que NÃO devem ser copiados (opcional)</span>
+      <input id="tr-excluir" placeholder="ex.: A1_USERLGI, A1_USERLGA, A1_MSBLQL" class="${inp} font-mono text-xs"></label>
+    <label class="flex items-center gap-2"><input id="tr-simular" type="checkbox" checked>
+      <span><b>Simulação</b> — não grava nada, só conta o que seria incluído/alterado</span></label>
+    <label class="flex items-center gap-2 text-xs text-slate-500"><input id="tr-mov" type="checkbox">
+      <span>É tabela de movimento — transferir assim mesmo</span></label>
+    <div id="tr-prog" class="text-xs text-slate-700"></div>
+    <div id="tr-erros" class="text-xs max-h-40 overflow-y-auto"></div>`, 'Simular');
+
+  const c = id => m.campo(id);
+  const okBtn = m.el.querySelector('[data-ok]');
+  const rotulo = () => (c('tr-simular').checked ? 'Simular' : 'Transferir');
+  c('tr-simular').addEventListener('change', () => { if (!rodando) okBtn.textContent = rotulo(); });
+
+  // Origem e destino nunca iguais: trocar um vira o outro.
+  const outro = a => (a === 'producao' ? 'teste' : 'producao');
+  c('tr-origem').addEventListener('change', () => { c('tr-destino').value = outro(c('tr-origem').value); });
+  c('tr-destino').addEventListener('change', () => { c('tr-origem').value = outro(c('tr-destino').value); });
+
+  // Antes do 1º lote: o fonte está nas duas bases? a gravação está liberada?
+  (async () => {
+    c('tr-ping').innerHTML = '<span class="text-slate-400">Verificando o TSCTRANSREST nas duas bases…</span>';
+    const linhas = await Promise.all(Object.keys(AMB).map(async a => {
+      try {
+        const j = await api(`/api/protheus/${encodeURIComponent(cli)}/${a}/transferir-ping`, { method: 'POST' });
+        if (!j.ok) return `<p>⚠️ <b>${AMB[a].label}</b>: ${escapeHtml(j.mensagem || 'sem resposta')}</p>`;
+        const grav = j.gravacao_liberada
+          ? '<span class="text-emerald-700">gravação liberada</span>'
+          : '<span class="text-amber-700">gravação fechada (MV_TSCGRAV) — só simula</span>';
+        const tok = j.token_ok ? '' : ' · <span class="text-rose-700">token recusado</span>';
+        return `<p>✔ <b>${AMB[a].label}</b> · ${escapeHtml(j.environment || '?')} · v${escapeHtml(j.versao || '?')} · ${grav}${tok}</p>`;
+      } catch (e) {
+        return `<p>⚠️ <b>${AMB[a].label}</b>: ${escapeHtml(e.message)}</p>`;
+      }
+    }));
+    if (document.body.contains(m.el)) c('tr-ping').innerHTML = linhas.join('');
+  })();
+
+  let rodando = false, parar = false;
+  m.aoConfirmar(async () => {
+    if (rodando) { parar = true; okBtn.disabled = true; okBtn.textContent = 'Parando…'; return; }
+    m.erro('');
+    const tabela = (c('tr-tabela').value || '').trim().toUpperCase();
+    if (!/^[A-Z][A-Z0-9]{2}$/.test(tabela)) { m.erro('Informe a tabela (alias de 3 caracteres, ex.: SA1).'); return; }
+    const origem = c('tr-origem').value, destino = c('tr-destino').value;
+    const simular = c('tr-simular').checked;
+    const corpo = {
+      origem, destino, tabela, simular,
+      modo: c('tr-modo').value,
+      filtro: c('tr-filtro').value.trim(),
+      filial_de: c('tr-fil-de').value.trim(),
+      filial_para: c('tr-fil-para').value.trim(),
+      campos_excluir: c('tr-excluir').value,
+      lote: Math.max(1, Math.min(500, parseInt(c('tr-lote').value, 10) || 100)),
+      forcar_movimento: c('tr-mov').checked,
+    };
+    if (corpo.filial_de && !corpo.filial_para) { m.erro('Informe a "Filial para" (ou limpe a "Filial de").'); return; }
+    if (!simular) {
+      if (destino === 'producao') {
+        const f = prompt(`Você vai GRAVAR ${tabela} na BASE PRODUÇÃO.\n\nPara confirmar, digite: PRODUCAO ${tabela}`);
+        if (f === null) return;
+        corpo.confirmacao = f;
+      } else if (!confirm(`Gravar ${tabela} de ${AMB[origem].label} em ${AMB[destino].label}?\n\n` +
+                          `Modo: ${corpo.modo === 'incluir' ? 'só incluir novos' : 'incluir e sobrescrever existentes'}.`)) {
+        return;
+      }
+    }
+
+    const tot = { lidos: 0, incluidos: 0, alterados: 0, ignorados: 0, erros: 0, lotes: 0 };
+    const erros = [], semDest = new Set();
+    let apos = 0, chave = '', concluiu = false;
+    rodando = true; parar = false;
+    okBtn.textContent = 'Parar';
+    c('tr-erros').innerHTML = '';
+    const pinta = (fim) => {
+      const verbo = simular ? 'seriam' : 'foram';
+      c('tr-prog').innerHTML =
+        `<p class="font-semibold">${simular ? 'Simulação' : 'Transferência'} ${tabela} · ${AMB[origem].label} → ${AMB[destino].label}` +
+        `${fim ? '' : ' · em andamento…'}</p>` +
+        `<p>${tot.lotes} lote(s) · ${tot.lidos} lido(s) na origem · ${tot.incluidos} ${verbo} incluído(s) · ` +
+        `${tot.alterados} ${verbo} alterado(s) · ${tot.ignorados} já existia(m) (ignorado) · ` +
+        `<span class="${tot.erros ? 'text-rose-700 font-semibold' : ''}">${tot.erros} erro(s)</span></p>` +
+        (chave ? `<p class="text-slate-400">Chave usada no destino: <span class="font-mono">${escapeHtml(chave)}</span></p>` : '') +
+        (semDest.size ? `<p class="text-amber-700">Campos da origem que não existem no destino (não copiados): ` +
+                        `<span class="font-mono">${escapeHtml([...semDest].join(', '))}</span></p>` : '');
+      c('tr-erros').innerHTML = erros.length
+        ? '<table class="w-full mt-1"><tbody>' + erros.slice(0, 200).map(e =>
+            `<tr class="border-t border-slate-100"><td class="pr-2 font-mono align-top">${escapeHtml(e.chave || '')}</td>` +
+            `<td class="text-rose-700">${escapeHtml(e.erro || '')}</td></tr>`).join('') + '</tbody></table>'
+        : '';
+    };
+    try {
+      while (!parar && document.body.contains(m.el)) {
+        const j = await api(`/api/protheus/${encodeURIComponent(cli)}/transferir`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...corpo, apos_recno: apos }),
+        });
+        tot.lotes++; tot.lidos += j.lidos; tot.incluidos += j.incluidos; tot.alterados += j.alterados;
+        tot.ignorados += j.ignorados; tot.erros += j.qtd_erros || 0;
+        (j.erros || []).forEach(e => erros.push(e));
+        (j.campos_sem_destino || []).forEach(x => semDest.add(x));
+        chave = j.chave || chave;
+        if (j.fim || j.ultimo_recno <= apos) { concluiu = true; break; }
+        apos = j.ultimo_recno;
+        pinta(false);
+      }
+      pinta(true);
+      if (!concluiu) c('tr-prog').insertAdjacentHTML('beforeend',
+        `<p class="text-amber-700">Interrompido no R_E_C_N_O_ ${apos} da origem — rodar de novo recomeça do início ` +
+        `(no modo "só incluir", o que já foi gravado é ignorado).</p>`);
+      else if (simular) c('tr-prog').insertAdjacentHTML('beforeend',
+        '<p class="text-slate-500">Nada foi gravado. Desmarque <b>Simulação</b> para transferir de verdade.</p>');
+    } catch (e) {
+      pinta(true);
+      m.erro(e.message);
+    } finally {
+      rodando = false; parar = false;
+      okBtn.disabled = false; okBtn.textContent = rotulo();
+    }
+  });
+}
+$('#cad-transferir').addEventListener('click', abreTransferencia);
 // Movimentos passa pelo 🧩 Perfil de coleta (lote por blocos + trava), só na
 // base da sub-aba aberta. Cadastros segue no /coletar de sempre.
 $('#mov-coletar').addEventListener('click', () => atualizaMovimentosREST([mov.ambiente], () => {
