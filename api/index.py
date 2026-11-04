@@ -292,6 +292,10 @@ ABAS = [
     # Plano de Trabalho (27/10/2026): substitui a planilha de atividades do CP.
     # Liberável ao cliente — o CP do cliente é quem mais usa (Minhas pendências).
     {"id": "plano",     "label": "Plano de Trabalho",    "cliente": True},
+    # Plano de Virada (04/11/2026): fases, atividades e janela recomendada do
+    # go-live. Liberável ao cliente para CONSULTA; incluir/editar/excluir é da
+    # equipe TOTVS (require_interno nas rotas de escrita).
+    {"id": "virada",    "label": "Plano de Virada",      "cliente": True},
     {"id": "modulos",   "label": "Por Módulo",           "cliente": True},
     {"id": "etapas",    "label": "Por Etapa",            "cliente": True},
     {"id": "consumo",   "label": "Consumo",              "cliente": True, "sensivel": True},
@@ -14545,6 +14549,212 @@ def api_tributos_transferir_plano(customer):
     except _TransErro as e:
         return _err(e.status, str(e))
     return _json({"ok": True, "customer": customer, **plano})
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PLANO DE VIRADA — Spec: docs/specs/2026-11-04-aba-plano-virada.md
+#  SQL: docs/sql/2026-11-04-plano-virada.sql
+# ══════════════════════════════════════════════════════════════════════════════
+# Um plano por cliente (virada_planos: datas-marco, recomendação e janelas
+# avaliadas) e as atividades (virada_itens) por fase. Consulta segue a aba
+# liberada; escrever é só da equipe TOTVS. Excluir é lógico (ativo=false):
+# o código PV-nnn não volta a ser usado.
+VIRADA_FASES = ("preparacao", "testes", "go_nogo", "congelamento", "corte",
+                "carga", "dia_d", "assistida", "fechamento")
+VIRADA_STATUS = ("planejado", "em_andamento", "concluido", "bloqueado", "cancelado")
+VIRADA_LADOS = ("TOTVS", "CLIENTE", "AMBOS")
+VIRADA_CRIT = ("alta", "media", "baixa")
+VIRADA_TEXTO = ("frente", "atividade", "detalhe", "resp_nome", "dependencia",
+                "referencia", "observacao")
+VIRADA_DATAS = ("data_inicio", "data_fim")
+VIRADA_PLANO_DATAS = ("data_virada", "data_go_nogo", "data_congelamento",
+                      "data_corte", "fim_assistida")
+
+
+def _virada_data(v):
+    """'' → None; aceita só AAAA-MM-DD (o <input type=date> manda assim)."""
+    v = (str(v).strip() if v is not None else "")
+    if not v:
+        return None, None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+        return None, f"Data inválida: {v} (use AAAA-MM-DD)."
+    try:
+        date.fromisoformat(v)
+    except ValueError:
+        return None, f"Data inválida: {v}."
+    return v, None
+
+
+def _virada_campos(b, novo=False):
+    """Valida o que vem da tela. Devolve (campos, erro). Campo desconhecido é
+    ignorado — customer, codigo e origem nunca vêm do corpo."""
+    c = {}
+    for k in VIRADA_TEXTO:
+        if k in b:
+            v = (str(b[k]).strip() if b[k] is not None else "")[:4000]
+            c[k] = v or None
+    for k, dom, msg in (("fase", VIRADA_FASES, "Fase inválida."), ("status", VIRADA_STATUS, "Status inválido."),
+                        ("resp_lado", VIRADA_LADOS, "Responsável (lado) inválido."),
+                        ("criticidade", VIRADA_CRIT, "Criticidade inválida.")):
+        if k in b and b[k] not in (None, ""):
+            if b[k] not in dom:
+                return None, msg
+            c[k] = b[k]
+    for k in VIRADA_DATAS:
+        if k in b:
+            v, e = _virada_data(b[k])
+            if e:
+                return None, e
+            c[k] = v
+    if "criterio_go" in b:
+        c["criterio_go"] = b["criterio_go"] in (True, 1, "1", "true", "on", "sim")
+    if "ordem" in b and str(b["ordem"]).strip():
+        try:
+            c["ordem"] = int(b["ordem"])
+        except (TypeError, ValueError):
+            return None, "Ordem inválida."
+    if novo:
+        if not c.get("atividade"):
+            return None, "Descreva a atividade."
+        if not c.get("frente"):
+            return None, "Informe a frente (processo/área)."
+        if not c.get("fase"):
+            return None, "Escolha a fase."
+    else:
+        for k, msg in (("atividade", "Descreva a atividade."), ("frente", "Informe a frente (processo/área).")):
+            if k in c and not c[k]:
+                return None, msg
+    ini, fim = c.get("data_inicio"), c.get("data_fim")
+    if ini and fim and fim < ini:
+        return None, "A data fim não pode ser antes do início."
+    return c, None
+
+
+def _virada_proximo_codigo(cur, customer):
+    cur.execute("""select coalesce(max(substring(codigo from '^PV-(\\d+)$')::int), 0) n
+                   from cockpit.virada_itens where customer=%s""", (customer,))
+    return f"PV-{(cur.fetchone()['n'] or 0) + 1:03d}"
+
+
+@app.get("/api/virada/<customer>")
+def api_virada(customer):
+    if (d := require_auth()):
+        return d
+    if (d := deny_aba(customer, "virada")):
+        return d
+    try:
+        plano = q("select * from cockpit.virada_planos where customer=%s", (customer,), one=True)
+        itens = q("""select * from cockpit.virada_itens where customer=%s and ativo
+                     order by array_position(%s::text[], fase), ordem, codigo""",
+                  (customer, list(VIRADA_FASES)))
+    except psycopg2.errors.UndefinedTable:
+        return _err(503, "As tabelas do Plano de Virada ainda não existem no Supabase.")
+    return _json({"ok": True, "customer": customer, "interno": eh_interno(),
+                  "hoje": datetime.now(TZ_SP).date().isoformat(),
+                  "plano": plano, "itens": itens})
+
+
+@app.post("/api/virada/<customer>/item")
+def api_virada_novo(customer):
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    c, erro = _virada_campos(request.get_json(silent=True) or {}, novo=True)
+    if erro:
+        return _err(422, erro)
+    por = current_user()
+    with db() as conn, conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        conn.autocommit = False
+        # serializa a numeração do cliente (dois "incluir" ao mesmo tempo)
+        cur.execute("select pg_advisory_xact_lock(hashtext('virada:' || %s))", (customer,))
+        cod = _virada_proximo_codigo(cur, customer)
+        if "ordem" not in c:
+            cur.execute("""select coalesce(max(ordem), 0) + 1 n from cockpit.virada_itens
+                           where customer=%s and fase=%s""", (customer, c["fase"]))
+            c["ordem"] = cur.fetchone()["n"]
+        cols = ["customer", "codigo", "origem", "created_by", "updated_by"] + list(c)
+        cur.execute(f"""insert into cockpit.virada_itens ({', '.join(cols)})
+                        values ({', '.join(['%s'] * len(cols))}) returning *""",
+                    [customer, cod, "manual", por, por] + list(c.values()))
+        row = cur.fetchone()
+        conn.commit()
+    return _json({"ok": True, "item": row})
+
+
+def _virada_item(iid):
+    """O customer vem do ITEM, nunca da URL."""
+    return q("select * from cockpit.virada_itens where id=%s and ativo", (iid,), one=True)
+
+
+@app.post("/api/virada/item/<int:iid>")
+def api_virada_editar(iid):
+    if (d := require_interno()):
+        return d
+    it = _virada_item(iid)
+    if not it:
+        return _err(404, "Item não encontrado.")
+    if (d := deny_customer(it["customer"])):
+        return d
+    c, erro = _virada_campos(request.get_json(silent=True) or {})
+    if erro:
+        return _err(422, erro)
+    ini = c.get("data_inicio", it["data_inicio"] and str(it["data_inicio"]))
+    fim = c.get("data_fim", it["data_fim"] and str(it["data_fim"]))
+    if ini and fim and str(fim) < str(ini):
+        return _err(422, "A data fim não pode ser antes do início.")
+    if not c:
+        return _json({"ok": True, "item": it, "sem_mudanca": True})
+    sets = ", ".join(f"{k}=%s" for k in c)
+    row = q(f"""update cockpit.virada_itens set {sets}, updated_by=%s, updated_at=now()
+                where id=%s returning *""", list(c.values()) + [current_user(), iid], one=True)
+    return _json({"ok": True, "item": row})
+
+
+@app.post("/api/virada/item/<int:iid>/excluir")
+def api_virada_excluir(iid):
+    if (d := require_interno()):
+        return d
+    it = _virada_item(iid)
+    if not it:
+        return _err(404, "Item não encontrado.")
+    if (d := deny_customer(it["customer"])):
+        return d
+    execute("""update cockpit.virada_itens set ativo=false, updated_by=%s, updated_at=now()
+               where id=%s""", (current_user(), iid))
+    return _json({"ok": True})
+
+
+@app.post("/api/virada/<customer>/plano")
+def api_virada_plano(customer):
+    """Datas-marco e recomendação. Cria o plano se o cliente ainda não tem."""
+    if (d := require_interno()):
+        return d
+    if (d := deny_customer(customer)):
+        return d
+    b = request.get_json(silent=True) or {}
+    c = {}
+    for k in VIRADA_PLANO_DATAS:
+        if k in b:
+            v, e = _virada_data(b[k])
+            if e:
+                return _err(422, e)
+            c[k] = v
+    if "recomendacao" in b:
+        c["recomendacao"] = (str(b["recomendacao"] or "").strip()[:8000]) or None
+    atual = q("select data_virada from cockpit.virada_planos where customer=%s", (customer,), one=True)
+    if not (c.get("data_virada") or (atual and "data_virada" not in c)):
+        return _err(422, "Informe a data da virada.")
+    if not c:
+        return _json({"ok": True, "sem_mudanca": True})
+    por = current_user()
+    cols = ["customer", "updated_by"] + list(c)
+    upd = ", ".join(f"{k}=excluded.{k}" for k in ["updated_by"] + list(c))
+    row = q(f"""insert into cockpit.virada_planos ({', '.join(cols)})
+                values ({', '.join(['%s'] * len(cols))})
+                on conflict (customer) do update set {upd}, updated_at=now()
+                returning *""", [customer, por] + list(c.values()), one=True)
+    return _json({"ok": True, "plano": row})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────
