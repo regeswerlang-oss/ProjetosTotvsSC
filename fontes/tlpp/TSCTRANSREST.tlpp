@@ -34,6 +34,11 @@ O que a gravação faz e o que NÃO faz:
     recebidos.
   - Filial: "filial_de"/"filial_para" troca o conteúdo de <PREFIXO>_FILIAL
     quando a máscara muda entre as bases.
+  - v1.1: "chave" (lista de campos) localiza o registro no destino por SQL
+    nesses campos, em vez do índice 1. É o caso do Configurador de Tributos
+    (FISA170), onde o índice pode usar o ID técnico (FWUUID), que muda de
+    base para base. Havendo mais de um, vale o de maior R_E_C_N_O_ (versão
+    mais recente).
 
 @type  namespace
 @author Consultoria TOTVS SC
@@ -42,7 +47,7 @@ O que a gravação faz e o que NÃO faz:
 /*/
 namespace tsc.trans
 
-#define VERSAO      "1.0"
+#define VERSAO      "1.1"
 #define LIM_LER     500
 #define LIM_GRAVAR  500
 
@@ -195,6 +200,8 @@ User Function tscTrGrava() as Logical
     Local aPres     := {} as Array
     Local aErros    := {} as Array
     Local aSemDest  := {} as Array
+    Local aChvCpo   := {} as Array
+    Local nRecDest  := 0 as Numeric
     Local bChave    := Nil as Codeblock
     Local oErr      := Nil as Object
 
@@ -249,6 +256,19 @@ User Function tscTrGrava() as Logical
         nPosFil := jPos[cCpoFil]
     EndIf
     bChave := montaBloco(cChave, aStru)
+    If ValType(jBody["chave"]) == "A" .And. Len(jBody["chave"]) > 0
+        For nI := 1 To Len(jBody["chave"])
+            cCampo := Upper(AllTrim(cValToChar(jBody["chave"][nI])))
+            If jPos[cCampo] == Nil
+                Return erro(400, "Campo de chave " + cCampo + " não existe em " + cAlias + " nesta base.")
+            EndIf
+            aAdd(aChvCpo, jPos[cCampo])
+        Next nI
+        cChave := ""
+        For nI := 1 To Len(aChvCpo)
+            cChave += If(nI > 1, "+", "") + aStru[aChvCpo[nI]][1]
+        Next nI
+    EndIf
 
     For nI := 1 To Len(aRegs)
         jReg := aRegs[nI]
@@ -286,17 +306,31 @@ User Function tscTrGrava() as Logical
         EndIf
 
         cMsg := ""
-        Try
-            cKey := Eval(bChave, aVals)
-        Catch oErr
-            cMsg := "chave " + cChave + " não montou: " + AllTrim(oErr:Description)
-        EndTry
+        If Len(aChvCpo) > 0
+            cKey := ""
+            For nJ := 1 To Len(aChvCpo)
+                cKey += If(nJ > 1, "|", "") + AllTrim(cValToChar(aVals[aChvCpo[nJ]]))
+            Next nJ
+            nRecDest := buscaRecno(cAlias, aStru, aChvCpo, aVals, @cMsg)
+            lExiste := nRecDest > 0
+            If lExiste
+                (cAlias)->(DbGoto(nRecDest))
+            EndIf
+        Else
+            Try
+                cKey := Eval(bChave, aVals)
+            Catch oErr
+                cMsg := "chave " + cChave + " não montou: " + AllTrim(oErr:Description)
+            EndTry
+            If Empty(cMsg)
+                lExiste := (cAlias)->(DbSeek(cKey))
+            EndIf
+        EndIf
         If !Empty(cMsg)
             aAdd(aErros, itemErro("#" + cValToChar(nI), cMsg))
             Loop
         EndIf
 
-        lExiste := (cAlias)->(DbSeek(cKey))
         If lExiste .And. cModo == "incluir"
             nIgn++
             Loop
@@ -436,6 +470,51 @@ Static Function converte(xVal, aCampo as Array)
         Return xVal
     EndIf
 Return cValToChar(xVal)
+
+// R_E_C_N_O_ do registro no destino pelos campos da chave (0 = não existe).
+// Datas e lógicos ficam gravados como caractere no banco (AAAAMMDD, T/F).
+Static Function buscaRecno(cAlias as Character, aStru as Array, aChvCpo as Array, aVals as Array, cMsg as Character) as Numeric
+    Local cSql  := "SELECT R_E_C_N_O_ RECNO FROM " + RetSqlName(cAlias) + " WHERE D_E_L_E_T_ = ' '" as Character
+    Local nRec  := 0 as Numeric
+    Local nI    := 0 as Numeric
+    Local nPos  := 0 as Numeric
+    Local cQry  := "" as Character
+    Local oStmt := Nil as Object
+    Local oErr  := Nil as Object
+
+    For nI := 1 To Len(aChvCpo)
+        cSql += " AND " + aStru[aChvCpo[nI]][1] + " = ?"
+    Next nI
+    cSql += " ORDER BY R_E_C_N_O_ DESC"
+    Try
+        oStmt := FWExecStatement():New(cSql)
+        For nI := 1 To Len(aChvCpo)
+            nPos := aChvCpo[nI]
+            Do Case
+                Case aStru[nPos][2] == "N"
+                    oStmt:SetNumeric(nI, aVals[nPos])
+                Case aStru[nPos][2] == "D"
+                    oStmt:SetString(nI, DToS(aVals[nPos]))
+                Case aStru[nPos][2] == "L"
+                    If aVals[nPos]
+                        oStmt:SetString(nI, "T")
+                    Else
+                        oStmt:SetString(nI, "F")
+                    EndIf
+                Otherwise
+                    oStmt:SetString(nI, aVals[nPos])
+            EndCase
+        Next nI
+        cQry := oStmt:OpenAlias()
+        If !(cQry)->(Eof())
+            nRec := (cQry)->RECNO
+        EndIf
+        (cQry)->(DbCloseArea())
+        oStmt:Destroy()
+    Catch oErr
+        cMsg := "busca pela chave falhou: " + AllTrim(oErr:Description)
+    EndTry
+Return nRec
 
 // Bloco que monta a chave do índice 1 a partir do vetor de valores. Os nomes
 // dos campos são trocados do MAIOR para o menor: B1_CODBAR antes de B1_COD.
