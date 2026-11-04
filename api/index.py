@@ -3544,6 +3544,10 @@ def api_protheus_transferir(customer):
                  "filial_de": (b.get("filial_de") or "").strip(),
                  "filial_para": (b.get("filial_para") or "").strip(),
                  "campos_excluir": _trans_campos(b.get("campos_excluir"))}
+        if (chave := _trans_campos(b.get("chave"))):
+            # Localiza no destino por estes campos (SQL), não pelo índice 1 —
+            # no FISA170 o índice pode usar o ID técnico, que muda por base.
+            corpo["chave"] = chave
         resta = TIMEOUT_TETO - (time.time() - ini) - 3
         if resta < 5:
             return _err(504, "A leitura na origem consumiu o tempo do lote — reduza o tamanho do lote.")
@@ -14370,6 +14374,177 @@ def api_tributos_scripts(customer):
     suf = (cfg.get("sufixo") or "010").strip()
     return _json({"ok": True, "ambiente": amb, "sufixo": suf,
                   "scripts": [{"id": s["id"], "sql": s["sqls"][0]} for s in _trib_scripts_meta(suf, cfg.get("banco"))]})
+
+
+# ── TRIBUTOS: transferir UM registro (e o que ele precisa) entre as bases ───
+# 04/11/2026. O botão ⇄ da linha monta um PACOTE a partir das últimas coletas
+# (cockpit.trib_coletas) e o navegador executa passo a passo pela mesma rota de
+# lote da aba Cadastros (/api/protheus/<cli>/transferir → TSCTRANSREST):
+#   1. o registro escolhido, filtrado pela chave de negócio (TRIB_CHAVE / SIX
+#      sem ID) e localizado no destino pelos MESMOS campos — nunca pelo ID;
+#   2. regra de cálculo (F2B): os cadastros que ela usa (TRIB_REFS) e que o
+#      destino ainda não tem — subir só a F2B quebra (decisão 7 da aba);
+#   3. registro que vai ser INCLUÍDO com ID técnico: os itens filhos ligados
+#      por <FILHA>_ID<PAI> (F21..F26 → F20 pelo F21_IDF20 etc.), com o mesmo
+#      ID, para o vínculo continuar fechando no destino.
+# Registro que já existe no destino (conteúdo diferente) é ALTERADO sem tocar
+# nas colunas _ID*: o ID do destino fica, e os filhos dele também. A versão
+# anterior (*_ALTERA = '1') fica fora da leitura.
+
+def _trib_lit(v):
+    return "'" + str(v if v is not None else "").strip().replace("'", "''") + "'"
+
+
+def _trib_cond(col, val):
+    """Portável (Oracle/SQL Server/Postgres) e tolerante ao preenchimento com
+    espaços. Vazio: no Oracle RTRIM('  ') é NULL, nos outros é ''."""
+    v = str(val if val is not None else "").strip()
+    if not v:
+        return f"(RTRIM({col}) = '' OR RTRIM({col}) IS NULL)"
+    return f"RTRIM({col}) = {_trib_lit(v)}"
+
+
+def _trib_plano(customer, cod, k, origem):
+    destino = "teste" if origem == "producao" else "producao"
+    col_o, _a = _trib_ultima(customer, origem)
+    col_d, _b = _trib_ultima(customer, destino)
+    if not col_o or not col_d:
+        raise _TransErro(409, "As duas bases precisam ter uma coleta concluída na aba Tributos "
+                              "(⚡ Coletar Produção + Teste) antes de transferir.")
+    mo = (col_o.get("meta") or {}).get("tabelas") or {}
+    md = (col_d.get("meta") or {}).get("tabelas") or {}
+    do, dd = col_o.get("dados") or {}, col_d.get("dados") or {}
+    cache = {}
+
+    def regs(lado, c):
+        if (lado, c) not in cache:
+            meta, dad = (mo, do) if lado == "o" else (md, dd)
+            cache[(lado, c)] = _trib_registros(meta.get(c), dad.get(c), c)[0] or []
+        return cache[(lado, c)]
+
+    def chave_de(c):
+        a, b = mo.get(c) or {}, md.get(c) or {}
+        if not a.get("existe") or not b.get("existe"):
+            return None
+        ch = _trib_chave(c, a)
+        return ch if ch and ch == _trib_chave(c, b) else None
+
+    def filtro(c, pares):
+        f = " AND ".join(_trib_cond(col, v) for col, v in pares)
+        if f"{c}_ALTERA" in (mo.get(c) or {}).get("colunas", []):
+            f += f" AND {c}_ALTERA <> '1'"
+        return f
+
+    cod = (cod or "").strip().upper()
+    if cod not in TRIB_TABELAS or TRIB_TABELAS[cod][2] != "cad":
+        raise _TransErro(400, f"{cod} não é cadastro do Configurador de Tributos.")
+    if not (md.get(cod) or {}).get("existe"):
+        raise _TransErro(409, f"A tabela {cod} não existe na base destino ({destino}).")
+    chave = chave_de(cod)
+    if not chave:
+        raise _TransErro(409, f"{cod} não tem chave estável nas duas bases (comparada pelo conteúdo) — "
+                              f"não dá para escolher um registro só. Use ⇄ Transferir entre bases na lateral.")
+    k = [str(x if x is not None else "").strip() for x in (k or [])]
+    if len(k) != len(chave):
+        raise _TransErro(400, f"Chave incompleta: {cod} usa {' + '.join(chave)}.")
+    kf = lambda r, ch: [str(r.get(c) or "").strip() for c in ch]
+    rec = next((r for r in regs("o", cod) if kf(r, chave) == k), None)
+    if not rec:
+        raise _TransErro(409, f"{cod} {' / '.join(k)} não está na última coleta da {origem}.")
+
+    passos, vistos = [], set()
+
+    def ids_da(c):
+        return [x for x in (mo.get(c) or {}).get("colunas", []) if _trib_eh_id(x)]
+
+    def filhos(c, r):
+        """Itens ligados por <FILHA>_ID<PAI> ao ID técnico do registro."""
+        idv = str(r.get(f"{c}_ID") or "").strip()
+        if not idv:
+            return
+        for f2, (rot2, _g, tipo2) in TRIB_TABELAS.items():
+            col = f"{f2}_ID{c}"
+            if tipo2 != "cad" or f2 == c or col not in (mo.get(f2) or {}).get("colunas", []):
+                continue
+            if not (md.get(f2) or {}).get("existe"):
+                continue
+            n = sum(1 for x in regs("o", f2) if str(x.get(col) or "").strip() == idv)
+            if n:
+                add(f2, rot2, [(col, idv)], "incluir", None, [], f"itens de {c} ligados pelo {col}", n)
+
+    def add(c, rot, pares, modo, ch, excluir, motivo, n=1):
+        flt = filtro(c, pares)
+        if (c, flt) in vistos:
+            return
+        vistos.add((c, flt))
+        passos.append({"tabela": c, "rotulo": rot, "filtro": flt, "modo": modo, "chave": ch or [],
+                       "campos_excluir": excluir, "motivo": motivo, "registros": n,
+                       "descricao": " / ".join(v for _c, v in pares)})
+
+    existe_dest = any(kf(r, chave) == k for r in regs("d", cod))
+    rot = TRIB_TABELAS[cod][0]
+    if existe_dest:
+        add(cod, rot, list(zip(chave, k)), "incluir_alterar", chave, ids_da(cod),
+            "registro escolhido — já existe no destino: atualiza os campos, mantém o ID do destino")
+    else:
+        add(cod, rot, list(zip(chave, k)), "incluir", chave, [], "registro escolhido — não existe no destino")
+        filhos(cod, rec)
+
+    if cod == "F2B":
+        for src, csrc, dst, cdst, rot_ref, filt in TRIB_REFS:
+            if src != "F2B":
+                continue
+            codigo = str(rec.get(f"F2B_{csrc}") or "").strip()
+            col_dst = f"{dst}_{cdst}"
+            if not codigo or col_dst not in (mo.get(dst) or {}).get("colunas", []):
+                continue
+            casa = lambda r: (str(r.get(col_dst) or "").strip() == codigo and
+                              (not filt or str(r.get(filt[0]) or "").strip() == filt[1]))
+            if any(casa(r) for r in regs("d", dst)):
+                continue                                   # destino já tem
+            achados = [r for r in regs("o", dst) if casa(r)]
+            ch_dst = chave_de(dst)
+            for r in achados:
+                pares = ([(c, str(r.get(c) or "").strip()) for c in ch_dst] if ch_dst
+                         else [(col_dst, codigo)] + ([(filt[0], filt[1])] if filt else []))
+                add(dst, TRIB_TABELAS[dst][0], pares, "incluir", ch_dst, [],
+                    f"{rot_ref} {codigo} usado pela regra e ausente no destino")
+                filhos(dst, r)
+
+    avisos = []
+    if any(p["modo"] == "incluir_alterar" for p in passos):
+        avisos.append("Alteração direta: o FISA170 normalmente grava uma NOVA versão e marca a antiga "
+                      "(*_ALTERA = '1'); aqui o registro do destino é sobrescrito, sem histórico.")
+    if any(c.endswith("_ID") for c in rec) and not existe_dest:
+        avisos.append("O registro entra com o MESMO ID técnico da origem — é isso que mantém os itens "
+                      "filhos ligados. Fórmulas (CIN) ligadas por outro nome de campo não entram no pacote: "
+                      "confira na comparação depois de coletar de novo.")
+    return {"origem": origem, "destino": destino, "tabela": cod, "k": k, "chave": chave,
+            "existe_destino": existe_dest, "passos": passos, "avisos": avisos,
+            "coleta_origem": col_o.get("concluido_em") or col_o.get("iniciado_em"),
+            "coleta_destino": col_d.get("concluido_em") or col_d.get("iniciado_em")}
+
+
+@app.post("/api/tributos/<customer>/transferir/plano")
+def api_tributos_transferir_plano(customer):
+    """Pacote de passos para levar UM registro da aba Tributos à outra base.
+    Não grava nada: quem executa é o navegador, passo a passo, pela rota de
+    lote /api/protheus/<cli>/transferir (simulação primeiro)."""
+    if (r := require_interno()):
+        return r
+    if (d := deny_customer(customer)):
+        return d
+    b = request.get_json(silent=True) or {}
+    origem = _amb_path(b.get("origem"))
+    if not origem:
+        return _err(400, "Origem inválida — use 'producao' ou 'teste'.")
+    try:
+        plano = _trib_plano(customer, b.get("tabela"), b.get("k"), origem)
+    except psycopg2.errors.UndefinedTable:
+        return _err(503, "A tabela cockpit.trib_coletas ainda não existe no Supabase.")
+    except _TransErro as e:
+        return _err(e.status, str(e))
+    return _json({"ok": True, "customer": customer, **plano})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────

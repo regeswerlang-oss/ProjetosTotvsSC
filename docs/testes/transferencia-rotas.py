@@ -284,5 +284,106 @@ confere("fonte exige MV_TSCGRAV para gravar", "MV_TSCGRAV" in tl and "gravacaoLi
 confere("fonte simula por padrão", 'Local lSimular  := .T.' in tl)
 confere("fonte usa FWExecStatement com parâmetro no recno", "SetNumeric(1, nApos)" in tl)
 
+# ── aba Tributos: plano do botão ⇄ da linha ───────────────────────────────────
+def tab(cod, cols, linhas, six=None):
+    return ({"existe": True, "colunas": cols, "filial_col": f"{cod}_FILIAL", "six": six or []},
+            {"ok": True, "cols": cols, "linhas": linhas})
+
+
+F2B_C = ["F2B_FILIAL", "F2B_ID", "F2B_REGRA", "F2B_DESC", "F2B_TRIB", "F2B_VIGINI", "F2B_RALIQ", "F2B_PERFPR", "F2B_RBASE"]
+F28_C = ["F28_FILIAL", "F28_ID", "F28_CODIGO", "F28_DESC", "F28_ALTERA"]
+F20_C = ["F20_FILIAL", "F20_ID", "F20_CODIGO", "F20_TIPO", "F20_DESC"]
+F21_C = ["F21_FILIAL", "F21_IDF20", "F21_UFORI", "F21_UFDEST"]
+F27_C = ["F27_FILIAL", "F27_ID", "F27_CODIGO", "F27_DESC"]
+
+
+def coleta(tabs):
+    return {"id": 1, "iniciado_em": "2026-11-04T10:00:00", "concluido_em": "2026-11-04T10:01:00",
+            "status": "ok", "meta": {"tabelas": {k: v[0] for k, v in tabs.items()}},
+            "dados": {k: v[1] for k, v in tabs.items()}}
+
+
+TRIB = {
+    "teste": coleta({
+        "F2B": tab("F2B", F2B_C, [["01", "uuid-b", "TR0002", "IBS O'BRIEN", "IBSEST", "20260101", "TA0003", "TPP001", "000001"],
+                                  ["01", "uuid-c", "TR0009", "CBS", "CBSFED", "20260101", "000001", "", "000001"]]),
+        "F28": tab("F28", F28_C, [["", "uuid-a", "TA0003", "IBS 0,1", " "], ["", "uuid-z", "000001", "ZERO", " "]]),
+        "F20": tab("F20", F20_C, [["", "uuid-p", "TPP001", "04", "PRODUTOS"], ["", "uuid-q", "TPP001", "02", "PARTIC"]]),
+        "F21": tab("F21", F21_C, [["", "uuid-p", "SC", "PR"], ["", "uuid-p", "SC", "SP"], ["", "uuid-x", "RS", "RS"]]),
+        "F27": tab("F27", F27_C, [["", "uuid-1", "000001", "BASE"]]),
+    }),
+    "producao": coleta({
+        "F2B": tab("F2B", F2B_C, [["01", "uuid-PROD", "TR0009", "CBS velha", "CBSFED", "20260101", "000001", "", "000001"]]),
+        "F28": tab("F28", F28_C, [["", "uuid-y", "000001", "ZERO", " "]]),
+        "F20": tab("F20", F20_C, [["", "uuid-r", "TPP001", "02", "PARTIC"]]),
+        "F21": tab("F21", F21_C, []),
+        "F27": tab("F27", F27_C, [["", "uuid-2", "000001", "BASE"]]),
+    }),
+}
+_q_antigo = m.q
+
+
+def fake_q2(sql, params=None, one=False):
+    s = " ".join(sql.split()).lower()
+    if "from cockpit.trib_coletas" in s:
+        return TRIB.get(params[1]) if "status in" in s else None
+    return _q_antigo(sql, params, one)
+
+
+m.q = fake_q2
+
+
+def plano(**kw):
+    corpo = {"tabela": "F2B", "k": ["01", "TR0002", "20260101"], "origem": "teste"}
+    corpo.update(kw)
+    r = cli.post(f"/api/tributos/{CUST}/transferir/plano", json=corpo)
+    return r.status_code, r.get_json()
+
+
+st, j = plano()
+confere("plano F2B só em Teste → 200", st == 200, j)
+passos = j["passos"]
+confere("1º passo é a própria regra, incluir, pela chave de negócio",
+        passos[0]["tabela"] == "F2B" and passos[0]["modo"] == "incluir"
+        and passos[0]["chave"] == ["F2B_FILIAL", "F2B_REGRA", "F2B_VIGINI"], passos[0])
+confere("filtro tolera espaços e escapa aspas",
+        "RTRIM(F2B_REGRA) = 'TR0002'" in passos[0]["filtro"] and "RTRIM(F2B_VIGINI) = '20260101'" in passos[0]["filtro"])
+tabs_p = [p["tabela"] for p in passos]
+confere("leva a alíquota TA0003 que a Produção não tem", "F28" in tabs_p, tabs_p)
+confere("alíquota sem a versão anterior", "F28_ALTERA <> '1'" in next(p for p in passos if p["tabela"] == "F28")["filtro"])
+f20 = [p for p in passos if p["tabela"] == "F20"]
+confere("leva o perfil de PRODUTO TPP001 (tipo 04), não o de participante",
+        len(f20) == 1 and "RTRIM(F20_TIPO) = '04'" in f20[0]["filtro"], f20)
+f21 = [p for p in passos if p["tabela"] == "F21"]
+confere("leva os 2 itens F21 do perfil pelo F21_IDF20",
+        len(f21) == 1 and "F21_IDF20" in f21[0]["filtro"] and "uuid-p" in f21[0]["filtro"] and f21[0]["registros"] == 2, f21)
+confere("base 000001 já existe na Produção: não entra", "F27" not in tabs_p)
+confere("filtros do plano passam pela trava de filtro", all(m._trans_filtro(p["filtro"])[1] is None for p in passos))
+filial_vazia = next(p for p in passos if p["tabela"] == "F28")["filtro"]
+confere("filial vazia vira RTRIM = '' OR IS NULL", "(RTRIM(F28_FILIAL) = '' OR RTRIM(F28_FILIAL) IS NULL)" in filial_vazia, filial_vazia)
+
+st, j = plano(k=["01", "TR0009", "20260101"])
+confere("regra que já existe na Produção → atualizar sem mexer no ID",
+        st == 200 and j["passos"][0]["modo"] == "incluir_alterar" and j["passos"][0]["campos_excluir"] == ["F2B_ID"]
+        and j["existe_destino"] and j["avisos"], j)
+confere("… e não leva filhos (o ID do destino fica)", len(j["passos"]) == 1, j["passos"])
+
+st, j = plano(tabela="F21", k=["", "SC", "PR"])
+confere("tabela sem chave estável → 409", st == 409, (st, j))
+st, j = plano(k=["01", "NAOEXISTE", "20260101"])
+confere("registro fora da coleta → 409", st == 409, (st, j))
+st, j = plano(tabela="F2D", k=["x"])
+confere("movimento do Configurador → 400", st == 400, (st, j))
+st, j = plano(origem="producao", k=["01", "TR0009", "20260101"])
+confere("sentido invertido Produção → Teste", st == 200 and j["destino"] == "teste", j)
+
+# o plano vira lote com chave: a chave chega ao fonte
+CHAMADAS.clear()
+st, j = transf(origem="teste", destino="producao", simular=True, filtro=passos[0]["filtro"], chave=passos[0]["chave"])
+grav = [c for c in CHAMADAS if c["url"].endswith("/gravar")]
+confere("lote com 'chave' repassa os campos ao TSCTRANSREST",
+        st == 200 and grav and grav[0]["corpo"].get("chave") == ["F2B_FILIAL", "F2B_REGRA", "F2B_VIGINI"], (st, grav[:1]))
+confere("fonte 1.1 localiza pela chave por SQL", "buscaRecno(" in tl and 'jBody["chave"]' in tl and '"1.1"' in tl)
+
 print(f"{ok} ok, {falhou} falhou")
 sys.exit(1 if falhou else 0)

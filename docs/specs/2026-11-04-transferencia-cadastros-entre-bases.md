@@ -94,3 +94,42 @@ excluído, guarda de produção (frase, admin, MV_TSCGRAV), recusas (movimento,
 dicionário, filtro, modo, inativo), fonte não compilado (404) e log. Tela
 aberta no Chrome com `/api/*` interceptado: ping das duas bases, 3 lotes
 simulados, troca origem/destino e prompt de confirmação na produção.
+
+## Aba Tributos (04/11/2026, tarde) — TSCTRANSREST 1.1
+
+**Lateral:** a aba Tributos ganhou o grupo de ações com o mesmo
+**⇄ Transferir entre bases**, listando só as tabelas de cadastro do
+Configurador e com origem padrão = Base de Testes.
+
+**Botão ⇄ por linha** (só interno, com as duas bases coletadas): em *O que
+falta subir para a Produção* e em cada linha da *Comparação registro a
+registro* que tenha chave estável — ↑ leva Teste → Produção (só em Teste,
+conteúdo diferente), ↓ leva Produção → Teste (só na Produção); o modal permite
+inverter. `POST /api/tributos/<cli>/transferir/plano` monta o **pacote** a
+partir das últimas coletas (não toca nas bases):
+
+1. o registro, filtrado e **localizado no destino pela chave de negócio**
+   (`TRIB_CHAVE`/SIX sem ID) — nunca pelo índice 1, que no FISA170 pode usar o
+   ID técnico. Por isso o fonte 1.1 aceita `chave` e busca por SQL nesses
+   campos (havendo mais de um, o de maior R_E_C_N_O_);
+2. na F2B, os cadastros referenciados (`TRIB_REFS`) que o destino não tem —
+   perfil conferido com o `F20_TIPO` certo;
+3. registro incluído com ID técnico leva os **itens filhos** ligados por
+   `<FILHA>_ID<PAI>` (F21..F26 → F20), com o mesmo ID;
+4. registro que já existe no destino é **atualizado sem as colunas `_ID*`** (o
+   ID do destino e os filhos dele ficam) — sem o versionamento do FISA170, e a
+   tela avisa;
+5. versão anterior (`*_ALTERA = '1'`) fica fora da leitura.
+
+Filtros portáveis (`RTRIM(col) = 'v'`; vazio = `RTRIM(col) = '' OR ... IS
+NULL`, porque no Oracle `RTRIM('  ')` é NULL). O navegador roda passo a passo
+pelo lote da aba Cadastros; Produção como destino pede a frase uma vez
+(`PRODUCAO <TABELA>` da linha) e cada passo leva a sua. Depois de gravar, a
+tela pede nova coleta para a comparação refletir.
+
+> Fórmulas (CIN) ligadas por outro nome de campo que não `<CIN>_ID<PAI>` não
+> entram no pacote automático — conferir na comparação após recoletar.
+
+Teste: `docs/testes/transferencia-rotas.py` agora com 63 verificações (plano:
+regra + alíquota + perfil do tipo certo + itens F21 pelo ID, atualização sem
+ID, sem chave → 409, sentido invertido, `chave` repassada ao fonte).

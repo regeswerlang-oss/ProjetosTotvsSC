@@ -433,6 +433,10 @@
           </label>
         </div>
 
+        <div data-rail="trb" class="rail-grupo hidden">
+          <button id="trb-transferir" data-interno class="rail-btn">⇄ Transferir entre bases<span class="rail-sub">tabela do Configurador</span></button>
+        </div>
+
         <div data-rail="mov" class="rail-grupo hidden">
           <button id="mov-sql"      data-interno class="rail-btn">🗄 Script SQL</button>
           <button id="mov-ambiente" data-interno class="rail-btn">⚙ Ambiente</button>
@@ -2487,7 +2491,7 @@ const AMB = {
 // lá quem decide é o setSub() — que roda depois deste mapa e sobrepõe.
 const RAIL_ABA = { crono: 'arvore', modulos: 'arvore', etapas: 'arvore',
                    cobertura: 'cob', empresas: 'emp', estrutura: 'est',
-                   compara: 'cmp', auditoria: 'aud', integracoes: 'int', prototipo: 'pro', transicao: 'tr',
+                   compara: 'cmp', auditoria: 'aud', integracoes: 'int', tributos: 'trb', prototipo: 'pro', transicao: 'tr',
                    plano: 'pl' };
 
 function railGrupo(chave) {
@@ -9054,12 +9058,12 @@ $('#cad-coletar').addEventListener('click', () => coletaAgora('cadastros'));
 //  destino só aceita com MV_TSCGRAV = .T.
 //  Spec: docs/specs/2026-11-04-transferencia-cadastros-entre-bases.md
 // ============================================================================
-function abreTransferencia() {
+function abreTransferencia(opts = {}) {
   const cli = state.selected?.cli;
   if (!cli) { alert('Abra um projeto antes de transferir.'); return; }
-  const origem0 = cad.ambiente || 'producao';
+  const origem0 = opts.origem || cad.ambiente || 'producao';
   const destino0 = origem0 === 'producao' ? 'teste' : 'producao';
-  const tabs = (cad.dados?.tabelas || []).map(t =>
+  const tabs = (opts.tabelas || cad.dados?.tabelas || []).map(t =>
     `<option value="${escapeHtml(t.tabela)}">${escapeHtml(t.descricao || '')}</option>`).join('');
   const optAmb = sel => Object.entries(AMB).map(([k, v]) =>
     `<option value="${k}" ${k === sel ? 'selected' : ''}>${v.label}</option>`).join('');
@@ -9218,7 +9222,28 @@ function abreTransferencia() {
     }
   });
 }
-$('#cad-transferir').addEventListener('click', abreTransferencia);
+$('#cad-transferir').addEventListener('click', () => abreTransferencia());
+
+// Laço de lotes de UM passo (tabela + filtro): repete até a origem acabar.
+async function transfLotes(cli, corpo, aoLote, parar) {
+  const tot = { lidos: 0, incluidos: 0, alterados: 0, ignorados: 0, erros: 0, lotes: 0 };
+  const erros = [], semDest = new Set();
+  let apos = 0;
+  while (!parar()) {
+    const j = await api(`/api/protheus/${encodeURIComponent(cli)}/transferir`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...corpo, apos_recno: apos }),
+    });
+    tot.lotes++; tot.lidos += j.lidos; tot.incluidos += j.incluidos; tot.alterados += j.alterados;
+    tot.ignorados += j.ignorados; tot.erros += j.qtd_erros || 0;
+    (j.erros || []).forEach(e => erros.push(e));
+    (j.campos_sem_destino || []).forEach(x => semDest.add(x));
+    aoLote && aoLote(tot);
+    if (j.fim || j.ultimo_recno <= apos) return { tot, erros, semDest, concluiu: true };
+    apos = j.ultimo_recno;
+  }
+  return { tot, erros, semDest, concluiu: false };
+}
 // Movimentos passa pelo 🧩 Perfil de coleta (lote por blocos + trava), só na
 // base da sub-aba aberta. Cadastros segue no /coletar de sempre.
 $('#mov-coletar').addEventListener('click', () => atualizaMovimentosREST([mov.ambiente], () => {
@@ -14201,7 +14226,7 @@ function tribMigracao(d) {
     <div class="overflow-x-auto"><table class="w-full text-sm">
     <thead><tr class="text-left text-xs text-slate-500 border-b">
       <th class="py-1.5 pr-3">Situação</th><th class="pr-3">Filial</th><th class="pr-3">Regra</th><th class="pr-3">Tributo</th>
-      <th class="pr-3">Descrição</th><th class="pr-3">Início</th><th class="pr-3">Campos diferentes / também falta na Produção</th></tr></thead>
+      <th class="pr-3">Descrição</th><th class="pr-3">Início</th><th class="pr-3">Campos diferentes / também falta na Produção</th>${d.interno ? '<th></th>' : ''}</tr></thead>
     <tbody>${lst.map(m => `<tr class="border-b border-slate-100 align-top">
       <td class="py-1.5 pr-3">${tribSit(m.sit)}</td>
       <td class="pr-3 font-mono text-xs">${escapeHtml(m.filial || '—')}</td>
@@ -14211,6 +14236,7 @@ function tribMigracao(d) {
       <td class="pr-3 whitespace-nowrap">${tribData(m.vigini)}</td>
       <td class="pr-3 text-xs">${m.difs.length ? `<div class="text-rose-700">${m.difs.map(c => escapeHtml(tit[c] ? `${tit[c]} (${c})` : c)).join(', ')}</div>` : ''}
         ${m.deps.length ? `<div class="flex flex-wrap gap-1 mt-0.5">${m.deps.map(x => `<span class="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-900">${escapeHtml(x.rotulo)} <b class="font-mono">${escapeHtml(x.codigo)}</b></span>`).join('')}</div>` : (m.sit === 'so_teste' ? '<span class="text-slate-400">dependências já na Produção</span>' : '')}</td>
+      ${d.interno ? `<td class="pl-2 text-right">${tribBotaoTransf('F2B', (cmp.chave || []).map(c => ({ F2B_FILIAL: m.filial, F2B_REGRA: m.regra, F2B_VIGINI: m.vigini })[c] ?? ''), 'teste', 'Subir para a Produção', cmp.chave)}</td>` : ''}
     </tr>`).join('')}</tbody></table></div>`;
 }
 
@@ -14330,7 +14356,7 @@ function tribRegistros(d, cod) {
     ${cmp.so_dic && (cmp.so_dic.p.length || cmp.so_dic.t.length) ? `<div class="text-xs text-rose-700 mb-2">Dicionário diferente — campos só na Produção: ${cmp.so_dic.p.join(', ') || 'nenhum'}; só no Teste: ${cmp.so_dic.t.join(', ') || 'nenhum'}.</div>` : ''}
     ${(cmp.truncada.p || cmp.truncada.t) ? '<div class="text-xs text-amber-800 mb-2">! Tabela acima do limite de leitura — a comparação é parcial.</div>' : ''}
     <div class="overflow-x-auto"><table class="w-full text-xs">
-      <thead><tr class="text-left text-slate-500 border-b"><th class="py-1 pr-2">Situação</th>${mostrar.map(c => `<th class="pr-2" title="${c}">${escapeHtml(tit(c))}</th>`).join('')}<th class="pr-2">Diferenças (Produção → Teste)</th></tr></thead>
+      <thead><tr class="text-left text-slate-500 border-b"><th class="py-1 pr-2">Situação</th>${mostrar.map(c => `<th class="pr-2" title="${c}">${escapeHtml(tit(c))}</th>`).join('')}<th class="pr-2">Diferenças (Produção → Teste)</th>${d.interno && !unica && cmp.chave ? '<th></th>' : ''}</tr></thead>
       <tbody>${pedaco.map(i => {
         const r = i.t || i.p;
         return `<tr class="border-b border-slate-100 align-top">
@@ -14338,9 +14364,114 @@ function tribRegistros(d, cod) {
           ${mostrar.map(c => `<td class="pr-2 ${chave.includes(c) ? 'font-mono' : ''}">${escapeHtml(tribValor(cmp, c, r[c] ?? ''))}</td>`).join('')}
           <td class="pr-2">${i.difs.map(c => `<div><span class="text-slate-500">${escapeHtml(tit(c))}:</span> <span class="line-through text-rose-700">${escapeHtml(tribValor(cmp, c, i.p[c] ?? '') || '∅')}</span> → <span class="text-emerald-800">${escapeHtml(tribValor(cmp, c, i.t[c] ?? '') || '∅')}</span></div>`).join('')}
             ${i.par ? `<div class="text-sky-700">mesmo conteúdo, outro código: ${escapeHtml(i.par.join(' / '))}</div>` : ''}</td>
+          ${d.interno && !unica && cmp.chave ? `<td class="pl-2 text-right whitespace-nowrap">${
+            i.sit === 'so_teste' ? tribBotaoTransf(cod, i.k, 'teste', 'Subir para a Produção', cmp.chave)
+            : i.sit === 'so_prod' ? tribBotaoTransf(cod, i.k, 'producao', 'Levar para a Base de Testes', cmp.chave)
+            : i.sit === 'diverg' ? tribBotaoTransf(cod, i.k, 'teste', 'Sobrescrever a Produção com o Teste', cmp.chave) : ''}</td>` : ''}
         </tr>`;
       }).join('')}</tbody></table></div>
     ${cmp.iguais_omitidos ? `<div class="text-[11px] text-slate-400 mt-1">${cmp.iguais_omitidos} registro(s) iguais não listados.</div>` : ''}`;
+}
+
+// Botão ⇄ da linha: leva ESTE registro (e o que ele precisa) para a outra base.
+function tribBotaoTransf(cod, k, origem, titulo, chave) {
+  if (!chave || !chave.length || !k || k.length !== chave.length) return '';
+  const seta = origem === 'teste' ? '↑' : '↓';
+  return `<button type="button" data-trb-transf="${cod}" data-trb-k="${escapeHtml(JSON.stringify(k))}" data-trb-origem="${origem}"
+    title="${escapeHtml(titulo)}" class="px-2 py-0.5 rounded border border-slate-300 bg-white hover:bg-sky-50 hover:border-sky-400 text-xs font-semibold text-totvs-petroleo">⇄ ${seta}</button>`;
+}
+
+async function trbTransferirItem(cod, k, origem) {
+  const cli = state.selected?.cli;
+  if (!cli) return;
+  const m = modal(`⇄ ${escapeHtml(cod)} · ${escapeHtml(k.join(' / '))}`,
+    '<div id="ti-corpo" class="text-sm text-slate-500">Montando o pacote a partir das últimas coletas…</div>', 'Simular');
+  const c = id => m.campo(id);
+  const okBtn = m.el.querySelector('[data-ok]');
+  okBtn.disabled = true;
+  let plano = null, rodando = false, parar = false;
+
+  const carrega = async (orig) => {
+    okBtn.disabled = true; m.erro('');
+    try {
+      plano = await api(`/api/tributos/${encodeURIComponent(cli)}/transferir/plano`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabela: cod, k, origem: orig }) });
+    } catch (e) { c('ti-corpo').innerHTML = `<p class="text-rose-700">${escapeHtml(e.message)}</p>`; return; }
+    const de = AMB[plano.origem].label, para = AMB[plano.destino].label;
+    c('ti-corpo').innerHTML = `
+      <p class="text-slate-700"><b>${de}</b> → <b>${para}</b>
+        <button type="button" id="ti-inverte" class="ml-2 text-xs text-sky-700 underline">inverter sentido</button></p>
+      <p class="text-xs text-slate-500">Pacote montado pelas coletas da aba (origem ${escapeHtml(fmtDataHora(plano.coleta_origem))},
+        destino ${escapeHtml(fmtDataHora(plano.coleta_destino))}). Cada passo lê na origem e grava no destino pela REST TSCTRANSREST.</p>
+      <table class="w-full text-xs mt-1"><thead><tr class="text-left text-slate-500 border-b">
+        <th class="py-1 pr-2">#</th><th class="pr-2">Tabela</th><th class="pr-2">O quê</th><th class="pr-2">Modo</th><th class="pr-2">Resultado</th></tr></thead>
+        <tbody>${plano.passos.map((p, n) => `<tr class="border-b border-slate-100 align-top">
+          <td class="py-1 pr-2">${n + 1}</td>
+          <td class="pr-2 font-mono">${escapeHtml(p.tabela)}</td>
+          <td class="pr-2"><div>${escapeHtml(p.rotulo)} <span class="font-mono">${escapeHtml(p.descricao)}</span>${p.registros > 1 ? ` · ${p.registros} itens` : ''}</div>
+            <div class="text-slate-400">${escapeHtml(p.motivo)}</div></td>
+          <td class="pr-2 whitespace-nowrap">${p.modo === 'incluir' ? 'incluir' : 'atualizar'}</td>
+          <td class="pr-2" id="ti-res-${n}">—</td></tr>`).join('')}</tbody></table>
+      ${plano.avisos.map(a => `<p class="text-xs text-amber-800 mt-1">! ${escapeHtml(a)}</p>`).join('')}
+      <label class="flex items-center gap-2 mt-2"><input id="ti-simular" type="checkbox" checked>
+        <span><b>Simulação</b> — não grava nada, só conta</span></label>
+      <div id="ti-erros" class="text-xs max-h-32 overflow-y-auto"></div>`;
+    c('ti-inverte').addEventListener('click', () => { if (!rodando) carrega(plano.destino); });
+    c('ti-simular').addEventListener('change', () => { if (!rodando) okBtn.textContent = c('ti-simular').checked ? 'Simular' : 'Transferir'; });
+    okBtn.textContent = 'Simular';
+    okBtn.disabled = !plano.passos.length;
+  };
+
+  m.aoConfirmar(async () => {
+    if (rodando) { parar = true; okBtn.disabled = true; okBtn.textContent = 'Parando…'; return; }
+    if (!plano) return;
+    const simular = c('ti-simular').checked;
+    let confirmacao = null;
+    if (!simular) {
+      if (plano.destino === 'producao') {
+        const f = prompt(`Você vai GRAVAR ${plano.passos.length} passo(s) na BASE PRODUÇÃO.\n\nPara confirmar, digite: PRODUCAO ${cod}`);
+        if (f === null) return;
+        if (f.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase().replace(/\s+/g, ' ') !== `PRODUCAO ${cod}`) {
+          m.erro(`Confirmação diferente de "PRODUCAO ${cod}" — nada foi gravado.`); return;
+        }
+        confirmacao = true;
+      } else if (!confirm(`Gravar ${plano.passos.length} passo(s) na ${AMB[plano.destino].label}?`)) return;
+    }
+    rodando = true; parar = false; m.erro('');
+    okBtn.textContent = 'Parar';
+    const erros = [];
+    let gravou = false;
+    try {
+      for (let n = 0; n < plano.passos.length && !parar; n++) {
+        const p = plano.passos[n];
+        const cel = c(`ti-res-${n}`);
+        cel.textContent = 'rodando…';
+        const r = await transfLotes(cli, {
+          origem: plano.origem, destino: plano.destino, tabela: p.tabela, filtro: p.filtro,
+          modo: p.modo, chave: p.chave, campos_excluir: p.campos_excluir, simular, lote: 200,
+          confirmacao: confirmacao ? `PRODUCAO ${p.tabela}` : undefined,
+        }, null, () => parar || !document.body.contains(m.el));
+        const t = r.tot, v = simular ? 'seria(m)' : '';
+        cel.innerHTML = `${t.lidos} lido(s) · <b>${t.incluidos}</b> incl. ${v} · <b>${t.alterados}</b> alt. ${v}` +
+          (t.ignorados ? ` · ${t.ignorados} já existia(m)` : '') +
+          (t.erros ? ` · <span class="text-rose-700 font-semibold">${t.erros} erro(s)</span>` : '') +
+          (!t.lidos ? ' <span class="text-amber-700">(nada na origem)</span>' : '') +
+          (r.semDest.size ? `<div class="text-amber-700">sem destino: ${escapeHtml([...r.semDest].join(', '))}</div>` : '');
+        r.erros.forEach(e => erros.push({ ...e, tabela: p.tabela }));
+        if (!simular && (t.incluidos || t.alterados)) gravou = true;
+      }
+      c('ti-erros').innerHTML = erros.map(e => `<div class="text-rose-700"><span class="font-mono">${escapeHtml(e.tabela)} ${escapeHtml(e.chave || '')}</span> — ${escapeHtml(e.erro || '')}</div>`).join('');
+      if (gravou) c('ti-erros').insertAdjacentHTML('beforeend',
+        '<p class="text-emerald-700 mt-1">Gravado. Rode <b>⚡ Coletar Produção + Teste</b> para a comparação refletir a mudança.</p>');
+    } catch (e) {
+      m.erro(e.message);
+    } finally {
+      rodando = false; parar = false; okBtn.disabled = false;
+      okBtn.textContent = c('ti-simular')?.checked ? 'Simular' : 'Transferir';
+    }
+  });
+  carrega(origem);
 }
 
 function tribComparacoes(d) {
@@ -14386,6 +14517,12 @@ function renderTributos() {
 }
 
 function ligaTributos() {
+  $$('#trb-conteudo [data-trb-transf]').forEach(b => b.addEventListener('click', ev => {
+    ev.stopPropagation();
+    let k = [];
+    try { k = JSON.parse(b.dataset.trbK || '[]'); } catch (_) { /* atributo inválido */ }
+    trbTransferirItem(b.dataset.trbTransf, k, b.dataset.trbOrigem);
+  }));
   $$('#trb-conteudo [data-trb-caixa]').forEach(b => b.addEventListener('click', () => {
     const id = b.dataset.trbCaixa;
     trib.abertas.has(id) ? trib.abertas.delete(id) : trib.abertas.add(id);
@@ -14400,6 +14537,12 @@ function ligaTributos() {
 }
 
 $('#trb-coletar').addEventListener('click', coletaTributos);
+// Lateral: a mesma transferência da aba Cadastros, com as tabelas do Configurador.
+$('#trb-transferir').addEventListener('click', () => abreTransferencia({
+  origem: 'teste',
+  tabelas: (trib.dados?.quantidades || []).filter(q => q.tipo === 'cad')
+    .map(q => ({ tabela: q.tab, descricao: q.rotulo })),
+}));
 $('#trb-reload').addEventListener('click', carregaTributos);
 $('#int-coletar').addEventListener('click', coletaIntegracoes);
 $('#int-coletar-topo').addEventListener('click', coletaIntegracoes);
