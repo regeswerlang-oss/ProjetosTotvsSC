@@ -1060,11 +1060,20 @@ def api_projetos():
     allowed = allowed_customers()
     rows = q("select * from cockpit.projetos order by nome_cliente_projeto, codigo_projeto")
     nomes = {r["customer"]: r["nome"] for r in q("select customer, nome from cockpit.clientes")}
+    # ?coordenador=TSC262 (codigo do tecnico) e ?papel=T|A — titular, auxiliar ou ambos.
+    coord = (request.args.get("coordenador") or "").strip().upper()
+    papel = (request.args.get("papel") or "").strip().upper()
     projetos, sync = [], None
     for r in rows:
         cli = r["codigo_cliente_projeto"]
         if allowed is not None and cli not in allowed:
             continue
+        if coord:
+            raw = r.get("raw") or {}
+            tit = str(raw.get("codigo_coordenador_projeto") or "").strip().upper() == coord
+            aux = str(raw.get("codigo_coordenador_auxiliar") or "").strip().upper() == coord
+            if not ((tit and papel != "A") or (aux and papel != "T")):
+                continue
         sync = sync or r["synced_at"]
         p = dict(r.get("raw") or {})
         p.update({
