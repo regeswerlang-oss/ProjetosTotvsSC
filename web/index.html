@@ -374,6 +374,16 @@
       <select id="filtro-tipo" class="px-3 py-2 border border-slate-300 rounded-md bg-white">
         <option value="">Todos tipos</option>
       </select>
+      <select id="filtro-coord" class="px-3 py-2 border border-slate-300 rounded-md bg-white max-w-[18rem]"
+              title="Projetos em que a pessoa é coordenadora titular ou auxiliar">
+        <option value="">Todos coordenadores</option>
+      </select>
+      <select id="filtro-papel" class="px-3 py-2 border border-slate-300 rounded-md bg-white"
+              title="Papel do coordenador escolhido no projeto">
+        <option value="">Titular ou auxiliar</option>
+        <option value="T">Só titular</option>
+        <option value="A">Só auxiliar</option>
+      </select>
     </div>
     <div id="resumo" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
     <div id="grupos" class="space-y-6"></div>
@@ -1446,17 +1456,50 @@ function populaFiltros() {
     sel.value  = stAnterior;
     selT.value = tpAnterior;
   }
+  populaCoordenadores();
+}
+
+// FILTRO POR COORDENADOR — titular (codigo_coordenador_projeto) OU auxiliar
+// (codigo_coordenador_auxiliar), pelo CÓDIGO do técnico (ex.: TSC262), não pelo
+// nome: o mesmo coordenador aparece com e sem o prefixo "(*)" (matrícula inativa).
+// Aceita ?coord=TSC262 (e &papel=T|A) na URL para abrir já filtrado.
+function _nomeCoord(n) { return String(n || '').replace(/^\(\*\)\s*/, '').trim(); }
+function coordenadoresDe(p) {
+  const out = [];
+  const t = String(p.codigo_coordenador_projeto || '').trim();
+  const a = String(p.codigo_coordenador_auxiliar || '').trim();
+  if (t) out.push({ cod: t, nome: _nomeCoord(p.nome_coordenador_projeto), papel: 'T' });
+  if (a) out.push({ cod: a, nome: _nomeCoord(p.nome_coordenador_auxiliar), papel: 'A' });
+  return out;
+}
+function populaCoordenadores() {
+  const sel = $('#filtro-coord');
+  if (!sel) return;
+  const anterior = sel.value || new URLSearchParams(location.search).get('coord') || '';
+  const mapa = new Map();
+  state.projetos.forEach(p => coordenadoresDe(p).forEach(c => {
+    if (!mapa.has(c.cod) || (!mapa.get(c.cod) && c.nome)) mapa.set(c.cod, c.nome);
+  }));
+  const itens = [...mapa.entries()].sort((x, y) => (x[1] || x[0]).localeCompare(y[1] || y[0], 'pt-BR'));
+  sel.innerHTML = '<option value="">Todos coordenadores</option>' +
+    itens.map(([cod, nome]) => `<option value="${cod}">${nome || cod} (${cod})</option>`).join('');
+  if (anterior && mapa.has(anterior)) sel.value = anterior;
+  const papelUrl = new URLSearchParams(location.search).get('papel');
+  if (papelUrl && !state.papelInicializado) { $('#filtro-papel').value = papelUrl; state.papelInicializado = true; }
 }
 
 function aplicarFiltros() {
   const q = $('#busca').value.trim().toLowerCase();
   const st = $('#filtro-status').value;
   const tp = $('#filtro-tipo').value;
+  const co = ($('#filtro-coord') || {}).value || '';
+  const pa = ($('#filtro-papel') || {}).value || '';
   return state.projetos.filter(p => {
     if (st && p.status_projeto !== st) return false;
     if (tp && p.tipo_projeto !== tp) return false;
+    if (co && !coordenadoresDe(p).some(c => c.cod === co && (!pa || c.papel === pa))) return false;
     if (q) {
-      const blob = `${p.codigo_projeto} ${p.descricao_projeto} ${p.nome_cliente_projeto} ${p.nome_coordenador_projeto || ''}`.toLowerCase();
+      const blob = `${p.codigo_projeto} ${p.descricao_projeto} ${p.nome_cliente_projeto} ${p.nome_coordenador_projeto || ''} ${p.nome_coordenador_auxiliar || ''}`.toLowerCase();
       if (!blob.includes(q)) return false;
     }
     return true;
@@ -2473,7 +2516,7 @@ $('#toggle-all').addEventListener('change', (e) => {
   state.showAll = e.target.checked;
   carregaLista();
 });
-['busca','filtro-status','filtro-tipo'].forEach(id => {
+['busca','filtro-status','filtro-tipo','filtro-coord','filtro-papel'].forEach(id => {
   $(`#${id}`).addEventListener('input', () => { renderResumo(); renderGrupos(); });
 });
 document.addEventListener('click', e => {
