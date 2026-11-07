@@ -4,6 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Projetos · TOTVS SC</title>
+<link rel="preconnect" href="https://rsms.me/">
+<link rel="stylesheet" href="https://rsms.me/inter/inter.css">
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
   // Paleta e tipografia oficiais TOTVS (https://marca.totvs.com/)
@@ -335,6 +337,113 @@
      e sobrava margem em monitor largo. Três larguras, trocadas no botão ⇔ do
      topo e guardadas no navegador: normal (1280), ampla (1760, padrão) e
      tela cheia. Vale para todas as abas — header e <main> usam .app-wrap. */
+
+  /* ════════════════════════════════════════════════════════════════════════
+     CAMADA DE DESIGN (06/11/2026) — vale para TODAS as abas.
+     Só CSS, por cima das utilities do Tailwind (prefixo `body` para ganhar a
+     especificidade): tipografia Inter, cards com cantos 14px e sombra suave,
+     abas com indicador em gradiente e transição, tabelas com hover, botões e
+     campos com foco TOTVS Blue, barras de progresso arredondadas, scrollbar
+     fina. Nenhuma regra muda layout/JS — se uma aba precisar fugir, use uma
+     classe própria mais específica.
+     ════════════════════════════════════════════════════════════════════════ */
+  html { scroll-behavior: smooth; }
+  body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+         font-feature-settings: 'cv11', 'ss01', 'tnum'; -webkit-font-smoothing: antialiased; }
+  body.bg-totvs-beige { background: #F3F6F8; }
+  * { scrollbar-width: thin; scrollbar-color: rgba(0,34,51,.18) transparent; }
+  *::-webkit-scrollbar { height: 8px; width: 8px; }
+  *::-webkit-scrollbar-thumb { background: rgba(0,34,51,.18); border-radius: 8px; }
+  *::-webkit-scrollbar-thumb:hover { background: rgba(0,34,51,.32); }
+  ::selection { background: rgba(0,219,255,.35); }
+
+  /* Header: filete institucional e botões mais macios */
+  header.totvs-hex::before { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+                             background: var(--totvs-gradient); z-index: 2; }
+  header .rounded-md { border-radius: 9px; }
+  header button { transition: background-color .15s, color .15s, transform .12s; }
+  header button:active { transform: scale(.97); }
+
+  /* Cards e superfícies */
+  body .rounded-lg { border-radius: 14px; }
+  body .rounded-md { border-radius: 9px; }
+  body .border-slate-200 { border-color: #e3eaf0; }
+  body .border-slate-300 { border-color: #d6e0e8; }
+  body .bg-white.border.border-slate-200 { box-shadow: 0 1px 2px rgba(0,34,51,.04), 0 6px 18px -12px rgba(0,34,51,.18); }
+  body .bg-slate-50 { background-color: #f6f9fb; }
+  body .bg-slate-100 { background-color: #eef3f6; }
+  body .divide-slate-100 > :not([hidden]) ~ :not([hidden]) { border-color: #eef3f6; }
+  body [data-projeto]:hover, body .hover\:bg-slate-50:hover { background-color: #f3fbfd; }
+
+  /* Abas do projeto: indicador em gradiente, hover suave, barra fixa */
+  #tabs-bar { position: sticky; top: 73px; z-index: 5; background: #fff; border-radius: 14px 14px 0 0; }
+  body .tab-btn { position: relative; border-bottom-width: 0 !important; padding: 10px 12px 12px; border-radius: 9px 9px 0 0;
+                  font-weight: 500; transition: color .15s, background-color .15s; }
+  body .tab-btn:hover { background: #f3f8fa; }
+  body .tab-btn::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: 0; height: 3px; border-radius: 3px;
+                         background: var(--totvs-gradient); transform: scaleX(0); transition: transform .2s ease; }
+  body .tab-btn.border-totvs-blue::after { transform: scaleX(1); }
+  /* Painel que acabou de aparecer entra com um leve fade (reinicia ao sair de display:none) */
+  [id^="tab-"]:not(#tab-acoes):not(.hidden) { animation: gp-fade .28s ease-out both; }
+  @keyframes gp-fade { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: none; } }
+  /* Sub-abas (pl-sub, sub-tab, emp-tab): mesmo indicador */
+  body .pl-sub, body .sub-tab, body .emp-tab { position: relative; border-bottom-width: 0; padding-bottom: 9px; transition: color .15s; }
+  body .pl-sub::after, body .sub-tab::after, body .emp-tab::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px;
+                        border-radius: 2px; background: var(--totvs-gradient); transform: scaleX(0); transition: transform .2s; }
+  body .pl-sub.is-active::after, body .sub-tab.is-active::after, body .emp-tab.is-active::after { transform: scaleX(1); }
+
+  /* Rail de ações */
+  body .rail-btn { border-radius: 9px; transition: background-color .15s, border-color .15s, transform .12s, box-shadow .15s; }
+  body .rail-btn:hover { transform: translateX(2px); }
+  body .rail-btn-cta { background: linear-gradient(135deg, #00DBFF, #19e0ff); box-shadow: 0 4px 12px -6px rgba(0,219,255,.7); }
+  body .rail-btn-cta:hover { background: linear-gradient(135deg, #00FFD4, #00DBFF); }
+
+  /* Botões e campos */
+  body button { transition: background-color .15s, border-color .15s, color .15s, transform .12s, box-shadow .15s, opacity .15s; }
+  body main button:active:not(:disabled) { transform: scale(.98); }
+  body main button.bg-totvs-blue { box-shadow: 0 4px 12px -6px rgba(0,219,255,.7); }
+  body main button.bg-totvs-petroleo, body main button.bg-totvs-purple { box-shadow: 0 4px 12px -6px rgba(0,34,51,.5); }
+  body main input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]),
+  body main select, body main textarea { border-radius: 10px; transition: border-color .15s, box-shadow .15s; }
+  body main input:not([type=checkbox]):not([type=radio]):not([type=file]):not([type=range]):focus,
+  body main select:focus, body main textarea:focus { outline: none; border-color: #00DBFF; box-shadow: 0 0 0 3px rgba(0,219,255,.25); }
+  body main input[type=checkbox], body main input[type=radio] { accent-color: #00b8d9; }
+
+  /* Tabelas */
+  body main table { border-collapse: separate; border-spacing: 0; }
+  body main thead th { color: #5b6b7a; font-weight: 600; }
+  body main tbody tr { transition: background-color .12s; }
+  body main tbody tr:hover > td { background-color: #f6fbfd; }
+
+  /* Listas dobráveis */
+  body main details > summary .chev { font-size: .7em; opacity: .55; }
+  body main details > summary { border-radius: 9px; transition: background-color .15s; }
+  body main details > summary.bg-slate-100 { background: linear-gradient(90deg, #eef3f6, #f6f9fb); }
+
+  /* Barras de progresso e selos */
+  body .bar-track { height: .55rem; background: #e6edf0; }
+  body .fill-exec { background: linear-gradient(90deg, #00DBFF, #19c6ea); }
+  body .fill-plan { background: #e3ccff; }
+  body .rounded-full { transition: background-color .15s; }
+
+  /* KPIs da lista (quatro blocos do topo) */
+  body #resumo > div { border-radius: 14px; padding: 14px 18px;
+                       background-image: linear-gradient(135deg, rgba(255,255,255,.10), rgba(0,0,0,.10)); }
+  body #resumo > div p:last-child { font-size: 1.6rem; }
+
+  /* Cabeçalho do projeto: título com a fonte TOTVS maior */
+  body #d-titulo { font-size: 1.15rem; letter-spacing: -.01em; }
+  body #view-detalhe > #detalhe-conteudo > .bg-white { border-left: 4px solid #00DBFF; }
+
+  /* Modais / gavetas: cantos e sombra */
+  body .shadow-xl { box-shadow: 0 24px 60px -24px rgba(0,34,51,.45), 0 2px 8px rgba(0,34,51,.08); }
+  body .rx-drawer { border-radius: 16px 0 0 16px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    [id^="tab-"]:not(.hidden) { animation: none; }
+    body .tab-btn::after, body .rail-btn, body button { transition: none; }
+  }
+
   .app-wrap { max-width: 1760px; margin-left: auto; margin-right: auto; }
   html[data-largura="normal"] .app-wrap { max-width: 80rem; }
   html[data-largura="cheia"] .app-wrap { max-width: none; }
@@ -585,7 +694,7 @@
 
       <!-- Card das abas: Resumo | Cronograma | … | Transição -->
       <div class="flex-1 min-w-0 bg-white rounded-lg border border-slate-200">
-        <div class="flex items-center px-4 pt-4 border-b border-slate-200 overflow-x-auto">
+        <div id="tabs-bar" class="flex items-center px-4 pt-3 border-b border-slate-200 overflow-x-auto">
           <div class="flex gap-0.5 -mb-px whitespace-nowrap">
             <button data-tab="resumo"   class="tab-btn px-3 py-2 text-sm border-b-2 border-totvs-blue text-totvs-petroleo font-semibold">Resumo</button>
             <button data-tab="crono"    class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Cronograma</button>
