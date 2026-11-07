@@ -1,0 +1,96 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   tsc-pages.css — ajustes por painel para o layout unificado (tsc-ui)
+   Cada bloco é escopado por html[data-tsc-page="..."] (definido pelo
+   tsc-shell.js a partir do data-page do <script>). Só visual.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── base comum a todos os painéis ── */
+html.tsc[data-tsc-page] body { background: var(--tsc-bg) !important; color: var(--tsc-t1); font-family: var(--tsc-sans) !important; }
+html.tsc[data-tsc-page] input, html.tsc[data-tsc-page] select, html.tsc[data-tsc-page] textarea { color-scheme: dark; }
+html.tsc[data-tsc-page] select option { background: var(--tsc-s1); color: var(--tsc-t1); }
+
+/* ── família "Dashboard v2" (já escura): alinha os tokens ── */
+html[data-tsc-page="dashboard"], html[data-tsc-page="comercial"], html[data-tsc-page="clientes"], html[data-tsc-page="inboxintel"] {
+  --bg: var(--tsc-bg); --s1: var(--tsc-s1); --s2: var(--tsc-s2); --s3: var(--tsc-s3); --s4: var(--tsc-s4);
+  --border: var(--tsc-line); --accent: var(--tsc-accent);
+  --t1: var(--tsc-t1); --t2: var(--tsc-t2); --t3: var(--tsc-t3);
+  --sans: var(--tsc-sans); --mono: var(--tsc-mono);
+}
+
+/* ── Cockpit executivo (cockpit.html) ── */
+html[data-tsc-page="cockpit"] {
+  --totvs-pink: #00dbff; --totvs-purple: #a78bfa; --totvs-navy: #e6ebf5; --totvs-teal: #2dd4bf;
+  --totvs-yellow: #f59e0b; --totvs-red: #ef4444; --totvs-green: #22c55e;
+  --bg: var(--tsc-bg); --card-bg: var(--tsc-s1); --border: var(--tsc-line); --text: var(--tsc-t1); --text-muted: var(--tsc-t2);
+  --shadow: var(--tsc-shadow); --shadow-hover: 0 16px 36px -18px rgba(0,0,0,.9);
+}
+html[data-tsc-page="cockpit"] .header { background: var(--tsc-s1) !important; border-bottom: 1px solid var(--tsc-line); position: relative; }
+html[data-tsc-page="cockpit"] .header::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--tsc-grad); opacity: .8; }
+html[data-tsc-page="cockpit"] .header h1 { color: var(--tsc-t1) !important; font-weight: 600; letter-spacing: -.2px; }
+html[data-tsc-page="cockpit"] .header h1 .accent { color: var(--tsc-blue) !important; }
+html[data-tsc-page="cockpit"] .tab { color: var(--tsc-t2) !important; }
+html[data-tsc-page="cockpit"] .tab.active { color: var(--tsc-t1) !important; border-bottom-color: var(--tsc-accent) !important; }
+html[data-tsc-page="cockpit"] .kpi, html[data-tsc-page="cockpit"] .panel, html[data-tsc-page="cockpit"] .client-card { background: var(--tsc-s1) !important; border: 1px solid var(--tsc-line) !important; border-radius: var(--tsc-r) !important; box-shadow: none !important; }
+html[data-tsc-page="cockpit"] .kpi-value { color: var(--tsc-t1); }
+html[data-tsc-page="cockpit"] .btn.primary { background: var(--tsc-accent) !important; border-color: var(--tsc-accent) !important; color: #fff !important; }
+
+/* ── família navy/roxo (gaps-decisao, gaps-reuniao, cockpit-unico) ── */
+html[data-tsc-page="gaps-decisao"], html[data-tsc-page="gaps-reuniao"], html[data-tsc-page="cockpit-unico"] {
+  --roxo: #8b7dff; --purple: #8b7dff; --purple-d: #6f5bff;
+  --muted: var(--tsc-t2); --gray: var(--tsc-t2); --gray-light: var(--tsc-t3); --ink: var(--tsc-t1);
+  --line: var(--tsc-line); --shadow: none;
+}
+html[data-tsc-page="gaps-decisao"] .topbar, html[data-tsc-page="gaps-reuniao"] .topbar { background: var(--tsc-s1) !important; border-bottom: 1px solid var(--tsc-line); box-shadow: none !important; }
+html[data-tsc-page="gaps-reuniao"] .topbar { background-image: none !important; }
+html[data-tsc-page="cockpit-unico"] .side { background: #0d1019 !important; border-right: 1px solid var(--tsc-line); }
+
+/* ── Triagem Inbox ── */
+html[data-tsc-page="inbox-triage"] {
+  --accent: #38bdf8; --accent-soft: var(--tsc-accent-soft); --accent-border: rgba(61,110,245,.45);
+  --bg: var(--tsc-bg); --surface: var(--tsc-s1);
+}
+/* cabeçalho petróleo → topbar padrão (Triagem Inbox e Calibração) */
+:is(html[data-tsc-page="inbox-triage"], html[data-tsc-page="calibracao"]) .topbar { background: var(--tsc-s1) !important; background-image: none !important; border-bottom: 1px solid var(--tsc-line); }
+:is(html[data-tsc-page="inbox-triage"], html[data-tsc-page="calibracao"]) .topbar::after { height: 2px; opacity: .8; }
+:is(html[data-tsc-page="inbox-triage"], html[data-tsc-page="calibracao"]) .topbar h1 { font-family: var(--tsc-sans) !important; font-weight: 600; font-size: 18px; }
+:is(html[data-tsc-page="inbox-triage"], html[data-tsc-page="calibracao"]) .topbar .eyebrow { font-family: var(--tsc-mono); }
+
+/* ── Service Desk · SDHub (repo ServiceDesk-) ── */
+html[data-tsc-page="servicedesk"] { --linha: var(--tsc-line); --roxo: #a78bfa; --shadow: none; }
+html[data-tsc-page="servicedesk"] header { background: var(--tsc-s1) !important; background-image: none !important; border-bottom: 1px solid var(--tsc-line); }
+html[data-tsc-page="servicedesk"] header::after { height: 2px !important; opacity: .8; }
+html[data-tsc-page="servicedesk"] header .brand { font-family: var(--tsc-sans) !important; font-weight: 600; }
+html[data-tsc-page="servicedesk"] .kpi { background: var(--tsc-s1) !important; border-color: var(--tsc-line) !important; }
+html[data-tsc-page="servicedesk"] .kpi .n { font-family: var(--tsc-sans) !important; }
+html[data-tsc-page="servicedesk"] .col { background: var(--tsc-s1) !important; border-color: var(--tsc-line) !important; }
+html[data-tsc-page="servicedesk"] .tk { background: var(--tsc-s2) !important; border-color: var(--tsc-line) !important; }
+html[data-tsc-page="servicedesk"] .drawer { background: var(--tsc-s1) !important; }
+html[data-tsc-page="servicedesk"] .drawer .dh { background: var(--tsc-s2) !important; background-image: none !important; }
+
+/* ── Páginas Tailwind CDN (html.tsc-tw): Gestor de Projetos e Tasks ↔ E-mails ──
+   A escala slate e o "white" do Tailwind são remapeados no tailwind.config
+   da página (superfícies escuras / texto claro). Aqui só os acertos. */
+html.tsc-tw .text-white, html.tsc-tw .hover\:text-white:hover { color: #fff !important; }
+html[data-tsc-page^="projetos"] .text-totvs-petroleo, html[data-tsc-page^="projetos"] .hover\:text-totvs-petroleo:hover { color: var(--tsc-t1) !important; }
+html[data-tsc-page^="projetos"] .bg-totvs-petroleo { background-color: var(--tsc-s2) !important; }
+html[data-tsc-page^="projetos"] .bg-totvs-blue { color: #04121a; }
+html[data-tsc-page^="projetos"] #tabs-bar { background: var(--tsc-s1) !important; }
+html.tsc-tw .shadow, html.tsc-tw .shadow-sm, html.tsc-tw .shadow-md { box-shadow: none !important; }
+
+/* pastéis do Tailwind → tons escuros translúcidos (status, chips, alertas) */
+html.tsc-tw .bg-emerald-50, html.tsc-tw .bg-emerald-100 { background-color: rgba(34,197,94,.13) !important; } html.tsc-tw .bg-emerald-200 { background-color: rgba(34,197,94,.22) !important; } html.tsc-tw .text-emerald-600, html.tsc-tw .text-emerald-700, html.tsc-tw .text-emerald-800, html.tsc-tw .text-emerald-900 { color: #4ade80 !important; } html.tsc-tw .border-emerald-100, html.tsc-tw .border-emerald-200, html.tsc-tw .border-emerald-300 { border-color: rgba(34,197,94,.35) !important; }
+html.tsc-tw .bg-green-50, html.tsc-tw .bg-green-100 { background-color: rgba(34,197,94,.13) !important; } html.tsc-tw .bg-green-200 { background-color: rgba(34,197,94,.22) !important; } html.tsc-tw .text-green-600, html.tsc-tw .text-green-700, html.tsc-tw .text-green-800, html.tsc-tw .text-green-900 { color: #4ade80 !important; } html.tsc-tw .border-green-100, html.tsc-tw .border-green-200, html.tsc-tw .border-green-300 { border-color: rgba(34,197,94,.35) !important; }
+html.tsc-tw .bg-teal-50, html.tsc-tw .bg-teal-100 { background-color: rgba(45,212,191,.13) !important; } html.tsc-tw .bg-teal-200 { background-color: rgba(45,212,191,.22) !important; } html.tsc-tw .text-teal-600, html.tsc-tw .text-teal-700, html.tsc-tw .text-teal-800, html.tsc-tw .text-teal-900 { color: #5eead4 !important; } html.tsc-tw .border-teal-100, html.tsc-tw .border-teal-200, html.tsc-tw .border-teal-300 { border-color: rgba(45,212,191,.35) !important; }
+html.tsc-tw .bg-amber-50, html.tsc-tw .bg-amber-100 { background-color: rgba(245,158,11,.13) !important; } html.tsc-tw .bg-amber-200 { background-color: rgba(245,158,11,.22) !important; } html.tsc-tw .text-amber-600, html.tsc-tw .text-amber-700, html.tsc-tw .text-amber-800, html.tsc-tw .text-amber-900 { color: #fbbf24 !important; } html.tsc-tw .border-amber-100, html.tsc-tw .border-amber-200, html.tsc-tw .border-amber-300 { border-color: rgba(245,158,11,.35) !important; }
+html.tsc-tw .bg-yellow-50, html.tsc-tw .bg-yellow-100 { background-color: rgba(245,158,11,.13) !important; } html.tsc-tw .bg-yellow-200 { background-color: rgba(245,158,11,.22) !important; } html.tsc-tw .text-yellow-600, html.tsc-tw .text-yellow-700, html.tsc-tw .text-yellow-800, html.tsc-tw .text-yellow-900 { color: #fde047 !important; } html.tsc-tw .border-yellow-100, html.tsc-tw .border-yellow-200, html.tsc-tw .border-yellow-300 { border-color: rgba(245,158,11,.35) !important; }
+html.tsc-tw .bg-orange-50, html.tsc-tw .bg-orange-100 { background-color: rgba(251,146,60,.13) !important; } html.tsc-tw .bg-orange-200 { background-color: rgba(251,146,60,.22) !important; } html.tsc-tw .text-orange-600, html.tsc-tw .text-orange-700, html.tsc-tw .text-orange-800, html.tsc-tw .text-orange-900 { color: #fdba74 !important; } html.tsc-tw .border-orange-100, html.tsc-tw .border-orange-200, html.tsc-tw .border-orange-300 { border-color: rgba(251,146,60,.35) !important; }
+html.tsc-tw .bg-rose-50, html.tsc-tw .bg-rose-100 { background-color: rgba(239,68,68,.13) !important; } html.tsc-tw .bg-rose-200 { background-color: rgba(239,68,68,.22) !important; } html.tsc-tw .text-rose-600, html.tsc-tw .text-rose-700, html.tsc-tw .text-rose-800, html.tsc-tw .text-rose-900 { color: #fda4af !important; } html.tsc-tw .border-rose-100, html.tsc-tw .border-rose-200, html.tsc-tw .border-rose-300 { border-color: rgba(239,68,68,.35) !important; }
+html.tsc-tw .bg-red-50, html.tsc-tw .bg-red-100 { background-color: rgba(239,68,68,.13) !important; } html.tsc-tw .bg-red-200 { background-color: rgba(239,68,68,.22) !important; } html.tsc-tw .text-red-600, html.tsc-tw .text-red-700, html.tsc-tw .text-red-800, html.tsc-tw .text-red-900 { color: #f87171 !important; } html.tsc-tw .border-red-100, html.tsc-tw .border-red-200, html.tsc-tw .border-red-300 { border-color: rgba(239,68,68,.35) !important; }
+html.tsc-tw .bg-pink-50, html.tsc-tw .bg-pink-100 { background-color: rgba(236,72,153,.13) !important; } html.tsc-tw .bg-pink-200 { background-color: rgba(236,72,153,.22) !important; } html.tsc-tw .text-pink-600, html.tsc-tw .text-pink-700, html.tsc-tw .text-pink-800, html.tsc-tw .text-pink-900 { color: #f9a8d4 !important; } html.tsc-tw .border-pink-100, html.tsc-tw .border-pink-200, html.tsc-tw .border-pink-300 { border-color: rgba(236,72,153,.35) !important; }
+html.tsc-tw .bg-sky-50, html.tsc-tw .bg-sky-100 { background-color: rgba(56,189,248,.13) !important; } html.tsc-tw .bg-sky-200 { background-color: rgba(56,189,248,.22) !important; } html.tsc-tw .text-sky-600, html.tsc-tw .text-sky-700, html.tsc-tw .text-sky-800, html.tsc-tw .text-sky-900 { color: #7dd3fc !important; } html.tsc-tw .border-sky-100, html.tsc-tw .border-sky-200, html.tsc-tw .border-sky-300 { border-color: rgba(56,189,248,.35) !important; }
+html.tsc-tw .bg-blue-50, html.tsc-tw .bg-blue-100 { background-color: rgba(61,110,245,.13) !important; } html.tsc-tw .bg-blue-200 { background-color: rgba(61,110,245,.22) !important; } html.tsc-tw .text-blue-600, html.tsc-tw .text-blue-700, html.tsc-tw .text-blue-800, html.tsc-tw .text-blue-900 { color: #93b0ff !important; } html.tsc-tw .border-blue-100, html.tsc-tw .border-blue-200, html.tsc-tw .border-blue-300 { border-color: rgba(61,110,245,.35) !important; }
+html.tsc-tw .bg-cyan-50, html.tsc-tw .bg-cyan-100 { background-color: rgba(34,211,238,.13) !important; } html.tsc-tw .bg-cyan-200 { background-color: rgba(34,211,238,.22) !important; } html.tsc-tw .text-cyan-600, html.tsc-tw .text-cyan-700, html.tsc-tw .text-cyan-800, html.tsc-tw .text-cyan-900 { color: #67e8f9 !important; } html.tsc-tw .border-cyan-100, html.tsc-tw .border-cyan-200, html.tsc-tw .border-cyan-300 { border-color: rgba(34,211,238,.35) !important; }
+html.tsc-tw .bg-indigo-50, html.tsc-tw .bg-indigo-100 { background-color: rgba(129,140,248,.13) !important; } html.tsc-tw .bg-indigo-200 { background-color: rgba(129,140,248,.22) !important; } html.tsc-tw .text-indigo-600, html.tsc-tw .text-indigo-700, html.tsc-tw .text-indigo-800, html.tsc-tw .text-indigo-900 { color: #a5b4fc !important; } html.tsc-tw .border-indigo-100, html.tsc-tw .border-indigo-200, html.tsc-tw .border-indigo-300 { border-color: rgba(129,140,248,.35) !important; }
+html.tsc-tw .bg-violet-50, html.tsc-tw .bg-violet-100 { background-color: rgba(167,139,250,.13) !important; } html.tsc-tw .bg-violet-200 { background-color: rgba(167,139,250,.22) !important; } html.tsc-tw .text-violet-600, html.tsc-tw .text-violet-700, html.tsc-tw .text-violet-800, html.tsc-tw .text-violet-900 { color: #c4b5fd !important; } html.tsc-tw .border-violet-100, html.tsc-tw .border-violet-200, html.tsc-tw .border-violet-300 { border-color: rgba(167,139,250,.35) !important; }
+html.tsc-tw .bg-purple-50, html.tsc-tw .bg-purple-100 { background-color: rgba(167,139,250,.13) !important; } html.tsc-tw .bg-purple-200 { background-color: rgba(167,139,250,.22) !important; } html.tsc-tw .text-purple-600, html.tsc-tw .text-purple-700, html.tsc-tw .text-purple-800, html.tsc-tw .text-purple-900 { color: #d8b4fe !important; } html.tsc-tw .border-purple-100, html.tsc-tw .border-purple-200, html.tsc-tw .border-purple-300 { border-color: rgba(167,139,250,.35) !important; }
+html.tsc-tw .bg-fuchsia-50, html.tsc-tw .bg-fuchsia-100 { background-color: rgba(217,70,239,.13) !important; } html.tsc-tw .bg-fuchsia-200 { background-color: rgba(217,70,239,.22) !important; } html.tsc-tw .text-fuchsia-600, html.tsc-tw .text-fuchsia-700, html.tsc-tw .text-fuchsia-800, html.tsc-tw .text-fuchsia-900 { color: #f0abfc !important; } html.tsc-tw .border-fuchsia-100, html.tsc-tw .border-fuchsia-200, html.tsc-tw .border-fuchsia-300 { border-color: rgba(217,70,239,.35) !important; }
