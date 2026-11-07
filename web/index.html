@@ -39,6 +39,35 @@
   body { font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif; }
   .font-totvs { font-family: 'TOTVS', 'Inter', sans-serif; font-weight: 700; letter-spacing: -0.01em; }
 
+  /* Aba Resumo — painel executivo do projeto */
+  .rs-card { background:#fff; border:1px solid #e2e8f0; border-radius:14px; padding:16px 18px; }
+  .rs-head { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:10px; }
+  .rs-head h3 { font-family:'TOTVS','Inter',sans-serif; font-weight:700; font-size:13px; color:#002233; margin:0; }
+  .rs-head span { font-size:11px; color:#94a3b8; }
+  .rs-hero { position:relative; overflow:hidden; border-radius:14px; padding:14px 16px; color:#fff; min-height:112px;
+             display:flex; align-items:center; gap:14px; }
+  .rs-hero.petroleo { background:linear-gradient(135deg,#002233,#003a52); }
+  .rs-hero.blue { background:linear-gradient(135deg,#00b8d9,#00DBFF); color:#002233; }
+  .rs-hero.purple { background:linear-gradient(135deg,#7a2fd6,#A44DFF); }
+  .rs-hero.black { background:linear-gradient(135deg,#002B33,#0b4a55); }
+  .rs-hero .lbl { font-size:11px; letter-spacing:.08em; text-transform:uppercase; opacity:.8; }
+  .rs-hero .val { font-family:'TOTVS','Inter',sans-serif; font-weight:700; font-size:24px; line-height:1.1; margin-top:2px; }
+  .rs-hero .sub { font-size:11.5px; opacity:.8; margin-top:4px; }
+  .rs-hero svg { flex:none; }
+  .rs-kpi { background:#fff; border:1px solid #e2e8f0; border-left:4px solid var(--rs-acc,#00DBFF); border-radius:12px; padding:10px 12px; }
+  .rs-kpi .v { font-family:'TOTVS','Inter',sans-serif; font-weight:700; font-size:20px; color:#002233; line-height:1.1; }
+  .rs-kpi .l { font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:#64748b; margin-top:4px; }
+  .rs-kpi .s { font-size:11px; color:#94a3b8; margin-top:2px; }
+  .rs-row { display:flex; align-items:center; justify-content:space-between; font-size:12px; color:#475569; margin-bottom:3px; }
+  .rs-row b { color:#002233; font-family:'TOTVS','Inter',sans-serif; }
+  .rs-track { height:8px; border-radius:999px; background:#e6edf0; overflow:hidden; }
+  .rs-fill { height:8px; border-radius:999px; }
+  .rs-item { display:flex; align-items:center; gap:10px; padding:7px 10px; border-radius:10px; background:#f8fafc; font-size:12.5px; }
+  .rs-item .t { flex:1; min-width:0; color:#002233; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .rs-item .m { font-size:11px; color:#94a3b8; white-space:nowrap; }
+  .rs-pill { font-size:10px; font-weight:600; padding:1px 7px; border-radius:999px; white-space:nowrap; }
+  .rs-vazio { font-size:12px; color:#94a3b8; padding:14px 0; text-align:center; }
+
   .bar-track { background: #e6edf0; height: 0.5rem; border-radius: 999px; overflow: hidden; position: relative; }
   .bar-fill { height: 100%; border-radius: 999px; }
   /* Barras de progresso — Executado (Blue) sobre Planejado (Purple claro) */
@@ -591,11 +620,30 @@
           <p class="text-slate-400 text-xs mt-1">Fale com a equipe TOTVS responsável pelo projeto.</p>
         </div>
 
-        <!-- Aba Resumo (KPIs + Apontamentos por tipo) -->
+        <!-- Aba Resumo (painel executivo do projeto: horas, medição, execução,
+             prazo, fases, apontamentos por tipo e agenda) — montado por
+             renderResumoProjeto() a partir do /mapa e do /cronograma -->
         <div id="tab-resumo" class="p-5">
-          <div id="d-kpis" class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5"></div>
-          <h3 class="text-sm font-semibold text-slate-700 mb-3">Apontamentos por tipo</h3>
-          <div id="d-horas" class="space-y-2"></div>
+          <div id="d-kpis" class="grid grid-cols-2 xl:grid-cols-4 gap-3 mb-4"></div>
+          <div id="d-resumo-exec" class="mb-4"></div>
+          <div class="grid gap-4 lg:grid-cols-2">
+            <div class="rs-card">
+              <div class="rs-head"><h3>Avanço por fase</h3><span id="d-fases-hint">horas realizadas ÷ previstas</span></div>
+              <div id="d-fases" class="space-y-2.5"></div>
+            </div>
+            <div class="rs-card">
+              <div class="rs-head"><h3>Apontamentos por tipo</h3><span>horas apontadas · participação</span></div>
+              <div id="d-horas" class="space-y-2.5"></div>
+            </div>
+            <div class="rs-card">
+              <div class="rs-head"><h3>Atividades atrasadas</h3><span id="d-atrasadas-hint">fim previsto vencido e não concluídas</span></div>
+              <div id="d-atrasadas" class="space-y-1.5"></div>
+            </div>
+            <div class="rs-card">
+              <div class="rs-head"><h3>Próximas atividades</h3><span>por data de início</span></div>
+              <div id="d-proximas" class="space-y-1.5"></div>
+            </div>
+          </div>
         </div>
 
         <!-- Aba Cronograma (existente) -->
@@ -1574,6 +1622,7 @@ async function abrirDetalhe(sel) {
   consumo.iniciado = false;             // outro projeto, outra base de horas
   consumo.excluidos.clear();
   consumo.etapasFora.clear();
+  state.cronograma = null;              // o Resumo não pode mostrar o cronograma do projeto anterior
   setTab('resumo');                     // todo projeto abre pelo Resumo
   aplicaAbas();                         // ...e a área de clientes corrige para a 1ª liberada
   $('#view-lista').classList.add('hidden');
@@ -1620,6 +1669,7 @@ async function abrirDetalhe(sel) {
     const crono = await api(`${baseCrono}/cronograma`);
     state.cronograma = crono;
     renderCronograma(crono);
+    renderResumoProjeto();                // parte do Resumo que depende do cronograma
     renderPorModulo(crono);
     renderPorEtapa(crono);
     if (state.tab === 'consumo') renderConsumo();   // já estava na aba quando chegou
@@ -1697,24 +1747,190 @@ function preencheMapa(m, projeto) {
   $('#d-status').textContent = m.IBL_STATUS_DESC?.trim() || st.label;
   $('#d-contrato').textContent = `Contrato: ${(m.IB7_CONTRA || '—').trim()} · ${(m.IB7_FPAGTO_DESC || '').trim()}`;
 
-  // KPIs
-  const pct = m.MEDICAO_PERCENTUAL || 0;
-  const pctH = m.HORAS_REALIZADAS_PERCENTUAL || 0;
+  // Painel executivo da aba Resumo (KPIs, execução, fases, apontamentos,
+  // agenda). O cronograma ainda não chegou neste momento: a parte que depende
+  // dele mostra "carregando" e é refeita quando abrirDetalhe recebe o /cronograma.
+  state.mapa = m;
+  renderResumoProjeto();
+}
+
+// ============================================================================
+//  ABA RESUMO — painel executivo do projeto
+//  Fontes: /mapa (horas, medição, horaItems, vigência) + /cronograma (fases,
+//  atividades, status, datas, agendas). Tudo derivado no cliente.
+// ============================================================================
+function hhmmParaHoras(v) {
+  // "2370:33" → 2370.55 ; "00:00" → 0 ; número → número
+  if (v === null || v === undefined || v === '') return 0;
+  if (typeof v === 'number') return v;
+  const m = String(v).trim().match(/^(-?\d+):(\d{1,2})$/);
+  if (!m) { const n = Number(String(v).replace(',', '.')); return isNaN(n) ? 0 : n; }
+  const h = parseInt(m[1], 10), mi = parseInt(m[2], 10);
+  return h + (h < 0 ? -mi : mi) / 60;
+}
+function isoHoje() { return new Date().toISOString().slice(0, 10); }
+function diasEntre(a, b) {
+  // a, b em YYYY-MM-DD → dias corridos (b - a)
+  if (!a || !b) return null;
+  const da = new Date(a + 'T00:00:00'), db = new Date(b + 'T00:00:00');
+  if (isNaN(da) || isNaN(db)) return null;
+  return Math.round((db - da) / 86400000);
+}
+function rsAnel(pct, cor, tam = 64, texto) {
+  const r = (tam / 2) - 7, c = 2 * Math.PI * r;
+  const p = pct == null ? 0 : Math.max(0, Math.min(100, pct));
+  const dash = (c * p / 100).toFixed(1);
+  const t = texto ?? (pct == null ? '—' : `${Math.round(pct)}%`);
+  return `<svg width="${tam}" height="${tam}" viewBox="0 0 ${tam} ${tam}">
+    <circle cx="${tam/2}" cy="${tam/2}" r="${r}" fill="none" stroke="rgba(255,255,255,.22)" stroke-width="7"/>
+    <circle cx="${tam/2}" cy="${tam/2}" r="${r}" fill="none" stroke="${cor}" stroke-width="7" stroke-linecap="round"
+      stroke-dasharray="${dash} ${c.toFixed(1)}" transform="rotate(-90 ${tam/2} ${tam/2})"/>
+    <text x="50%" y="50%" text-anchor="middle" dominant-baseline="central" font-size="${tam >= 64 ? 13 : 11}"
+      font-weight="700" font-family="TOTVS, Inter, sans-serif" fill="currentColor">${t}</text>
+  </svg>`;
+}
+function rsHero(cls, label, valor, sub, anel) {
+  return `<div class="rs-hero ${cls}">
+    ${anel || ''}
+    <div class="min-w-0"><div class="lbl">${label}</div><div class="val">${valor}</div>${sub ? `<div class="sub">${sub}</div>` : ''}</div>
+  </div>`;
+}
+function rsKpi(label, valor, sub, acc) {
+  return `<div class="rs-kpi" style="--rs-acc:${acc || '#00DBFF'}">
+    <div class="v">${valor}</div><div class="l">${label}</div>${sub ? `<div class="s">${sub}</div>` : ''}
+  </div>`;
+}
+function rsBarra(label, valor, pct, cor, extra) {
+  return `<div>
+    <div class="rs-row"><span class="truncate pr-2">${escapeHtml(label)}</span>
+      <span class="whitespace-nowrap"><b>${valor}</b>${extra ? ` <span class="text-slate-400">${extra}</span>` : ''}</span></div>
+    <div class="rs-track"><div class="rs-fill" style="width:${Math.max(0, Math.min(100, pct || 0))}%;background:${cor}"></div></div>
+  </div>`;
+}
+function corPorConsumo(pct) {
+  return pct > 100 ? '#e11d48' : pct >= 90 ? '#FFB800' : '#00DBFF';
+}
+
+function renderResumoProjeto() {
+  const m = state.mapa;
+  if (!m) return;
+  const hp  = Number(m.HORAS_PREVISTAS) || 0;
+  const hr  = Number(m.HORAS_REALIZADAS) || 0;
+  const pctH = hp > 0 ? (hr / hp) * 100 : (Number(m.HORAS_REALIZADAS_PERCENTUAL) || 0);
+  const pctMed = Number(m.MEDICAO_PERCENTUAL) || 0;
+  const pctPer = Number(m.MEDICAO_PERIODO_PERCENTUAL) || 0;
+  const saldo = hp - hr;
+
+  // ── Apontamentos por tipo (horaItems, "hhh:mm")
+  const items = (m.horaItems || []).map(it => ({ desc: String(it.descricao || '').trim(), h: hhmmParaHoras(it.realizado), raw: it.realizado || '00:00' }));
+  const acha = (re) => items.find(it => re.test(it.desc));
+  const itNormal = acha(/normal/i), itGer = acha(/gerenc/i), itFora = acha(/fora/i),
+        itSaldo = acha(/saldo/i), itProj = acha(/proje/i), itTrans = acha(/transl/i);
+  const apontadas = items.filter(it => !/saldo|proje/i.test(it.desc)).reduce((s, it) => s + it.h, 0);
+
+  // ── Prazo (vigência)
+  const hoje = isoHoje();
+  const dIni = (m.IB7_DTVALI || '').slice(0, 10), dFim = (m.IBL_DTFIM || '').slice(0, 10);
+  const totDias = diasEntre(dIni, dFim), decDias = diasEntre(dIni, hoje);
+  const temPrazo = totDias != null && totDias > 0 && /^\d{4}-\d{2}-\d{2}$/.test(dIni);
+  const pctPrazo = temPrazo ? Math.max(0, Math.min(100, (decDias / totDias) * 100)) : null;
+  const restantes = temPrazo ? diasEntre(hoje, dFim) : null;
+  const ritmo = pctPrazo && pctPrazo > 0 ? pctH / pctPrazo : null;   // >1 = consumindo horas mais rápido que o prazo
+
+  // ── Hero (mapa)
   $('#d-kpis').innerHTML = `
-    ${kpiDetail('Horas Previstas',  fmtH(m.HORAS_PREVISTAS),  'bg-totvs-petroleo text-white')}
-    ${kpiDetail('Horas Realizadas', fmtH(m.HORAS_REALIZADAS), 'bg-totvs-blue text-totvs-petroleo', `${pctH}% do previsto`)}
-    ${kpiDetail('Medição', `${m.MEDICAO_REALIZADA || 0} / ${m.MEDICAO_PREVISTA || 0}`, 'bg-totvs-purple text-white', fmtPct(pct))}
-    ${kpiDetail('Período Atual', fmtH(m.MEDICAO_PERIODO_REALIZADO) + ' / ' + fmtH(m.MEDICAO_PERIODO_PREVISTO), 'bg-totvs-black text-white', fmtPct(m.MEDICAO_PERIODO_PERCENTUAL))}
+    ${rsHero('petroleo', 'Horas previstas', fmtH(hp), `saldo <b>${fmtH(saldo)}</b> h${itSaldo ? ` · PCI ${escapeHtml(itSaldo.raw)}` : ''}`,
+             rsAnel(100 - (hp > 0 ? Math.min(100, pctH) : 0), '#00DBFF', 64, fmtPct(100 - Math.min(100, pctH)) ))}
+    ${rsHero('blue', 'Horas realizadas', fmtH(hr), `${fmtPct(pctH)} do previsto${itProj ? ` · projeção ${escapeHtml(itProj.raw)}` : ''}`,
+             rsAnel(pctH, '#002233', 64))}
+    ${rsHero('purple', 'Medição', `${m.MEDICAO_REALIZADA || 0} / ${m.MEDICAO_PREVISTA || 0}`, `${fmtPct(pctMed)} medido`,
+             rsAnel(pctMed, '#ffffff', 64))}
+    ${rsHero('black', 'Período atual', `${fmtH(m.MEDICAO_PERIODO_REALIZADO)} / ${fmtH(m.MEDICAO_PERIODO_PREVISTO)}`, `${fmtPct(pctPer)} do período`,
+             rsAnel(pctPer, '#00FFD4', 64))}
   `;
 
-  // Horas por tipo (horaItems)
-  const items = m.horaItems || [];
-  $('#d-horas').innerHTML = items.length ? items.map(it => `
-    <div class="flex items-center justify-between text-sm">
-      <span class="text-totvs-gray">${escapeHtml(it.descricao)}</span>
-      <span class="font-mono font-semibold text-totvs-petroleo">${it.realizado || '00:00'}</span>
+  // ── Apontamentos por tipo (barras)
+  const maxIt = Math.max(1, ...items.map(it => it.h));
+  $('#d-horas').innerHTML = items.length ? items.map(it => {
+    const share = apontadas > 0 && !/saldo|proje/i.test(it.desc) ? `${Math.round((it.h / apontadas) * 100)}%` : '';
+    const cor = /saldo/i.test(it.desc) ? '#00FFD4' : /proje/i.test(it.desc) ? '#A44DFF' : /fora/i.test(it.desc) ? '#FF8900'
+              : /gerenc/i.test(it.desc) ? '#5DA2FF' : /transl/i.test(it.desc) ? '#FFB800' : '#00DBFF';
+    return rsBarra(it.desc, `<span class="font-mono">${escapeHtml(it.raw)}</span>`, (it.h / maxIt) * 100, cor, share);
+  }).join('') : '<p class="rs-vazio">Sem detalhamento.</p>';
+
+  // ── Execução (cronograma)
+  const crono = state.cronograma;
+  const carregando = `<div class="rs-vazio">Carregando cronograma…</div>`;
+  if (!crono) {
+    $('#d-resumo-exec').innerHTML = `<div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+      ${rsKpi('Prazo decorrido', temPrazo ? fmtPct(pctPrazo) : '—', temPrazo ? `${restantes >= 0 ? restantes + ' dias restantes' : Math.abs(restantes) + ' dias vencido'}` : 'vigência não informada', temPrazo && restantes < 0 ? '#e11d48' : '#002233')}
+      ${rsKpi('Ritmo horas × prazo', ritmo == null ? '—' : ritmo.toFixed(2), ritmo == null ? 'sem vigência' : ritmo > 1.1 ? 'horas à frente do prazo' : ritmo < 0.9 ? 'horas atrás do prazo' : 'em linha', ritmo == null ? '#94a3b8' : ritmo > 1.1 ? '#FFB800' : ritmo < 0.9 ? '#A44DFF' : '#00FFD4')}
+      ${rsKpi('Gerenciamento', itGer && apontadas ? fmtPct((itGer.h / apontadas) * 100) : '—', 'das horas apontadas', '#5DA2FF')}
+      ${rsKpi('Fora do escopo', itFora ? fmtH(itFora.h) + ' h' : '—', 'apontadas fora do escopo', itFora && itFora.h > 0 ? '#FF8900' : '#00FFD4')}
+    </div>${carregando}`;
+    $('#d-fases').innerHTML = carregando; $('#d-atrasadas').innerHTML = carregando; $('#d-proximas').innerHTML = carregando;
+    return;
+  }
+
+  const ats = coletaAtividades(crono);
+  const st = { C: 0, I: 0, BM: 0, A: 0 };
+  let ha = 0, estouradas = 0, estLista = [];
+  const atrasadas = [], proximas = [];
+  for (const it of ats) {
+    const at = it.atividade;
+    const k = (at.status_implantacao || '').trim();
+    if (k === 'C') st.C++; else if (k === 'I') st.I++; else if (k === 'BM') st.BM++; else st.A++;
+    ha += aRealizar(at);
+    const df = (at.data_fim || '').slice(0, 10), di = (at.data_inicio || '').slice(0, 10);
+    if (k !== 'C' && df && df < hoje) atrasadas.push({ it, dias: diasEntre(df, hoje) });
+    if (k !== 'C' && di && di >= hoje) proximas.push({ it, em: diasEntre(hoje, di) });
+  }
+  for (const fase of crono) for (const et of (fase.items || [])) {
+    const ehp = somaProp(et, 'horas_previstas'), ehr = somaProp(et, 'horas_realizadas');
+    if (ehp > 0 && ehr > ehp) { estouradas++; estLista.push({ d: et.descricao, ehp, ehr }); }
+  }
+  const total = ats.length;
+  const pctConc = total ? (st.C / total) * 100 : 0;
+  const comprometido = hr + ha;
+  const livre = hp - comprometido;
+  atrasadas.sort((a, b) => b.dias - a.dias);
+  proximas.sort((a, b) => a.em - b.em);
+
+  $('#d-resumo-exec').innerHTML = `
+    <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+      ${rsKpi('Atividades concluídas', `${st.C}<span class="text-sm text-slate-400">/${total}</span>`, fmtPct(pctConc) + ' do cronograma', '#00FFD4')}
+      ${rsKpi('Em implantação', st.I, `${st.A} abertas`, '#00DBFF')}
+      ${rsKpi('Bloqueadas', st.BM, st.BM ? 'exigem ação' : 'nenhum bloqueio', st.BM ? '#FFB800' : '#00FFD4')}
+      ${rsKpi('Atrasadas', atrasadas.length, 'fim previsto vencido', atrasadas.length ? '#e11d48' : '#00FFD4')}
+      ${rsKpi('Horas agendadas', fmtH(ha) + ' h', 'agendas a realizar', '#A44DFF')}
+      ${rsKpi('Saldo livre', fmtH(livre) + ' h', `previsto − realizado − agendado${livre < 0 ? ' · negativo' : ''}`, livre < 0 ? '#e11d48' : '#002233')}
+      ${rsKpi('Etapas estouradas', estouradas, estouradas ? 'realizado acima do previsto' : 'nenhuma etapa estourada', estouradas ? '#FF8900' : '#00FFD4')}
+      ${rsKpi('Prazo decorrido', temPrazo ? fmtPct(pctPrazo) : '—', temPrazo ? (restantes >= 0 ? restantes + ' dias restantes' : Math.abs(restantes) + ' dias vencido') + (ritmo != null ? ` · ritmo ${ritmo.toFixed(2)}` : '') : 'vigência não informada', temPrazo && restantes < 0 ? '#e11d48' : '#002233')}
     </div>
-  `).join('') : '<p class="text-totvs-graylight text-sm">Sem detalhamento.</p>';
+    ${estLista.length ? `<div class="mt-3 flex flex-wrap gap-1.5">${estLista.slice(0, 6).map(e =>
+      `<span class="rs-pill bg-rose-50 text-rose-700 border border-rose-200" title="realizado ${fmtH(e.ehr)} h de ${fmtH(e.ehp)} h previstas">${escapeHtml(e.d)} · ${fmtPct((e.ehr / e.ehp) * 100)}</span>`).join('')}</div>` : ''}
+  `;
+
+  // ── Avanço por fase
+  $('#d-fases').innerHTML = crono.length ? crono.map(f => {
+    const fhp = somaProp(f, 'horas_previstas'), fhr = somaProp(f, 'horas_realizadas');
+    const pct = fhp > 0 ? (fhr / fhp) * 100 : 0;
+    return rsBarra(f.descricao, `${fmtH(fhr)} / ${fmtH(fhp)} h`, pct, corPorConsumo(pct), fmtPct(pct));
+  }).join('') : '<p class="rs-vazio">Sem cronograma.</p>';
+
+  // ── Atrasadas / próximas
+  const linha = (x, meta, pill) => `<div class="rs-item">
+      <span class="t" title="${escapeHtml(x.it.etapa)} › ${escapeHtml(x.it.atividade.descricao)}">${escapeHtml(x.it.atividade.descricao)}</span>
+      <span class="m hidden md:inline">${escapeHtml(x.it.etapa)}</span>
+      <span class="m">${meta}</span>${pill}
+    </div>`;
+  $('#d-atrasadas-hint').textContent = atrasadas.length ? `${atrasadas.length} atividade(s) · mostrando ${Math.min(6, atrasadas.length)}` : 'fim previsto vencido e não concluídas';
+  $('#d-atrasadas').innerHTML = atrasadas.length ? atrasadas.slice(0, 6).map(x =>
+    linha(x, fmtData(x.it.atividade.data_fim), `<span class="rs-pill bg-rose-100 text-rose-700">${x.dias} d</span>`)).join('')
+    : '<p class="rs-vazio">Nenhuma atividade atrasada.</p>';
+  $('#d-proximas').innerHTML = proximas.length ? proximas.slice(0, 6).map(x =>
+    linha(x, fmtData(x.it.atividade.data_inicio), `<span class="rs-pill bg-cyan-100 text-cyan-800">${x.em === 0 ? 'hoje' : 'em ' + x.em + ' d'}</span>`)).join('')
+    : '<p class="rs-vazio">Nenhuma atividade futura com data.</p>';
 }
 function kpiDetail(label, valor, cls, sub) {
   return `<div class="${cls} rounded-lg px-4 py-3">
