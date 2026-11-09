@@ -354,6 +354,11 @@ ABAS = [
     # Produção e Teste. Liberável ao cliente — foi pedida para ser mostrada a
     # ele; a coleta continua só com a equipe TOTVS.
     {"id": "tributos",  "label": "Configurador de Tributos", "cliente": True},
+    # Protótipo Core (09/11/2026): trilha ao vivo da proposta CRM → iPaaS →
+    # ZA3 → Painel de Projetos → Contratos, lida pela REST da base durante o
+    # protótipo integrado da Dígitro. Liberável ao cliente; a LEITURA na base
+    # continua só com a equipe TOTVS (require_interno), como toda coleta.
+    {"id": "core",      "label": "Protótipo Core",       "cliente": True},
 ]
 ABAS_IDS = [a["id"] for a in ABAS]
 # 23/10/2026: TODAS as abas passaram a ser liberáveis para o perfil cliente
@@ -14869,6 +14874,917 @@ def api_virada_plano(customer):
                 on conflict (customer) do update set {upd}, updated_at=now()
                 returning *""", [customer, por] + list(c.values()), one=True)
     return _json({"ok": True, "plano": row})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  PROTÓTIPO CORE — trilha da proposta CRM → iPaaS → ZA3 → Painel → Contratos
+#  Spec: docs/specs/2026-11-09-aba-prototipo-core.md
+# ═══════════════════════════════════════════════════════════════════════════
+# A pergunta da tela, durante o protótipo integrado (09–10/11/2026): "a
+# proposta que a Aline acabou de digitar no CRM chegou? gravou ZA3? virou
+# projeto? virou contrato? e os VALORES batem com o que a regra diz?".
+#
+# Transporte: o MESMO /tscmonit/query (só leitura) das outras abas. Diferenças
+# de desenho que custam caro se desfeitas:
+#
+# 1. Os campos de cada tabela vêm do DICIONÁRIO (SX3) da base, não de uma lista
+#    fixa. A proposta do CRM tem "variações e campos possíveis" — o que existe
+#    na ZA3/ZA0/CN9 daquela base é o que a tela mostra. Campos virtuais
+#    (X3_CONTEXT = 'V') ficam de fora: não existem no banco. Se o SX3 não puder
+#    ser lido, vale a lista mínima conhecida (CORE_CAMPOS_MINIMOS).
+# 2. Memo (JSON da proposta, memorial, IT, erro) é lido em HEXADECIMAL, em
+#    pedaços de CORE_MEMO_CHUNK bytes. O CSV da REST separa por ';' e o JSON é
+#    cheio de ';', aspas e quebras de linha — em hex só há [0-9A-F]. O Python
+#    junta os pedaços, decodifica (UTF-8 → cp1252) e faz o json.loads.
+# 3. A chave da cadeia é o CONTRATO da ZA3 (ZA3_CONTRA) e o CÓDIGO do projeto
+#    (ZA0_CODIGO = CTD_ITEM = CNB_ITEMCTA = ZA1_CODIGO). O número da proposta
+#    só existe dentro do JSON e no ZA0_PROPOS (50) × CN9_XOPORT (6).
+# 4. Os CONCEITOS (catálogo C01–C25 do projeto Dígitro) são avaliados aqui,
+#    comparando o que o JSON diz que deveria acontecer com o que as tabelas
+#    mostram. Cada conceito devolve ok/alerta/erro/info e o par esperado ×
+#    observado — a tela só desenha.
+
+CORE_TABELAS = ("ZA3", "ZA0", "ZA1", "ZA4", "CN9", "CNA", "CNB", "CTD", "SB1")
+CORE_MEMO_CHUNK = 1900            # bytes por pedaço (RAWTOHEX → 3800 chars < 4000 do Oracle)
+CORE_MEMO_CHUNKS_LISTA = 1        # na lista basta o começo do JSON (nº da proposta)
+CORE_MEMO_CHUNKS_TRILHA = 24      # 24 × 1900 ≈ 45 KB por memo
+CORE_LISTA_LIMITE = 120
+CORE_DIC_TTL = 600                # s de cache do dicionário por (customer, ambiente)
+_CORE_DIC_CACHE = {}
+
+# Campos mínimos, usados só se o SX3 não puder ser lido (ou não tiver a tabela).
+CORE_CAMPOS_MINIMOS = {
+    "ZA3": [("ZA3_FILIAL", "C"), ("ZA3_MSGID", "C"), ("ZA3_IDCRM", "C"), ("ZA3_ETAPA", "C"),
+            ("ZA3_STG1", "C"), ("ZA3_STG2", "C"), ("ZA3_STIPA", "C"), ("ZA3_DTINC", "D"),
+            ("ZA3_HRINC", "C"), ("ZA3_DTFIM", "D"), ("ZA3_HRFIM", "C"), ("ZA3_CONTRA", "C"),
+            ("ZA3_PROJET", "M"), ("ZA3_OPORT", "M"), ("ZA3_ITOPOR", "M"), ("ZA3_ORDVEN", "M"),
+            ("ZA3_JSONFI", "M"), ("ZA3_ERRO", "M")],
+    "ZA0": [("ZA0_FILIAL", "C"), ("ZA0_CODIGO", "C"), ("ZA0_STATUS", "C"), ("ZA0_EMISSA", "D"),
+            ("ZA0_NOME", "C"), ("ZA0_DESCRI", "C"), ("ZA0_IT", "M"), ("ZA0_MODALI", "C"),
+            ("ZA0_NATURE", "C"), ("ZA0_PLATAF", "C"), ("ZA0_NUMSER", "C"), ("ZA0_TPPROD", "C"),
+            ("ZA0_TPVEND", "C"), ("ZA0_MANUTE", "C"), ("ZA0_GARANT", "C"), ("ZA0_CONTRA", "C"),
+            ("ZA0_PROPOS", "C"), ("ZA0_ORIGEM", "C"), ("ZA0_GESTOR", "C"), ("ZA0_VENDED", "C"),
+            ("ZA0_VENSUP", "C"), ("ZA0_REPRES", "C"), ("ZA0_CODCON", "C"), ("ZA0_CONDIC", "C"),
+            ("ZA0_CODCLI", "C"), ("ZA0_LOJCLI", "C"), ("ZA0_RAZCLI", "C"), ("ZA0_USUCLI", "C"),
+            ("ZA0_USULOJ", "C"), ("ZA0_USURAZ", "C"), ("ZA0_RAZENT", "C"), ("ZA0_ENDENT", "C"),
+            ("ZA0_ENDINS", "C")],
+    "ZA1": [("ZA1_FILIAL", "C"), ("ZA1_CODIGO", "C"), ("ZA1_ITEM", "C"), ("ZA1_PRODUT", "C"),
+            ("ZA1_DESCRI", "C"), ("ZA1_QUANT", "N"), ("ZA1_CRM", "C"), ("ZA1_AUTO", "C")],
+    "ZA4": [("ZA4_FILIAL", "C"), ("ZA4_CODCLI", "C"), ("ZA4_LOJA", "C"), ("ZA4_PROJET", "C"),
+            ("ZA4_PRODUT", "C"), ("ZA4_TIPO", "C"), ("ZA4_SEQ", "C"), ("ZA4_NUMSER", "C"),
+            ("ZA4_STATUS", "C"), ("ZA4_ORIGEM", "C")],
+    "CN9": [("CN9_FILIAL", "C"), ("CN9_NUMERO", "C"), ("CN9_REVISA", "C"), ("CN9_SITUAC", "C"),
+            ("CN9_TPCTO", "C"), ("CN9_DTINIC", "D"), ("CN9_DTFIM", "D"), ("CN9_VIGE", "N"),
+            ("CN9_UNVIGE", "C"), ("CN9_VLTOT", "N"), ("CN9_CONDPG", "C"), ("CN9_ZCODVD", "C"),
+            ("CN9_ZNOMVD", "C"), ("CN9_ZREPRE", "C"), ("CN9_ZMODAL", "C"), ("CN9_ZMEMOR", "M"),
+            ("CN9_ZGARAA", "C"), ("CN9_ZMONIT", "C"), ("CN9_ZTABPR", "C"), ("CN9_ZUNNEG", "C"),
+            ("CN9_XOPORT", "C"), ("CN9_XCRM", "C"), ("CN9_XEXEC1", "C"), ("CN9_XEXEC2", "C"),
+            ("CN9_XEXEC3", "C"), ("CN9_XPART1", "N"), ("CN9_XPART2", "N"), ("CN9_XPART3", "N")],
+    "CNA": [("CNA_FILIAL", "C"), ("CNA_CONTRA", "C"), ("CNA_REVISA", "C"), ("CNA_NUMERO", "C"),
+            ("CNA_CLIENT", "C"), ("CNA_LOJACL", "C"), ("CNA_VLTOT", "N"), ("CNA_XPROJ", "C"),
+            ("CNA_ZPLATA", "C")],
+    "CNB": [("CNB_FILIAL", "C"), ("CNB_CONTRA", "C"), ("CNB_REVISA", "C"), ("CNB_NUMERO", "C"),
+            ("CNB_ITEM", "C"), ("CNB_PRODUT", "C"), ("CNB_DESCRI", "C"), ("CNB_QUANT", "N"),
+            ("CNB_VLUNIT", "N"), ("CNB_VLTOT", "N"), ("CNB_ITEMCTA", "C"), ("CNB_ZFATUR", "C")],
+    "CTD": [("CTD_FILIAL", "C"), ("CTD_ITEM", "C"), ("CTD_DESC01", "C"), ("CTD_CLASSE", "C"),
+            ("CTD_BLOQ", "C"), ("CTD_DTEXIS", "D")],
+    "SB1": [("B1_FILIAL", "C"), ("B1_COD", "C"), ("B1_DESC", "C"), ("B1_TIPO", "C"),
+            ("B1_UM", "C"), ("B1_GRUPO", "C"), ("B1_PRV1", "N"), ("B1_MSBLQL", "C"),
+            ("B1_ZFATURA", "C"), ("B1_LOCPAD", "C")],
+}
+
+# Chaves que a trilha usa para ligar as tabelas. Se o dicionário tiver nomes
+# diferentes, _core_chave() procura pelo padrão.
+CORE_CHAVES = {
+    "ZA0_COD": ("ZA0_CODIGO", r"^ZA0_(CODIGO|COD|PROJET|NUM)$"),
+    "ZA1_COD": ("ZA1_CODIGO", r"^ZA1_(CODIGO|COD|PROJET|CODPRJ|NUMPRJ)$"),
+    "ZA1_PROD": ("ZA1_PRODUT", r"^ZA1_(PRODUT|COD(PRO|PRD)|PRODUTO|ITEMSB1)$"),
+    "ZA4_PRJ": ("ZA4_PROJET", r"^ZA4_(PROJET|CODPRJ|PROJ|CODIGO)$"),
+    "CNA_PRJ": ("CNA_XPROJ", r"^CNA_(XPROJ|ZPROJ|PROJET|XPROJET)$"),
+    "CNB_CTA": ("CNB_ITEMCTA", r"^CNB_ITEMCTA$"),
+    "CNB_PROD": ("CNB_PRODUT", r"^CNB_PRODUT$"),
+    "CTD_ITEM": ("CTD_ITEM", r"^CTD_ITEM$"),
+}
+
+CORE_LEGENDAS = {
+    "ZA3_STG1": {"R": "Recebido", "P": "Processando", "L": "Liberado", "E": "Erro"},
+    "ZA3_STG2": {"N": "Não liberado", "A": "Aguardando", "P": "Processando", "S": "Sucesso", "E": "Erro"},
+    "ZA3_STIPA": {"N": "Não disponível", "A": "Aguardando", "P": "Enviando", "S": "Sucesso", "E": "Erro"},
+    "ZA0_STATUS": {"1": "Em Implantação", "2": "Vigente", "3": "Não Vigente", "4": "Cancelado",
+                   "5": "Devolvida", "6": "Em Produção", "7": "Em Devolução", "8": "Suspensa",
+                   "9": "Migrada"},
+    "ZA0_TPPROD": {"1": "Físico", "2": "Virtual"},
+    "ZA0_TPVEND": {"1": "Venda Direta", "2": "Venda por Canais"},
+    "ZA0_MODALI": {"1": "Venda Dígitro", "2": "Venda Representante", "3": "Locação",
+                   "4": "Licenciamento de Software", "5": "Sem Ônus", "6": "Prestação de Serviços"},
+    "CN9_ZMODAL": {"1": "Venda Dígitro", "2": "Venda Representante", "3": "Locação",
+                   "4": "Licenciamento de Software", "5": "Sem Ônus", "6": "Prestação de Serviços"},
+    "CN9_ZUNNEG": {"1": "NVC", "2": "NVD", "3": "GSD", "NVC": "NVC", "NVD": "NVD", "GSD": "GSD"},
+    "CN9_SITUAC": {"01": "Em Elaboração", "02": "Em Aprovação", "03": "Emitido", "04": "Reprovado",
+                   "05": "Vigente", "06": "Paralisado", "07": "Solic. Finalização", "08": "Finalizado",
+                   "09": "Revisão", "10": "Revisado", "11": "Encerrado"},
+    "CN9_TPCTO": {"001": "Locação", "002": "Suporte", "003": "SaaS", "004": "Licenciamento de Software",
+                  "005": "Serviço"},
+}
+
+# Estágios do fluxo que a tela desenha (ordem = ordem no desenho).
+CORE_ESTAGIOS = [
+    {"id": "crm", "rotulo": "Proposta no CRM", "sub": "oportunidade · itens · ordens de venda"},
+    {"id": "etapa1", "rotulo": "iPaaS → Etapa 1", "sub": "POST /api/v1/CRMIntegracao · ZA3"},
+    {"id": "etapa2", "rotulo": "Etapa 2 · Sincronizar", "sub": "U_CRMPROJT · transação única"},
+    {"id": "painel", "rotulo": "Painel de Projetos", "sub": "ZA0 · ZA1 · SB1 PRJ · CTD · NS"},
+    {"id": "contrato", "rotulo": "Contratos", "sub": "CN9 · CNA planilhas · CNB itens"},
+    {"id": "retorno", "rotulo": "Retorno ao CRM", "sub": "ZA3_STIPA · P11"},
+]
+
+
+def _core_dialeto(banco):
+    b = (banco or "oracle").strip().lower()
+    return b if b in BANCOS else "oracle"
+
+
+def _core_memo_hex(col, banco, chunks, variante):
+    """Expressões (uma por pedaço) que devolvem `chunks` × CORE_MEMO_CHUNK bytes
+    do memo em HEX. `variante` 0 = forma principal do banco, 1 = alternativa,
+    None = sem o memo. No Oracle o DBAccess grava memo como BLOB
+    (RAWTOHEX(DBMS_LOB.SUBSTR)); se a base tiver CLOB vale a 2ª forma. No SQL
+    Server o memo é IMAGE/VARBINARY — CONVERT(..., 2) dá hex sem o 0x."""
+    if variante is None:
+        return None
+    n, b = CORE_MEMO_CHUNK, _core_dialeto(banco)
+    offs = [1 + i * n for i in range(chunks)]
+    if b == "mssql":
+        if variante > 0:
+            return None
+        return [f"CONVERT(VARCHAR(MAX), SUBSTRING(CONVERT(VARBINARY(MAX), {col}), {o}, {n}), 2)"
+                for o in offs]
+    if b == "postgres":
+        if variante > 0:
+            return None
+        return [f"ENCODE(SUBSTRING({col}::bytea FROM {o} FOR {n}), 'hex')" for o in offs]
+    if variante == 0:
+        return [f"RAWTOHEX(DBMS_LOB.SUBSTR({col}, {n}, {o}))" for o in offs]
+    if variante == 1:
+        return [f"RAWTOHEX(UTL_RAW.CAST_TO_RAW(DBMS_LOB.SUBSTR({col}, {n}, {o})))" for o in offs]
+    return None
+
+
+def _core_variantes(banco):
+    """Ordem de tentativa das variantes de memo por banco (None = sem memo)."""
+    return [0, 1, None] if _core_dialeto(banco) == "oracle" else [0, None]
+
+
+def _core_hex_texto(hexs):
+    """Junta os pedaços hex de um memo e devolve texto. Pedaço vazio encerra.
+    UTF-8 primeiro (o iPaaS manda UTF-8); cp1252 se não for UTF-8 válido."""
+    partes = []
+    for h in hexs:
+        h = (h or "").strip()
+        if not h:
+            break
+        partes.append(h)
+    raw = "".join(partes)
+    if not raw:
+        return ""
+    try:
+        b = bytes.fromhex(raw)
+    except ValueError:
+        return raw
+    b = b.rstrip(b"\x00 ")
+    try:
+        return b.decode("utf-8")
+    except UnicodeDecodeError:
+        return b.decode("cp1252", errors="replace")
+
+
+def _core_sql_dicionario(sufixo):
+    s = (sufixo or "010").strip()
+    tabs = ", ".join(f"'{t}'" for t in CORE_TABELAS)
+    return (f"SELECT RTRIM(X3_ARQUIVO) AS ARQ, RTRIM(X3_CAMPO) AS CAMPO, X3_TIPO AS TIPO, "
+            f"X3_TAMANHO AS TAM, X3_DECIMAL AS DEC, RTRIM(X3_TITULO) AS TITULO, "
+            f"RTRIM(X3_ORDEM) AS ORDEM, X3_CONTEXT AS CTX, RTRIM(X3_CBOX) AS CBOX "
+            f"FROM SX3{s} WHERE D_E_L_E_T_ = ' ' AND X3_ARQUIVO IN ({tabs}) "
+            f"ORDER BY X3_ARQUIVO, X3_ORDEM")
+
+
+def _core_dicionario(cfg, customer, amb):
+    """{tabela: [{campo, tipo, tam, titulo, cbox}]} lido do SX3 da base, com
+    cache curto. Sem SX3 → CORE_CAMPOS_MINIMOS. Campos virtuais ficam fora."""
+    suf = (cfg.get("sufixo") or "010").strip()
+    chave = (customer, amb, suf)
+    agora = time.time()
+    hit = _CORE_DIC_CACHE.get(chave)
+    if hit and agora - hit[0] < CORE_DIC_TTL:
+        return hit[1], hit[2]
+    r = _mov_roda_sql(cfg, customer, amb, _core_sql_dicionario(suf), timeout=40)
+    dic, origem = {}, "sx3"
+    if r.get("ok"):
+        for ln in _integ_csv(r.get("csv") or ""):
+            if (ln.get("CTX") or "").strip().upper() == "V":
+                continue
+            tab = (ln.get("ARQ") or "").strip().upper()
+            campo = (ln.get("CAMPO") or "").strip().upper()
+            if not tab or not campo:
+                continue
+            dic.setdefault(tab, []).append({
+                "campo": campo, "tipo": (ln.get("TIPO") or "C").strip().upper()[:1] or "C",
+                "tam": _num(ln.get("TAM")), "dec": _num(ln.get("DEC")),
+                "titulo": (ln.get("TITULO") or "").strip() or campo,
+                "cbox": (ln.get("CBOX") or "").strip()})
+    if not dic:
+        origem = "minimo" if r.get("ok") else f"minimo ({r.get('erro') or 'SX3 não lido'})"
+    for tab, lista in CORE_CAMPOS_MINIMOS.items():
+        if not dic.get(tab):
+            dic[tab] = [{"campo": c, "tipo": t, "tam": None, "dec": None, "titulo": c, "cbox": ""}
+                        for c, t in lista]
+    _CORE_DIC_CACHE[chave] = (agora, dic, origem)
+    return dic, origem
+
+
+def _num(v):
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _core_chave(dic, nome):
+    """Nome real do campo-chave na base (ou o padrão, se o dicionário não
+    tiver nenhum que case)."""
+    padrao, rx = CORE_CHAVES[nome]
+    tab = padrao[:3]
+    nomes = [f["campo"] for f in dic.get(tab, [])]
+    if padrao in nomes:
+        return padrao
+    for n in nomes:
+        if re.match(rx, n):
+            return n
+    return padrao
+
+
+def _core_select(dic, tab, sufixo, where, order, banco, chunks, variante, limite=None):
+    """SELECT de TODOS os campos reais da tabela, com os memos em hex."""
+    s = (sufixo or "010").strip()
+    cols = []
+    for f in dic.get(tab, []):
+        c = f["campo"]
+        if f["tipo"] == "M":
+            exprs = _core_memo_hex(c, banco, chunks, variante)
+            if not exprs:
+                continue
+            cols += [f"{e} AS {c}__{i}" for i, e in enumerate(exprs)]
+        elif f["tipo"] == "C":
+            cols.append(f"RTRIM({c}) AS {c}")
+        else:
+            cols.append(c)
+    cols.append("R_E_C_N_O_ AS RECNO")
+    b = _core_dialeto(banco)
+    top = f"TOP {int(limite)} " if (limite and b == "mssql") else ""
+    sql = f"SELECT {top}{', '.join(cols)} FROM {tab}{s} WHERE D_E_L_E_T_ = ' '"
+    if where:
+        sql += f" AND ({where})"
+    if order:
+        sql += f" ORDER BY {order}"
+    if limite and b == "oracle":
+        # Subconsulta com ROWNUM: vale em qualquer versão do Oracle (FETCH FIRST só no 12c+)
+        sql = f"SELECT * FROM ({sql}) WHERE ROWNUM <= {int(limite)}"
+    elif limite and b == "postgres":
+        sql += f" LIMIT {int(limite)}"
+    return sql
+
+
+def _core_linhas(csv_txt, dic, tab):
+    """CSV → linhas com os memos já juntados e decodificados."""
+    memos = [f["campo"] for f in dic.get(tab, []) if f["tipo"] == "M"]
+    out = []
+    for ln in _integ_csv(csv_txt):
+        row = {}
+        for k, v in ln.items():
+            if "__" in k:
+                continue
+            row[k] = v
+        for m in memos:
+            pedacos = [ln.get(f"{m}__{i}") for i in range(CORE_MEMO_CHUNKS_TRILHA)
+                       if f"{m}__{i}" in ln]
+            if pedacos:
+                row[m] = _core_hex_texto(pedacos)
+        out.append(row)
+    return out
+
+
+def _core_lista_in(valores):
+    vals = sorted({(v or "").strip() for v in valores if (v or "").strip()})
+    if not vals:
+        return None
+    return ", ".join("'" + v.replace("'", "''") + "'" for v in vals)
+
+
+def _core_roda(cfg, customer, amb, dic, tab, where, order, limite=None, chunks=1):  # noqa: C901
+    """Roda o SELECT da tabela tentando as variantes de memo. Devolve
+    (linhas, erro, variante_usada)."""
+    ult = None
+    for var in _core_variantes(cfg.get("banco")):
+        sql = _core_select(dic, tab, cfg.get("sufixo"), where, order, cfg.get("banco"), chunks, var, limite)
+        r = _mov_roda_sql(cfg, customer, amb, sql, timeout=50)
+        if r.get("ok"):
+            return _core_linhas(r.get("csv") or "", dic, tab), None, var
+        ult = r.get("erro") or "falha"
+        if r.get("nao_se_aplica"):
+            break
+    return [], ult, None
+
+
+# ── JSON da proposta ─────────────────────────────────────────────────────────
+def _core_json(texto):
+    """json.loads tolerante: tira lixo depois do último '}' / ']' (memo com
+    resto de gravação anterior) e devolve None se não for JSON."""
+    t = (texto or "").strip()
+    if not t:
+        return None
+    for tentativa in (t, t[: max(t.rfind("}"), t.rfind("]")) + 1]):
+        if not tentativa:
+            continue
+        try:
+            return json.loads(tentativa)
+        except ValueError:
+            continue
+    return None
+
+
+def _core_norm(s):
+    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKD", str(s or "")).encode("ascii", "ignore").decode().lower())
+
+
+def _core_busca(obj, *nomes, lista=False):
+    """Primeiro valor cujo NOME de chave (normalizado) seja um dos `nomes`,
+    em qualquer profundidade. Com lista=True devolve todos os valores que
+    forem list (ex.: ordensVenda)."""
+    alvos = {_core_norm(n) for n in nomes}
+    achados = []
+
+    def anda(o):
+        if isinstance(o, dict):
+            for k, v in o.items():
+                if _core_norm(k) in alvos:
+                    if lista:
+                        if isinstance(v, list):
+                            achados.append(v)
+                    else:
+                        achados.append(v)
+                anda(v)
+        elif isinstance(o, list):
+            for v in o:
+                anda(v)
+    anda(obj)
+    if lista:
+        return achados[0] if achados else []
+    for a in achados:
+        if a not in (None, "", [], {}):
+            return a
+    return achados[0] if achados else None
+
+
+def _core_txt(v):
+    if v is None:
+        return ""
+    if isinstance(v, dict):
+        for k in ("codigo", "code", "id", "valor", "value", "nome", "name", "descricao"):
+            if k in v:
+                return str(v[k])
+        return json.dumps(v, ensure_ascii=False)
+    return str(v).strip()
+
+
+def _core_proposta_resumo(js):
+    """Campos-chave do cabeçalho, com os nomes do de-para do Fluxo Sistêmico."""
+    if not js:
+        return {}
+    cli = _core_busca(js, "cliente", "customer")
+    return {
+        "numeroProposta": _core_txt(_core_busca(js, "numeroProposta", "numProposta", "proposta", "proposalNumber")),
+        "opportunityId": _core_txt(_core_busca(js, "opportunityId", "idOportunidade", "oportunidadeId")),
+        "cliente": _core_txt(_core_busca(cli, "codigo", "code") if isinstance(cli, dict) else cli),
+        "clienteLoja": _core_txt(_core_busca(cli, "loja", "store") if isinstance(cli, dict) else None),
+        "clienteNome": _core_txt(_core_busca(cli, "nome", "razaoSocial", "name") if isinstance(cli, dict) else None),
+        "tipoVenda": _core_txt(_core_busca(js, "tipoVenda", "tipoDeVenda", "saleType")),
+        "modalidade": _core_txt(_core_busca(js, "modalidade")),
+        "unidadeNegocio": _core_txt(_core_busca(js, "unidadeNegocio", "unidadeDeNegocio", "businessUnit")),
+        "tabelaPreco": _core_txt(_core_busca(js, "tabelaPreco", "tabelaDePreco", "priceTable")),
+        "condicaoPagamento": _core_txt(_core_busca(js, "condicaoPagamento", "condPagamento", "paymentCondition")),
+        "vendedor": _core_txt(_core_busca(js, "consultorVendedor", "vendedor", "consultor", "seller")),
+        "representante": _core_txt(_core_busca(js, "representante")),
+        "garantia": _core_txt(_core_busca(js, "garantia")),
+        "monitoramento": _core_txt(_core_busca(js, "monitoramento")),
+        "memorialCalculo": _core_txt(_core_busca(js, "memorialCalculo", "memorial")),
+        "valorTotal": _core_busca(js, "valorTotal", "valorTotalProposta", "totalValue"),
+        "ordensVenda": _core_busca(js, "ordensVenda", "ordensDeVenda", "salesOrders", "ordemVenda", lista=True),
+    }
+
+
+def _core_ordens(js):
+    """Ordens de venda normalizadas: plataforma, tipoProduto, descrição,
+    natureza, itens (código, quantidade, valor unitário)."""
+    out = []
+    for ov in _core_busca(js, "ordensVenda", "ordensDeVenda", "salesOrders", "ordemVenda", lista=True) or []:
+        if not isinstance(ov, dict):
+            continue
+        itens = []
+        for it in (_core_busca(ov, "itens", "items", "produtos", lista=True) or []):
+            if not isinstance(it, dict):
+                continue
+            prod = _core_busca(it, "produto", "product", "codigo", "codigoProduto", "code")
+            itens.append({
+                "codigo": _core_txt(_core_busca(prod, "codigo", "code") if isinstance(prod, dict) else prod),
+                "descricao": _core_txt(_core_busca(it, "descricao", "description", "nome")),
+                "quantidade": _num(_core_txt(_core_busca(it, "quantidade", "qtd", "quantity"))),
+                "valorUnitario": _num(_core_txt(_core_busca(it, "valorUnitario", "precoUnitario", "unitPrice", "valor"))),
+                "valorTotal": _num(_core_txt(_core_busca(it, "valorTotal", "total", "totalValue"))),
+            })
+        out.append({
+            "id": _core_txt(_core_busca(ov, "id", "ordemVendaId", "salesOrderId", "numero")),
+            "descricao": _core_txt(_core_busca(ov, "descricao", "description", "nome")),
+            "plataforma": _core_txt(_core_busca(ov, "plataforma", "platform")),
+            "tipoProduto": _core_txt(_core_busca(ov, "tipoProduto", "tipoDeProduto", "productType")),
+            "natureza": _core_txt(_core_busca(ov, "natureza")),
+            "tipoManutencao": _core_txt(_core_busca(ov, "tipoManutencao", "manutencao")),
+            "instrucaoTecnica": _core_txt(_core_busca(ov, "instrucaoTecnica", "IT")),
+            "clienteUsuario": _core_txt(_core_busca(ov, "clienteUsuario", "usuarioFinal")),
+            "projetoOrigem": _core_txt(_core_busca(ov, "projetoOrigem", "origem")),
+            "itens": itens,
+            "valorTotal": sum((i["valorTotal"] or ((i["quantidade"] or 0) * (i["valorUnitario"] or 0))) for i in itens),
+        })
+    return out
+
+
+# ── Conceitos (catálogo C01–C25) ─────────────────────────────────────────────
+def _core_conceitos(resumo, ordens, za3, projetos, itens, prjs, ctds, cn9s, cnas, cnbs, ns):
+    """Cada conceito → {cod, titulo, regra, nivel, esperado, observado, dica}.
+    nivel: ok | alerta | erro | info | na (não se aplica / sem dado)."""
+    C = []
+
+    def add(cod, titulo, regra, nivel, esperado, observado, dica="", estagio="painel"):
+        C.append({"cod": cod, "titulo": titulo, "regra": regra, "nivel": nivel,
+                  "esperado": esperado, "observado": observado, "dica": dica, "estagio": estagio})
+
+    cn9 = cn9s[0] if cn9s else None
+    ok2 = (za3 or {}).get("ZA3_STG2") == "S"
+    nprop = resumo.get("numeroProposta") or ""
+    tem_json = bool(resumo)
+
+    # C23 nº da proposta / ID da oportunidade — ZA0_PROPOS (50) × CN9_XOPORT (6)
+    if tem_json:
+        xop = (cn9 or {}).get("CN9_XOPORT", "")
+        prop_prj = {p.get("ZA0_PROPOS", "") for p in projetos}
+        if not ok2:
+            add("C23", "Nº da proposta / ID da oportunidade", "ZA0_PROPOS (C50) recebe o número; CN9_XOPORT tem só 6 posições (P10)",
+                "info", nprop or "—", "Etapa 2 ainda não gerou projeto/contrato", "", "crm")
+        else:
+            nivel = "ok" if nprop and prop_prj == {nprop} else ("alerta" if nprop else "info")
+            if cn9 is not None and nprop and len(nprop) > 6 and xop and xop != nprop:
+                nivel = "alerta"
+            add("C23", "Nº da proposta / ID da oportunidade", "ZA0_PROPOS (C50) recebe o número; CN9_XOPORT tem só 6 posições (P10)",
+                nivel, nprop or "—",
+                f"ZA0_PROPOS: {', '.join(sorted(prop_prj)) or '—'} · CN9_XOPORT: {xop or '—'}",
+                "Se o número tiver mais de 6 posições, o contrato guarda truncado ou vazio.", "contrato")
+
+    # Cardinalidade: 1 projeto por OV, 1 contrato por oportunidade, 1 planilha por projeto
+    if tem_json and ok2:
+        n_ov, n_prj = len(ordens), len(projetos)
+        add("CARD", "1 projeto por ordem de venda", "Cada item de ordensVenda[] gera um ZA0 (Etapa 2, passo 2)",
+            "ok" if n_ov and n_ov == n_prj else ("alerta" if n_ov else "info"),
+            f"{n_ov} ordem(ns) de venda", f"{n_prj} projeto(s) na ZA0 com este contrato", "", "painel")
+        add("CARD2", "1 contrato por oportunidade · 1 planilha por projeto", "Etapa 2, passo 5 — CN9 única, uma CNA por ZA0",
+            "ok" if len(cn9s) == 1 and len(cnas) == n_prj else ("erro" if not cn9s else "alerta"),
+            f"1 contrato · {n_prj} planilha(s)", f"{len(cn9s)} contrato(s) na CN9 · {len(cnas)} planilha(s) na CNA", "", "contrato")
+
+    # C07 físico × virtual → SB1 PRJ, NS, itens da CNB
+    for ov, p in (zip(ordens, projetos) if (ordens and projetos and len(ordens) == len(projetos)) else []):
+        cod = p.get("ZA0_CODIGO", "")
+        tp = p.get("ZA0_TPPROD", "")
+        its = [i for i in itens if i.get("_PRJ") == cod]
+        auto = [i for i in its if (i.get("ZA1_AUTO") or "").upper() == "S"]
+        prj_cod = [i.get("_PRODUTO", "") for i in auto]
+        sb1 = [b for b in prjs if b.get("B1_COD") in prj_cod]
+        cnb_p = [b for b in cnbs if (b.get("CNB_ITEMCTA") or "").replace(" ", "") == cod.replace(" ", "")]
+        if tp == "1":   # físico
+            n_ok = bool(auto) and bool(sb1)
+            add("C07", f"Físico · projeto {cod}", "Ordem Físico → produto PRJ<seq><ano> criado no SB1 e incluído como item 'Gerado Aut.' (ZA1_AUTO = S)",
+                "ok" if n_ok else "erro", "1 produto PRJ no SB1 + 1 item ZA1_AUTO = S",
+                f"{len(auto)} item(ns) ZA1_AUTO · SB1: {', '.join(b.get('B1_COD','') for b in sb1) or 'nenhum'}",
+                "", "painel")
+            # C19 venda × locação
+            modal = p.get("ZA0_MODALI", "") or resumo.get("modalidade", "")
+            locacao = modal == "3" or _core_norm(modal).startswith("locacao")
+            prj_na_cnb = [b for b in cnb_p if (b.get("CNB_PRODUT") or "").startswith(CRM_PRJ)]
+            if locacao:
+                add("C19", f"Locação com físico · {cod}", "LOCAÇÃO: o físico NÃO vai ao contrato; o valor é diluído no item 'Locação NGC' (Cássio, 02/11). O as-built põe o PRJ na CNB → ajustar Etapa 2",
+                    "erro" if prj_na_cnb else "ok", "PRJ fora da CNB", f"{len(prj_na_cnb)} item(ns) PRJ na CNB deste projeto",
+                    "Evidência da divergência as-built × regra: registrar.", "contrato")
+            else:
+                add("C19", f"Venda de físico · {cod}", "VENDA: o PRJ compõe o contrato (1 item na CNB com o valor total da ordem) e é vendido após a medição",
+                    "ok" if len(prj_na_cnb) == 1 else ("alerta" if prj_na_cnb else "erro"),
+                    "1 item PRJ na CNB", f"{len(prj_na_cnb)} item(ns) PRJ · {len(cnb_p)} item(ns) do projeto na CNB", "", "contrato")
+            # valor do PRJ = Σ qtd × unitário da ordem
+            if sb1 and ov.get("valorTotal"):
+                prv = _num(sb1[0].get("B1_PRV1"))
+                add("VAL", f"Valor do PRJ · {cod}", "Preço do produto do projeto = Σ qtd × valor unitário da ordem de venda",
+                    "ok" if prv is not None and abs(prv - ov["valorTotal"]) < 0.01 else "alerta",
+                    f"R$ {ov['valorTotal']:,.2f}", f"B1_PRV1 = {prv if prv is not None else '—'}", "", "painel")
+        elif tp == "2":  # virtual
+            nsv = (p.get("ZA0_NUMSER") or "").strip()
+            add("C07", f"Virtual · projeto {cod}", "Ordem Virtual → NS automático V + 11 dígitos na inclusão; um item CNB por produto; não gera SB1",
+                "ok" if nsv.startswith("V") and len(nsv) == 12 and not auto else ("alerta" if nsv else "erro"),
+                "ZA0_NUMSER = Vnnnnnnnnnnn · sem item 'Gerado Aut.'",
+                f"NS: {nsv or 'vazio'} · {len(auto)} item(ns) ZA1_AUTO · {len(cnb_p)} item(ns) na CNB para {len([i for i in its if (i.get('ZA1_CRM') or '').upper()=='S'])} item(ns) CRM",
+                "", "painel")
+        # C18 valor zero só no projeto
+        zeros = [i for i in ov.get("itens", []) if (i.get("valorUnitario") or 0) == 0 and (i.get("valorTotal") or 0) == 0]
+        tem_valor = any(((i.get("valorUnitario") or 0) > 0 or (i.get("valorTotal") or 0) > 0) for i in ov.get("itens", []))
+        if zeros and tem_valor:
+            cods0 = {i["codigo"] for i in zeros}
+            na_cnb = [b for b in cnb_p if (b.get("CNB_PRODUT") or "") in cods0]
+            add("C18", f"Itens com valor zero · {cod}", "Item com valor ≠ 0 vai ao contrato e é faturável; valor zero fica só no projeto (Cássio, 02/11)",
+                "erro" if na_cnb else "ok", f"{len(zeros)} item(ns) zero só na ZA1",
+                f"{len(na_cnb)} item(ns) zero encontrados na CNB", "", "contrato")
+        # C06 plataforma projeto × planilha
+        cna_p = [a for a in cnas if (a.get("_PRJ") or "").replace(" ", "") == cod.replace(" ", "")]
+        if cna_p:
+            add("C06", f"Plataforma · {cod}", "plataforma da OV → ZA0_PLATAF e CNA_ZPLATA (imutável no projeto)",
+                "ok" if (cna_p[0].get("CNA_ZPLATA") or "") == (p.get("ZA0_PLATAF") or "") else "alerta",
+                f"OV: {ov.get('plataforma') or '—'}", f"ZA0_PLATAF {p.get('ZA0_PLATAF') or '—'} · CNA_ZPLATA {cna_p[0].get('CNA_ZPLATA') or '—'}", "", "contrato")
+        # C02 IT
+        if ov.get("instrucaoTecnica"):
+            add("C02", f"Instrução Técnica · {cod}", "instrucaoTecnica → ZA0_IT (projeto, não contrato; 4.000 caracteres)",
+                "ok" if (p.get("ZA0_IT") or "").strip() else "erro", f"{len(ov['instrucaoTecnica'])} caracteres no JSON",
+                f"ZA0_IT com {len((p.get('ZA0_IT') or '').strip())} caracteres", "", "painel")
+        # CTD
+        ctd = [c for c in ctds if (c.get("CTD_ITEM") or "").replace(" ", "") == cod.replace(" ", "")]
+        add("CTD", f"Item Contábil · {cod}", "Elo de tudo: CTD com o mesmo código do projeto (ZA0_CODIGO = CTD_ITEM = CNB_ITEMCTA)",
+            "ok" if ctd else "erro", "1 CTD", f"{len(ctd)} CTD · {len(cnb_p)} item(ns) CNB com ITEMCTA = projeto", "", "painel")
+
+    # Cabeçalho × contrato
+    if cn9 is not None and tem_json:
+        # C03 tipo de venda → CN9_TPCTO
+        tv = resumo.get("tipoVenda") or ""
+        add("C03", "Tipo de Venda → tipo de contrato", "tipoVenda com os códigos da CN1 (001 Locação … 005 Serviço, 06/11) → CN9_TPCTO",
+            "ok" if tv and (cn9.get("CN9_TPCTO") or "").lstrip("0") == tv.lstrip("0") else ("alerta" if tv else "info"),
+            tv or "—", f"CN9_TPCTO = {cn9.get('CN9_TPCTO') or '—'} ({CORE_LEGENDAS['CN9_TPCTO'].get(cn9.get('CN9_TPCTO') or '', '')})", "", "contrato")
+        # C04 modalidade
+        mo = resumo.get("modalidade") or ""
+        add("C04", "Modalidade", "modalidade 1–6 → ZA0_MODALI (todos os projetos) e CN9_ZMODAL",
+            "ok" if mo and (cn9.get("CN9_ZMODAL") or "") == mo and all((p.get("ZA0_MODALI") or "") == mo for p in projetos) else ("alerta" if mo else "info"),
+            f"{mo} {CORE_LEGENDAS['ZA0_MODALI'].get(mo, '')}".strip() or "—",
+            f"CN9_ZMODAL {cn9.get('CN9_ZMODAL') or '—'} · ZA0_MODALI {', '.join(sorted({p.get('ZA0_MODALI') or '—' for p in projetos}))}", "", "contrato")
+        # C05 unidade de negócio
+        un = resumo.get("unidadeNegocio") or ""
+        add("C05", "Unidade de Negócio", "unidadeNegocio NVC/NVD/GSD → CN9_ZUNNEG (sem duplicar campo, MIT044 §18)",
+            "ok" if un and CORE_LEGENDAS["CN9_ZUNNEG"].get(cn9.get("CN9_ZUNNEG") or "", "") == CORE_LEGENDAS["CN9_ZUNNEG"].get(un, un) else ("alerta" if un else "info"),
+            un or "—", f"CN9_ZUNNEG = {cn9.get('CN9_ZUNNEG') or '—'}", "", "contrato")
+        # C13 tabela de preço
+        tb = resumo.get("tabelaPreco") or ""
+        add("C13", "Tabela de Preço", "tabelaPreco (CRM usa a 08, 05/11) → CN9_ZTABPR",
+            "ok" if tb and (cn9.get("CN9_ZTABPR") or "").lstrip("0") == tb.lstrip("0") else ("alerta" if tb else "info"),
+            tb or "—", f"CN9_ZTABPR = {cn9.get('CN9_ZTABPR') or '—'}", "", "contrato")
+        # C12 condição → vigência
+        cp = resumo.get("condicaoPagamento") or ""
+        m = re.match(r"^C(\d{1,3})$", cp.upper())
+        meses_esp = int(m.group(1)) if m else 1
+        vig = _num(cn9.get("CN9_VIGE"))
+        add("C12", "Condição de pagamento → vigência", "'C'+meses define a vigência do contrato (C12 = 12 meses); fora do padrão = 1 mês",
+            "ok" if vig is not None and int(vig) == meses_esp else ("alerta" if cp else "info"),
+            f"{cp or '—'} → {meses_esp} mês(es)", f"CN9_VIGE = {vig if vig is not None else '—'} {cn9.get('CN9_UNVIGE') or ''} · {cn9.get('CN9_DTINIC') or ''} → {cn9.get('CN9_DTFIM') or ''}",
+            "Dia de vencimento das parcelas (20 ou 30) ainda sem regra.", "contrato")
+        # C01 memorial
+        mem_json = resumo.get("memorialCalculo") or ""
+        mem_cn9 = (cn9.get("CN9_ZMEMOR") or "").strip()
+        add("C01", "Memorial de Cálculo", "memorialCalculo (≤ 4.000) → CN9_ZMEMOR, aba Outros/Integração CRM; Contratos não altera (auditoria); não vai ao projeto",
+            ("ok" if mem_cn9 else "erro") if mem_json else ("alerta" if not mem_cn9 else "ok"),
+            f"{len(mem_json)} caracteres no JSON" if mem_json else "não veio no JSON (opcional na v3 — M3)",
+            f"CN9_ZMEMOR com {len(mem_cn9)} caracteres", "M1: acima de 4.000 → documento/anexo/link.", "contrato")
+        # C16 vendedor / representante
+        vd = resumo.get("vendedor") or ""
+        add("C16", "Vendedor e representante", "consultorVendedor.codigo (SA3) → ZA0_VENDED e CN9_ZCODVD; representante → ZA0_REPRES / CN9_ZREPRE (de-para P16, campo-mestre P15)",
+            "ok" if vd and (cn9.get("CN9_ZCODVD") or "") == vd else ("alerta" if vd else "info"),
+            f"vendedor {vd or '—'} · representante {resumo.get('representante') or '—'}",
+            f"CN9_ZCODVD {cn9.get('CN9_ZCODVD') or '—'} ({cn9.get('CN9_ZNOMVD') or ''}) · CN9_ZREPRE {cn9.get('CN9_ZREPRE') or '—'}",
+            "Em 30/10 o CRM mandou só o ID do usuário, não o código SA3.", "contrato")
+        # C17 participação
+        parts = [(_num(cn9.get(f"CN9_XPART{i}")) or 0) for i in (1, 2, 3)]
+        if any(parts) or any((cn9.get(f"CN9_XEXEC{i}") or "").strip() for i in (1, 2, 3)):
+            add("C17", "Participação comercial", "CN9_XEXEC1–3 / CN9_XPART1–3; percentuais independentes (06/11), Cléo valida antes da assinatura",
+                "info", "percentuais informados pelo CRM/Contratos", " · ".join(f"{cn9.get(f'CN9_XEXEC{i}') or '—'}: {parts[i-1]:g}%" for i in (1, 2, 3)), "", "contrato")
+        # C10/C11 garantia e monitoramento
+        add("C10", "Garantia e monitoramento", "garantia → ZA0_GARANT + CN9_ZGARAA; monitoramento → CN9_ZMONIT",
+            "ok" if (cn9.get("CN9_ZGARAA") or "").strip() and (cn9.get("CN9_ZMONIT") or "").strip() else "alerta",
+            f"garantia '{resumo.get('garantia') or '—'}' · monitoramento '{resumo.get('monitoramento') or '—'}'",
+            f"CN9_ZGARAA '{cn9.get('CN9_ZGARAA') or '—'}' · CN9_ZMONIT '{cn9.get('CN9_ZMONIT') or '—'}'", "", "contrato")
+        # Valor total
+        tot_cnb = sum((_num(b.get("CNB_VLTOT")) or 0) for b in cnbs)
+        tot_ov = sum(o.get("valorTotal") or 0 for o in ordens)
+        if tot_ov or tot_cnb:
+            add("VALC", "Valor do contrato", "Σ itens das ordens de venda (≠ 0) = Σ CNB_VLTOT; CN9_VLTOT acompanha",
+                "ok" if abs(tot_ov - tot_cnb) < 0.01 else "alerta",
+                f"R$ {tot_ov:,.2f}", f"CNB: R$ {tot_cnb:,.2f} · CN9_VLTOT: {cn9.get('CN9_VLTOT') or '—'}",
+                "Em LOCAÇÃO o físico é diluído no item Locação NGC — diferença esperada.", "contrato")
+
+    # C14 três clientes
+    if tem_json and projetos:
+        p = projetos[0]
+        usu = {(q.get("ZA0_USUCLI") or "").strip() for q in projetos} - {""}
+        add("C14", "Três clientes", "cliente principal (cabeçalho) → ZA0_CODCLI/LOJCLI; cliente usuário/entrega (OV) → ZA0_USUCLI/USULOJ/USURAZ; faturamento = contrato",
+            "ok" if (p.get("ZA0_CODCLI") or "") == (resumo.get("cliente") or p.get("ZA0_CODCLI")) else "alerta",
+            f"principal {resumo.get('cliente') or '—'}/{resumo.get('clienteLoja') or '—'} · usuário {', '.join(o.get('clienteUsuario') or '—' for o in ordens)}",
+            f"ZA0_CODCLI {p.get('ZA0_CODCLI') or '—'}/{p.get('ZA0_LOJCLI') or '—'} {p.get('ZA0_RAZCLI') or ''} · usuário(s): {', '.join(sorted(usu)) or 'nenhum'}",
+            "P17: cliente usuário veio sem loja em 30/10.", "painel")
+
+    # Retorno ao CRM
+    st = (za3 or {}).get("ZA3_STIPA") or ""
+    add("P11", "Retorno ao CRM (ZA3_STIPA)", "A especificação cria o status de retorno, mas não define o que volta ao CRM nem quando (P11). Hoje o resultado chega por e-mail (MV_ZMAILPP)",
+        "erro" if st == "E" else ("ok" if st == "S" else "info"), "S quando implementado",
+        f"ZA3_STIPA = {st or '—'} ({CORE_LEGENDAS['ZA3_STIPA'].get(st, 'não implementado')})", "", "retorno")
+    return C
+
+
+def _core_estagios(za3, resumo, ordens, projetos, itens, cn9s, cnas, cnbs):
+    """Nível e resumo de cada estágio do fluxo (o que a tela desenha como
+    card). O detalhe (campos) vai à parte."""
+    s1, s2, sti = (za3 or {}).get("ZA3_STG1") or "", (za3 or {}).get("ZA3_STG2") or "", (za3 or {}).get("ZA3_STIPA") or ""
+    est = {e["id"]: {**e, "nivel": "na", "resumo": [], "kpis": []} for e in CORE_ESTAGIOS}
+
+    crm = est["crm"]
+    if resumo:
+        crm["nivel"] = "ok"
+        crm["kpis"] = [("Proposta", resumo.get("numeroProposta") or "—"), ("Ordens de venda", len(ordens)),
+                       ("Itens", sum(len(o["itens"]) for o in ordens)),
+                       ("Valor", f"R$ {sum(o['valorTotal'] or 0 for o in ordens):,.2f}")]
+        crm["resumo"] = [f"Tipo de venda {resumo.get('tipoVenda') or '—'} · modalidade {resumo.get('modalidade') or '—'} · UN {resumo.get('unidadeNegocio') or '—'}",
+                         f"Cliente {resumo.get('cliente') or '—'}/{resumo.get('clienteLoja') or '—'} {resumo.get('clienteNome') or ''}".strip()]
+    elif za3:
+        crm["nivel"] = "alerta"
+        crm["resumo"] = ["JSON da proposta não pôde ser lido (memo vazio ou inválido)."]
+
+    e1 = est["etapa1"]
+    if za3:
+        e1["nivel"] = {"L": "ok", "E": "erro", "R": "alerta", "P": "alerta"}.get(s1, "na")
+        e1["kpis"] = [("Etapa 1", f"{s1} · {CORE_LEGENDAS['ZA3_STG1'].get(s1, '—')}"),
+                      ("messageId", (za3.get("ZA3_MSGID") or "—")[:40]),
+                      ("Recebido em", f"{_core_data(za3.get('ZA3_DTINC'))} {za3.get('ZA3_HRINC') or ''}".strip())]
+        if s1 == "E":
+            e1["resumo"] = [(za3.get("ZA3_ERRO") or "erro sem detalhe")[:600]]
+
+    e2 = est["etapa2"]
+    if za3:
+        e2["nivel"] = {"S": "ok", "E": "erro", "A": "alerta", "P": "alerta", "N": "na"}.get(s2, "na")
+        e2["kpis"] = [("Etapa 2", f"{s2} · {CORE_LEGENDAS['ZA3_STG2'].get(s2, '—')}"),
+                      ("Contrato", za3.get("ZA3_CONTRA") or "—"),
+                      ("Concluído em", f"{_core_data(za3.get('ZA3_DTFIM'))} {za3.get('ZA3_HRFIM') or ''}".strip() or "—")]
+        if s2 == "E":
+            e2["resumo"] = [(za3.get("ZA3_ERRO") or "erro sem detalhe")[:600]]
+        elif s2 == "A":
+            e2["resumo"] = ["Aguardando o Sincronizar (U_CRMPROJT sem agendamento até fechar os de-paras)."]
+        if za3.get("ZA3_PROJET"):
+            e2["resumo"].append(f"Projetos gravados na ZA3: {za3['ZA3_PROJET'][:200]}")
+
+    pa = est["painel"]
+    if projetos:
+        pa["nivel"] = "ok"
+        fis = sum(1 for p in projetos if p.get("ZA0_TPPROD") == "1")
+        pa["kpis"] = [("Projetos", len(projetos)), ("Físicos / virtuais", f"{fis} / {len(projetos) - fis}"),
+                      ("Itens ZA1", len(itens)), ("Itens CRM", sum(1 for i in itens if (i.get("ZA1_CRM") or "").upper() == "S"))]
+        pa["resumo"] = [f"{p.get('ZA0_CODIGO')} · {p.get('ZA0_NOME') or ''} · {CORE_LEGENDAS['ZA0_STATUS'].get(p.get('ZA0_STATUS') or '', p.get('ZA0_STATUS') or '')}" for p in projetos[:6]]
+    elif s2 == "S":
+        pa["nivel"] = "erro"
+        pa["resumo"] = ["Etapa 2 com sucesso, mas nenhum ZA0 com este contrato."]
+
+    co = est["contrato"]
+    if cn9s:
+        c = cn9s[0]
+        co["nivel"] = "ok" if len(cn9s) == 1 else "alerta"
+        co["kpis"] = [("Contrato", f"{c.get('CN9_NUMERO')} rev. {c.get('CN9_REVISA') or '—'}"),
+                      ("Situação", f"{c.get('CN9_SITUAC')} · {CORE_LEGENDAS['CN9_SITUAC'].get(c.get('CN9_SITUAC') or '', '')}"),
+                      ("Planilhas / itens", f"{len(cnas)} / {len(cnbs)}"),
+                      ("Valor", f"R$ {sum((_num(b.get('CNB_VLTOT')) or 0) for b in cnbs):,.2f}")]
+        co["resumo"] = [f"Tipo {c.get('CN9_TPCTO') or '—'} · vigência {c.get('CN9_VIGE') or '—'} {c.get('CN9_UNVIGE') or ''} · {_core_data(c.get('CN9_DTINIC'))} → {_core_data(c.get('CN9_DTFIM'))}"]
+    elif s2 == "S":
+        co["nivel"] = "erro"
+        co["resumo"] = ["Etapa 2 com sucesso, mas o contrato da ZA3 não está na CN9."]
+
+    re_ = est["retorno"]
+    re_["nivel"] = {"S": "ok", "E": "erro", "A": "alerta", "P": "alerta"}.get(sti, "na")
+    re_["kpis"] = [("STIPA", f"{sti or '—'} · {CORE_LEGENDAS['ZA3_STIPA'].get(sti, 'não implementado (P11)')}")]
+    return [est[e["id"]] for e in CORE_ESTAGIOS]
+
+
+def _core_data(v):
+    v = (v or "").strip()
+    if re.fullmatch(r"\d{8}", v):
+        return f"{v[6:8]}/{v[4:6]}/{v[0:4]}"
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}.*", v):
+        return f"{v[8:10]}/{v[5:7]}/{v[0:4]}"
+    return v
+
+
+def _core_gate(customer):
+    """Leitura da trilha é operação na base (usa licença no REST): só equipe
+    TOTVS, como as outras coletas. A aba em si é liberável ao cliente para
+    ver o que foi exportado/publicado."""
+    if (r := require_interno()):
+        return r
+    return deny_aba(customer, "core")
+
+
+def _core_cfg(customer):
+    amb = _amb_path(request.args.get("ambiente") or "teste")
+    if not amb:
+        return None, None, _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
+    cfg, erro = _mov_cfg_valida(customer, amb)
+    if erro:
+        return None, amb, _err(409, erro)
+    if not (cfg.get("sufixo") or "").strip():
+        return None, amb, _err(409, "Informe o sufixo das tabelas no ⚙ Ambiente (ex.: 010).")
+    return cfg, amb, None
+
+
+@app.get("/api/core/<customer>/propostas")
+def api_core_propostas(customer):
+    """Últimas mensagens da ZA3 (uma linha por messageId), com o começo do
+    JSON lido para mostrar o nº da proposta e o cliente, mais os projetos e o
+    contrato já encontrados.
+
+        GET /api/core/000348D0/propostas?ambiente=teste&limite=60
+    """
+    if (d := _core_gate(customer)):
+        return d
+    cfg, amb, erro = _core_cfg(customer)
+    if erro:
+        return erro
+    ini = time.time()
+    dic, origem = _core_dicionario(cfg, customer, amb)
+    limite = max(10, min(int(request.args.get("limite") or CORE_LISTA_LIMITE), 500))
+    za3, erro3, var = _core_roda(cfg, customer, amb, dic, "ZA3", None,
+                                 "ZA3_DTINC DESC, ZA3_HRINC DESC, R_E_C_N_O_ DESC",
+                                 limite=limite, chunks=CORE_MEMO_CHUNKS_LISTA)
+    if erro3 and not za3:
+        _log_coleta(customer, amb, "core_lista", ini, False, erro=erro3)
+        return _err(502, f"Não foi possível ler a ZA3: {erro3}")
+    za3 = za3[:limite]
+    contras = _core_lista_in([z.get("ZA3_CONTRA") for z in za3])
+    projetos, cn9s = [], []
+    if contras:
+        projetos, _, _ = _core_roda(cfg, customer, amb, dic, "ZA0", f"RTRIM(ZA0_CONTRA) IN ({contras})",
+                                    "ZA0_CODIGO", chunks=1)
+        cn9s, _, _ = _core_roda(cfg, customer, amb, dic, "CN9", f"RTRIM(CN9_NUMERO) IN ({contras})",
+                                "CN9_NUMERO, CN9_REVISA", chunks=1)
+    por_ct_p, por_ct_c = {}, {}
+    for p in projetos:
+        por_ct_p.setdefault((p.get("ZA0_CONTRA") or "").strip(), []).append(p)
+    for c in cn9s:
+        por_ct_c.setdefault((c.get("CN9_NUMERO") or "").strip(), []).append(c)
+    lista = []
+    for z in za3:
+        js = _core_json(z.get("ZA3_JSONFI") or z.get("ZA3_OPORT") or "")
+        res = _core_proposta_resumo(js) if js else {}
+        bruto = (z.get("ZA3_JSONFI") or z.get("ZA3_OPORT") or "")
+        if not res.get("numeroProposta"):
+            m = re.search(r'"numero(?:Da)?Proposta"\s*:\s*"?([^",}]*)', bruto, re.I)
+            if m:
+                res["numeroProposta"] = m.group(1).strip()
+        ct = (z.get("ZA3_CONTRA") or "").strip()
+        prjs = por_ct_p.get(ct, []) if ct else []
+        lista.append({
+            "msgid": z.get("ZA3_MSGID"), "idcrm": z.get("ZA3_IDCRM"), "etapa": z.get("ZA3_ETAPA"),
+            "stg1": z.get("ZA3_STG1"), "stg2": z.get("ZA3_STG2"), "stipa": z.get("ZA3_STIPA"),
+            "dtinc": z.get("ZA3_DTINC"), "hrinc": z.get("ZA3_HRINC"),
+            "dtfim": z.get("ZA3_DTFIM"), "hrfim": z.get("ZA3_HRFIM"),
+            "contrato": ct, "recno": z.get("RECNO"),
+            "proposta": res.get("numeroProposta") or (prjs[0].get("ZA0_PROPOS") if prjs else "") or "",
+            "cliente": res.get("clienteNome") or res.get("cliente") or (prjs[0].get("ZA0_RAZCLI") if prjs else "") or "",
+            "tipo_venda": res.get("tipoVenda") or "", "modalidade": res.get("modalidade") or "",
+            "ordens": len(res.get("ordensVenda") or []) if res else None,
+            "projetos": len(prjs), "contrato_cn9": bool(por_ct_c.get(ct)) if ct else False,
+            "erro": (z.get("ZA3_ERRO") or "")[:300],
+        })
+    _log_coleta(customer, amb, "core_lista", ini, True, linhas=len(lista))
+    return _json({"ok": True, "ambiente": amb, "customer": customer, "lido_em": datetime.now(TZ_SP).isoformat(),
+                  "dicionario": origem, "memo_variante": var, "banco": cfg.get("banco"),
+                  "propostas": lista, "estagios": CORE_ESTAGIOS, "legendas": CORE_LEGENDAS,
+                  "ms": int((time.time() - ini) * 1000)})
+
+
+@app.get("/api/core/<customer>/trilha")
+def api_core_trilha(customer):
+    """A trilha completa de UMA mensagem da ZA3: JSON da proposta, ZA3, ZA0/ZA1
+    (+ SB1 PRJ, CTD, ZA4), CN9/CNA/CNB, estágios e conceitos.
+
+        GET /api/core/000348D0/trilha?ambiente=teste&msgid=…   (ou &idcrm=… / &recno=…)
+    """
+    if (d := _core_gate(customer)):
+        return d
+    cfg, amb, erro = _core_cfg(customer)
+    if erro:
+        return erro
+    msgid = (request.args.get("msgid") or "").strip()
+    idcrm = (request.args.get("idcrm") or "").strip()
+    recno = (request.args.get("recno") or "").strip()
+    if not (msgid or idcrm or recno):
+        return _err(400, "Informe msgid, idcrm ou recno.")
+    ini = time.time()
+    dic, origem = _core_dicionario(cfg, customer, amb)
+    esc = lambda v: v.replace("'", "''")  # noqa: E731
+    if recno and recno.isdigit():
+        where = f"R_E_C_N_O_ = {int(recno)}"
+    elif msgid:
+        where = f"RTRIM(ZA3_MSGID) = '{esc(msgid)}'"
+    else:
+        where = f"RTRIM(ZA3_IDCRM) = '{esc(idcrm)}'"
+    za3s, erro3, var = _core_roda(cfg, customer, amb, dic, "ZA3", where,
+                                  "ZA3_DTINC DESC, ZA3_HRINC DESC, R_E_C_N_O_ DESC",
+                                  chunks=CORE_MEMO_CHUNKS_TRILHA)
+    if erro3 and not za3s:
+        return _err(502, f"Não foi possível ler a ZA3: {erro3}")
+    if not za3s:
+        return _err(404, "Mensagem não encontrada na ZA3 desta base.")
+    za3 = za3s[0]
+    # Outras mensagens da mesma oportunidade (reprocessamentos)
+    irmas = []
+    if za3.get("ZA3_IDCRM"):
+        irmas, _, _ = _core_roda(cfg, customer, amb, dic, "ZA3",
+                                 f"RTRIM(ZA3_IDCRM) = '{esc(za3['ZA3_IDCRM'].strip())}'",
+                                 "ZA3_DTINC DESC, ZA3_HRINC DESC", chunks=0)
+    js = _core_json(za3.get("ZA3_JSONFI") or "") or _core_json(za3.get("ZA3_OPORT") or "")
+    # Se o consolidado não tiver as ordens, junta os três blocos
+    if js is not None and not _core_busca(js, "ordensVenda", "ordensDeVenda", "salesOrders", "ordemVenda", lista=True):
+        extra = {}
+        for campo, chave in (("ZA3_OPORT", "oportunidade"), ("ZA3_ITOPOR", "itens"), ("ZA3_ORDVEN", "ordensVenda")):
+            j = _core_json(za3.get(campo) or "")
+            if j is not None:
+                extra[chave] = j
+        if extra.get("ordensVenda") is not None:
+            js = {"consolidado": js, **extra}
+    resumo = _core_proposta_resumo(js) if js is not None else {}
+    ordens = _core_ordens(js) if js is not None else []
+
+    ct = (za3.get("ZA3_CONTRA") or "").strip()
+    projetos, itens, prjs, ctds, cn9s, cnas, cnbs, ns, avisos = [], [], [], [], [], [], [], [], []
+    k_za0, k_za1, k_za1p = _core_chave(dic, "ZA0_COD"), _core_chave(dic, "ZA1_COD"), _core_chave(dic, "ZA1_PROD")
+    k_za4, k_cna, k_cnb_cta, k_ctd = _core_chave(dic, "ZA4_PRJ"), _core_chave(dic, "CNA_PRJ"), _core_chave(dic, "CNB_CTA"), _core_chave(dic, "CTD_ITEM")
+    if ct:
+        ctq = esc(ct)
+        projetos, e, _ = _core_roda(cfg, customer, amb, dic, "ZA0", f"RTRIM(ZA0_CONTRA) = '{ctq}'", k_za0, chunks=3)
+        if e:
+            avisos.append(f"ZA0: {e}")
+        cn9s, e, _ = _core_roda(cfg, customer, amb, dic, "CN9", f"RTRIM(CN9_NUMERO) = '{ctq}'", "CN9_REVISA DESC", chunks=3)
+        if e:
+            avisos.append(f"CN9: {e}")
+        cnas, e, _ = _core_roda(cfg, customer, amb, dic, "CNA", f"RTRIM(CNA_CONTRA) = '{ctq}'", "CNA_REVISA DESC, CNA_NUMERO", chunks=1)
+        if e:
+            avisos.append(f"CNA: {e}")
+        cnbs, e, _ = _core_roda(cfg, customer, amb, dic, "CNB", f"RTRIM(CNB_CONTRA) = '{ctq}'", "CNB_REVISA DESC, CNB_NUMERO, CNB_ITEM", chunks=1)
+        if e:
+            avisos.append(f"CNB: {e}")
+        # Só a revisão vigente (maior) do contrato
+        if cn9s:
+            rev = cn9s[0].get("CN9_REVISA")
+            cnas = [a for a in cnas if a.get("CNA_REVISA") == rev] or cnas
+            cnbs = [b for b in cnbs if b.get("CNB_REVISA") == rev] or cnbs
+        for a in cnas:
+            a["_PRJ"] = a.get(k_cna) or ""
+    cods = _core_lista_in([p.get(k_za0) for p in projetos])
+    if cods:
+        itens, e, _ = _core_roda(cfg, customer, amb, dic, "ZA1", f"RTRIM({k_za1}) IN ({cods})", f"{k_za1}, ZA1_ITEM", chunks=1)
+        if e:
+            avisos.append(f"ZA1: {e}")
+        for i in itens:
+            i["_PRJ"] = i.get(k_za1) or ""
+            i["_PRODUTO"] = i.get(k_za1p) or ""
+        cods_sem = _core_lista_in([(p.get(k_za0) or "").replace(" ", "") for p in projetos]) or cods
+        ctds, e, _ = _core_roda(cfg, customer, amb, dic, "CTD",
+                                f"RTRIM({k_ctd}) IN ({cods}) OR RTRIM({k_ctd}) IN ({cods_sem})", k_ctd, chunks=1)
+        if e:
+            avisos.append(f"CTD: {e}")
+        ns, e, _ = _core_roda(cfg, customer, amb, dic, "ZA4", f"RTRIM({k_za4}) IN ({cods})", f"{k_za4}, ZA4_SEQ", chunks=1)
+        if e and "ZA4" in dic:
+            avisos.append(f"ZA4: {e}")
+        prod_prj = _core_lista_in([i.get("_PRODUTO") for i in itens if (i.get("_PRODUTO") or "").startswith(CRM_PRJ)]
+                                  + [b.get("CNB_PRODUT") for b in cnbs if (b.get("CNB_PRODUT") or "").startswith(CRM_PRJ)])
+        if prod_prj:
+            prjs, e, _ = _core_roda(cfg, customer, amb, dic, "SB1", f"RTRIM(B1_COD) IN ({prod_prj})", "B1_COD", chunks=1)
+            if e:
+                avisos.append(f"SB1: {e}")
+    for p in projetos:
+        p["_COD"] = p.get(k_za0) or ""
+    conceitos = _core_conceitos(resumo, ordens, za3, projetos, itens, prjs, ctds, cn9s, cnas, cnbs, ns)
+    estagios = _core_estagios(za3, resumo, ordens, projetos, itens, cn9s, cnas, cnbs)
+    titulos = {t: {f["campo"]: f["titulo"] for f in dic.get(t, [])} for t in CORE_TABELAS}
+    _log_coleta(customer, amb, "core_trilha", ini, True, linhas=len(projetos) + len(cnbs) + 1)
+    return _json({"ok": True, "ambiente": amb, "lido_em": datetime.now(TZ_SP).isoformat(),
+                  "dicionario": origem, "memo_variante": var, "avisos": avisos,
+                  "za3": za3, "irmas": [{k: v for k, v in z.items() if not k.startswith("ZA3_JSON")} for z in irmas],
+                  "json": js, "resumo": resumo, "ordens": ordens,
+                  "projetos": projetos, "itens": itens, "sb1": prjs, "ctd": ctds, "ns": ns,
+                  "cn9": cn9s, "cna": cnas, "cnb": cnbs,
+                  "estagios": estagios, "conceitos": conceitos, "titulos": titulos,
+                  "legendas": CORE_LEGENDAS, "ms": int((time.time() - ini) * 1000)})
 
 
 # ── estáticos do web/ (assets) ──────────────────────────────────────────────

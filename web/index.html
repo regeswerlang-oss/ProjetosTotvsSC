@@ -451,6 +451,75 @@
   .app-wrap { max-width: 1760px; margin-left: auto; margin-right: auto; }
   html[data-largura="normal"] .app-wrap { max-width: 80rem; }
   html[data-largura="cheia"] .app-wrap { max-width: none; }
+
+  /* ── Protótipo Core ─────────────────────────────────────────────────────── */
+  .core-grid { display:grid; grid-template-columns: 300px minmax(0,1fr); gap:14px; align-items:start; }
+  @media (max-width: 1100px) { .core-grid { grid-template-columns: 1fr; } }
+  .core-fila { position: sticky; top: 86px; max-height: calc(100vh - 110px); display:flex; flex-direction:column; }
+  .core-lista { overflow-y:auto; display:flex; flex-direction:column; gap:6px; padding-right:2px; }
+  .core-kpis { display:grid; grid-template-columns: repeat(4,1fr); gap:6px; margin-bottom:8px; }
+  .core-kpi { border:1px solid #e3eaf0; border-radius:10px; padding:6px 4px; text-align:center; background:#fff; }
+  .core-kpi b { display:block; font-size:18px; line-height:1.1; }
+  .core-kpi span { font-size:10px; color:#64748b; }
+  .core-kpi.core-ok b { color:#047857; } .core-kpi.core-alerta b { color:#b45309; } .core-kpi.core-erro b { color:#be123c; }
+  .core-item { text-align:left; width:100%; border:1px solid #e3eaf0; border-left-width:4px; border-radius:10px; padding:7px 9px; background:#fff; transition: transform .12s, box-shadow .12s; }
+  .core-item:hover { transform: translateX(2px); box-shadow: 0 4px 14px -8px rgba(0,34,51,.35); }
+  .core-item.is-sel { background:#eef9ff; border-color:#38bdf8; box-shadow: 0 0 0 2px rgba(56,189,248,.25); }
+  .core-item.core-ok { border-left-color:#10b981; } .core-item.core-alerta { border-left-color:#f59e0b; } .core-item.core-erro { border-left-color:#e11d48; }
+  .core-dot { display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px; border-radius:99px; font-size:9px; font-weight:800; color:#fff; background:#94a3b8; }
+  .core-dot.core-ok { background:#10b981; } .core-dot.core-alerta { background:#f59e0b; } .core-dot.core-erro { background:#e11d48; } .core-dot.core-na { background:#cbd5e1; color:#475569; }
+  .core-badge { display:inline-block; padding:2px 8px; border-radius:99px; font-size:10px; font-weight:700; letter-spacing:.02em; white-space:nowrap; background:#e2e8f0; color:#475569; }
+  .core-badge.core-ok { background:#d1fae5; color:#065f46; } .core-badge.core-alerta { background:#fef3c7; color:#92400e; }
+  .core-badge.core-erro { background:#ffe4e6; color:#9f1239; } .core-badge.core-info { background:#e0f2fe; color:#075985; }
+  .core-vazio { border:1px dashed #cbd5e1; border-radius:14px; padding:40px 24px; text-align:center; background:#fff; }
+  .core-cab { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; background:#fff; border:1px solid #e3eaf0; border-radius:14px; padding:12px 16px; margin-bottom:12px; border-left:4px solid #3de3ff; }
+  .core-fluxo { display:flex; align-items:stretch; gap:4px; overflow-x:auto; padding:4px 2px 8px; }
+  .core-seta { align-self:center; font-size:26px; color:#cbd5e1; line-height:1; padding:0 2px; }
+  .core-seta.core-ok { color:#10b981; } .core-seta.core-erro { color:#e11d48; } .core-seta.core-alerta { color:#f59e0b; }
+  .core-card { flex:1 1 0; min-width:190px; text-align:left; background:#fff; border:1px solid #e3eaf0; border-top:4px solid #cbd5e1; border-radius:14px; padding:10px 12px; display:flex; flex-direction:column; gap:6px; transition: transform .14s, box-shadow .14s; cursor:pointer; }
+  .core-card:hover { transform: translateY(-2px); box-shadow: 0 10px 24px -14px rgba(0,34,51,.45); }
+  .core-card.is-aberto { box-shadow: 0 0 0 2px rgba(56,189,248,.35), 0 10px 24px -14px rgba(0,34,51,.45); }
+  .core-card.core-ok { border-top-color:#10b981; } .core-card.core-alerta { border-top-color:#f59e0b; } .core-card.core-erro { border-top-color:#e11d48; background:#fff7f8; } .core-card.core-na { opacity:.85; }
+  .core-card-kpis { display:grid; grid-template-columns: 1fr 1fr; gap:4px 10px; }
+  .core-card-kpis div { display:flex; flex-direction:column; min-width:0; }
+  .core-card-kpis span { font-size:10px; color:#64748b; } .core-card-kpis b { font-size:12px; color:#0f172a; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .core-card-resumo { font-size:11px; color:#475569; border-top:1px dashed #e2e8f0; padding-top:4px; }
+  .core-card-toque { font-size:10px; color:#0284c7; margin-top:auto; text-align:right; }
+  .core-detalhe { background:#fff; border:1px solid #e3eaf0; border-radius:14px; padding:14px 16px; margin:4px 0 14px; border-left:4px solid #cbd5e1; animation: gp-fade .25s ease; }
+  .core-detalhe.core-ok { border-left-color:#10b981; } .core-detalhe.core-alerta { border-left-color:#f59e0b; } .core-detalhe.core-erro { border-left-color:#e11d48; }
+  .core-detalhe h4 { font-size:12px; font-weight:700; color:#0f172a; text-transform:uppercase; letter-spacing:.04em; margin:0 0 6px; }
+  .core-campos { display:grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap:6px 12px; }
+  .core-campo { border-bottom:1px dotted #e2e8f0; padding:3px 0; min-width:0; }
+  .core-campo-rot { font-size:10px; color:#64748b; } .core-campo-rot code { font-size:9px; color:#94a3b8; }
+  .core-campo-val { font-size:12px; color:#0f172a; word-break:break-word; }
+  .core-memo { margin-top:8px; font-size:12px; } .core-memo summary { cursor:pointer; color:#0369a1; }
+  .core-memo pre, .core-pre { background:#0b1f33; color:#d7f3ff; border-radius:10px; padding:10px 12px; font-size:11px; line-height:1.4; overflow:auto; max-height:420px; white-space:pre-wrap; word-break:break-word; }
+  .core-pre-erro { background:#4c0519; color:#ffe4e6; }
+  .core-ov { border:1px solid #e3eaf0; border-radius:10px; padding:8px 10px; margin-top:6px; background:#fafcfe; }
+  .core-ov summary { cursor:pointer; font-size:12px; color:#0f172a; }
+  .core-tab { width:100%; border-collapse:collapse; font-size:11px; }
+  .core-tab th { text-align:left; font-weight:600; color:#475569; padding:4px 6px; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
+  .core-tab td { padding:3px 6px; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+  .core-tab tr.core-zero td { color:#92400e; background:#fffbeb; }
+  .core-conc-cab { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:6px 0 8px; }
+  .core-conc-cab h3 { font-size:15px; font-weight:700; color:#0f172a; }
+  .core-chip { font-size:11px; padding:3px 10px; border-radius:99px; border:1px solid #cbd5e1; background:#fff; color:#475569; }
+  .core-chip.is-on { background:#0b1f33; color:#fff; border-color:#0b1f33; }
+  .core-conc-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap:10px; }
+  .core-conc { background:#fff; border:1px solid #e3eaf0; border-left:4px solid #cbd5e1; border-radius:12px; padding:10px 12px; cursor:pointer; transition: transform .12s, box-shadow .12s; }
+  .core-conc:hover { transform: translateY(-1px); box-shadow: 0 8px 20px -14px rgba(0,34,51,.45); }
+  .core-conc.is-aberto { box-shadow: 0 0 0 2px rgba(56,189,248,.3); }
+  .core-conc.core-ok { border-left-color:#10b981; } .core-conc.core-alerta { border-left-color:#f59e0b; } .core-conc.core-erro { border-left-color:#e11d48; background:#fff7f8; } .core-conc.core-info { border-left-color:#38bdf8; }
+  .core-conc-cod { font-family: ui-monospace, monospace; font-size:10px; font-weight:800; background:#0b1f33; color:#fff; border-radius:6px; padding:2px 6px; }
+  .core-conc-eo { display:grid; grid-template-columns: 1fr 1fr; gap:8px; margin-top:6px; }
+  .core-conc-eo div { display:flex; flex-direction:column; min-width:0; } .core-conc-eo span { font-size:10px; color:#64748b; } .core-conc-eo b { font-size:11px; color:#0f172a; font-weight:600; word-break:break-word; }
+  .core-conc-mais { font-size:12px; color:#334155; border-top:1px dashed #e2e8f0; margin-top:8px; padding-top:8px; }
+  .core-btn { font-size:11px; padding:4px 10px; border-radius:8px; background:#0b1f33; color:#fff; }
+  .core-btn:hover { background:#153a5b; }
+  /* cores explícitas: a aba não depende das utilities do Tailwind para ser legível */
+  .core-card, .core-conc, .core-cab, .core-detalhe, .core-item, .core-vazio { color:#0f172a; }
+  .core-tab td { color:#1e293b; } .core-tab code, .core-campo-val code { color:#0b1f33; }
+  .core-conc-cab h3, .core-detalhe h4 { color:#0f172a; }
 </style>
 <script>
   // Antes do primeiro desenho: sem "pulo" de largura ao carregar.
@@ -736,6 +805,7 @@
             <button data-tab="integracoes" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Integrações</button>
             <button data-tab="tributos" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Configurador de Tributos (FISA170) — Produção × Teste">Tributos</button>
             <button data-tab="prototipo" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Protótipo</button>
+            <button data-tab="core"     class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700" title="Trilha ao vivo da proposta CRM → iPaaS → ZA3 → Painel de Projetos → Contratos">Protótipo Core</button>
             <button data-tab="transicao" class="tab-btn px-3 py-2 text-sm border-b-2 border-transparent text-slate-500 hover:text-slate-700">Transição</button>
           </div>
         </div>
@@ -1168,6 +1238,25 @@
           </div>
           <div id="pro-ciclos" class="mb-4 flex items-center gap-2 flex-wrap"></div>
           <div id="pro-conteudo"></div>
+        </div>
+
+        <!-- Aba Protótipo Core (09/11/2026) — trilha ao vivo da proposta do CRM
+             pela integração: ZA3 (Etapa 1/2) → ZA0/ZA1/SB1/CTD → CN9/CNA/CNB,
+             lida pela REST da base, com os conceitos C01–C25 conferidos.
+             Spec 2026-11-09-aba-prototipo-core. Leitura só da equipe TOTVS. -->
+        <div id="tab-core" class="p-5 hidden">
+          <div class="mb-3 flex items-center gap-3 flex-wrap text-sm">
+            <span class="text-xs text-slate-500">Cliente</span>
+            <span id="core-cliente-nome" class="font-medium"></span>
+            <select id="core-ambiente-sel" data-interno class="px-3 py-1.5 border border-slate-300 rounded-md bg-white" title="Base lida pela REST">
+              <option value="producao">Base Produção</option>
+              <option value="teste">Base de Testes</option>
+            </select>
+            <button id="core-reload" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50" title="Relê a fila da ZA3 e a trilha aberta">⚡ Atualizar agora</button>
+            <label data-interno class="text-xs text-slate-600 flex items-center gap-1"><input type="checkbox" id="core-auto"> atualizar a cada 30 s</label>
+            <span class="ml-auto text-[11px] text-slate-400">Proposta no CRM → iPaaS/Etapa 1 → Etapa 2 → Painel de Projetos → Contratos → Retorno</span>
+          </div>
+          <div id="core-conteudo"></div>
         </div>
 
         <!-- Aba Transição — painel de status do cliente do projeto aberto -->
@@ -2840,7 +2929,7 @@ document.addEventListener('click', e => {
 // ============================================================================
 //  TABS DO PROJETO (Resumo | Cronograma | Por Módulo | Por Etapa)
 // ============================================================================
-const TABS = ['resumo', 'crono', 'plano', 'virada', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'documentos', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'tributos', 'prototipo', 'transicao'];
+const TABS = ['resumo', 'crono', 'plano', 'virada', 'modulos', 'etapas', 'consumo', 'radar', 'pendencias', 'documentos', 'gaps', 'tarefas', 'cadastros', 'cobertura', 'empresas', 'estrutura', 'compara', 'auditoria', 'integracoes', 'tributos', 'prototipo', 'core', 'transicao'];
 
 // Dentro de "Cadastros" moram quatro sub-abas sobre DOIS sub-painéis: a sub-aba
 // escolhe painel + ambiente. Duplicar o DOM só para trocar uma palavra na query
@@ -2908,6 +2997,7 @@ function setTab(nome) {
   if (nome === 'integracoes') initIntegracoes();
   if (nome === 'tributos') initTributos();
   if (nome === 'prototipo') initPrototipo();
+  if (nome === 'core') initCore();
   if (nome === 'transicao') initTransicao();
   if (nome === 'radar') initRadar();
   if (nome === 'pendencias') initPendencias();
@@ -8752,6 +8842,7 @@ const RELATORIOS = {
   integracoes: { titulo: 'Monitoramento de Integrações', alvo: '#int-conteudo' },
   tributos:  { titulo: 'Configurador de Tributos — Produção × Teste', alvo: '#trb-conteudo' },
   prototipo: { titulo: 'Protótipo',               alvo: '#tab-prototipo' },
+  core:      { titulo: 'Protótipo Core — trilha da proposta', alvo: '#core-conteudo' },
   transicao: { titulo: 'Transição',               alvo: '#tab-transicao' },
   radar:     { titulo: 'Radar de Definições',     alvo: '#rad-conteudo' },
   pendencias: { titulo: 'Pendências e Retornos', alvo: '#tab-pendencias' },
@@ -8802,6 +8893,7 @@ function baseDaAba(aba) {
   if (aba === 'transicao') return cad.ambiente;
   if (aba === 'empresas') return emp.ambiente;
   if (aba === 'integracoes') return integ.ambiente;
+  if (aba === 'core') return core.ambiente;
   return null;                       // as demais não são por base
 }
 
@@ -17119,6 +17211,455 @@ $('#int-ambiente-sel').addEventListener('change', () => {
 })();
 
 carregaLista();
+
+// ============================================================================
+//  ABA PROTÓTIPO CORE — trilha ao vivo da proposta CRM → iPaaS → ZA3 → Painel
+//  de Projetos → Contratos. Spec: docs/specs/2026-11-09-aba-prototipo-core.md
+// ============================================================================
+// A pergunta: "a proposta digitada agora no CRM chegou, virou projeto, virou
+// contrato — e os valores batem com o que a regra diz?". Esquerda: a fila da
+// ZA3 (uma linha por mensagem). Direita: a trilha da mensagem escolhida em
+// seis cards de estágio (toque = expande o detalhe) e os CONCEITOS do catálogo
+// C01–C25 comparados esperado × observado. Tudo lido na hora pela REST.
+const core = { customer: null, ambiente: 'producao', lista: null, erro: null, carregando: false,
+               sel: null, trilha: null, erroTrilha: null, carregandoTrilha: false,
+               estagio: null, conceito: null, filtroConc: 'todos', busca: '', auto: false,
+               timer: null, radarProcs: null, soFalhas: false };
+
+const CORE_NIVEL = {
+  ok:     { rot: 'OK',        cls: 'core-ok' },
+  alerta: { rot: 'Atenção',   cls: 'core-alerta' },
+  erro:   { rot: 'Divergente', cls: 'core-erro' },
+  info:   { rot: 'Info',      cls: 'core-info' },
+  na:     { rot: 'Sem dado',  cls: 'core-na' },
+};
+const CORE_ICONE = { crm: '🧾', etapa1: '📨', etapa2: '⚙️', painel: '🗂️', contrato: '📜', retorno: '↩️' };
+
+function coreEnc() { return encodeURIComponent(core.customer || ''); }
+
+function initCore() {
+  const cli = state.selected?.cli;
+  $('#core-cliente-nome').textContent =
+    (state.selected?.projeto?.nome_cliente_projeto || '').trim() || cli || '—';
+  $('#core-ambiente-sel').value = core.ambiente;
+  if (core.customer !== cli) {
+    core.customer = cli; core.lista = null; core.erro = null; core.sel = null; core.trilha = null;
+    core.radarProcs = null;
+    carregaCoreLista();
+  } else {
+    renderCore();
+  }
+  coreAutoTimer();
+}
+
+function coreAutoTimer() {
+  if (core.timer) { clearInterval(core.timer); core.timer = null; }
+  if (core.auto) {
+    core.timer = setInterval(() => {
+      if (state.tab !== 'core' || document.hidden) return;
+      carregaCoreLista(true);
+      if (core.sel) carregaCoreTrilha(core.sel, true);
+    }, 30000);
+  }
+}
+
+async function carregaCoreLista(silencioso = false) {
+  if (!core.customer) { renderCore(); return; }
+  if (core.carregando) return;
+  core.carregando = true; if (!silencioso) core.erro = null; renderCore();
+  try {
+    core.lista = await api(`/api/core/${coreEnc()}/propostas?ambiente=${core.ambiente}`);
+    core.erro = null;
+  } catch (e) {
+    core.erro = e.message; if (!silencioso) core.lista = null;
+  } finally {
+    core.carregando = false; renderCore();
+  }
+}
+
+async function carregaCoreTrilha(item, silencioso = false) {
+  if (!item) return;
+  core.sel = item;
+  if (!silencioso) { core.trilha = null; core.erroTrilha = null; core.estagio = core.estagio || 'crm'; core.conceito = null; }
+  core.carregandoTrilha = true; renderCore();
+  try {
+    const q = item.msgid ? `msgid=${encodeURIComponent(item.msgid)}` : `recno=${encodeURIComponent(item.recno)}`;
+    core.trilha = await api(`/api/core/${coreEnc()}/trilha?ambiente=${core.ambiente}&${q}`);
+    core.erroTrilha = null;
+  } catch (e) {
+    core.erroTrilha = e.message;
+  } finally {
+    core.carregandoTrilha = false; renderCore();
+  }
+}
+
+function coreHora(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d) ? '' : d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function coreData(v) {
+  v = String(v || '').trim();
+  if (/^\d{8}$/.test(v)) return `${v.slice(6, 8)}/${v.slice(4, 6)}/${v.slice(0, 4)}`;
+  if (/^\d{4}-\d{2}-\d{2}/.test(v)) return `${v.slice(8, 10)}/${v.slice(5, 7)}/${v.slice(0, 4)}`;
+  return v;
+}
+function coreMoeda(n) {
+  const v = Number(String(n ?? '').replace(',', '.'));
+  return isNaN(v) ? escapeHtml(n ?? '—') : v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+function coreLegenda(campo, valor) {
+  const leg = core.trilha?.legendas || core.lista?.legendas || {};
+  const m = leg[campo];
+  const v = String(valor ?? '').trim();
+  if (m && m[v]) return `${escapeHtml(v)} <span class="text-slate-500">· ${escapeHtml(m[v])}</span>`;
+  return escapeHtml(v || '—');
+}
+function coreBadge(nivel, txt) {
+  const n = CORE_NIVEL[nivel] || CORE_NIVEL.na;
+  return `<span class="core-badge ${n.cls}">${escapeHtml(txt || n.rot)}</span>`;
+}
+function coreSemaforo(st, campo) {
+  const v = String(st || '').trim();
+  const nivel = campo === 'ZA3_STG1' ? ({ L: 'ok', E: 'erro', R: 'alerta', P: 'alerta' }[v] || 'na')
+              : campo === 'ZA3_STG2' ? ({ S: 'ok', E: 'erro', A: 'alerta', P: 'alerta' }[v] || 'na')
+              : ({ S: 'ok', E: 'erro', A: 'alerta', P: 'alerta' }[v] || 'na');
+  return `<span class="core-dot ${(CORE_NIVEL[nivel] || CORE_NIVEL.na).cls}" title="${escapeAttr(campo)} = ${escapeAttr(v || '—')}">${escapeHtml(v || '·')}</span>`;
+}
+
+// ── render ──────────────────────────────────────────────────────────────────
+function renderCore() {
+  const box = $('#core-conteudo');
+  if (!box) return;
+  if (!core.customer) { box.innerHTML = blocoVazioCad('Abra um projeto para acompanhar o protótipo.'); return; }
+  const barra = coreBarra();
+  if (!core.lista && core.carregando) {
+    box.innerHTML = barra + '<p class="text-sm text-slate-400 p-6 text-center"><span class="inline-block animate-spin mr-2">⟳</span>Lendo a ZA3 pela REST da base…</p>';
+    return;
+  }
+  if (!core.lista && core.erro) {
+    box.innerHTML = barra + blocoErro('Não foi possível ler a fila da integração', core.erro, () => carregaCoreLista());
+    return;
+  }
+  box.innerHTML = barra + `
+    <div class="core-grid">
+      <aside class="core-fila">${coreFilaHTML()}</aside>
+      <section class="core-trilha">${coreTrilhaHTML()}</section>
+    </div>`;
+  coreBind(box);
+}
+
+function coreBarra() {
+  const d = core.lista;
+  const base = (AMB[core.ambiente] || AMB.producao);
+  const partes = [];
+  if (core.erro && d) {
+    partes.push(`<div class="mb-3 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 px-4 py-2 text-sm"><b>A última leitura falhou:</b> ${escapeHtml(core.erro)} <span class="text-xs">— a fila abaixo é da leitura anterior.</span></div>`);
+  }
+  const lido = d ? `lido às <b>${coreHora(d.lido_em)}</b> · ${d.ms} ms · dicionário ${escapeHtml(d.dicionario || '—')}${d.memo_variante === null ? ' · <span class="text-amber-700">memos não lidos</span>' : ''}` : '';
+  return partes.join('') + `
+    <div class="mb-3 flex items-center gap-2 flex-wrap text-xs text-slate-500">
+      <span class="px-2 py-0.5 rounded-full text-xs font-semibold ${base.cls}">${base.label}</span>
+      <span>${lido}</span>
+      ${core.carregando ? '<span class="inline-block animate-spin">⟳</span>' : ''}
+      <span class="ml-auto">${d ? `${d.propostas.length} mensagem(ns) na ZA3` : ''}</span>
+    </div>`;
+}
+
+function coreFilaHTML() {
+  const d = core.lista;
+  if (!d) return '';
+  const q = semAcento(core.busca || '');
+  let lista = d.propostas;
+  if (core.soFalhas) lista = lista.filter(p => p.stg1 === 'E' || p.stg2 === 'E' || ['R', 'P'].includes(p.stg1) || ['A', 'P'].includes(p.stg2));
+  if (q) lista = lista.filter(p => semAcento(`${p.proposta} ${p.cliente} ${p.idcrm} ${p.msgid} ${p.contrato}`).includes(q));
+  const tot = d.propostas.length, erros = d.propostas.filter(p => p.stg1 === 'E' || p.stg2 === 'E').length,
+        fila = d.propostas.filter(p => ['R', 'P'].includes(p.stg1) || (p.stg1 === 'L' && ['A', 'P'].includes(p.stg2))).length,
+        okk = d.propostas.filter(p => p.stg2 === 'S').length;
+  return `
+    <div class="core-kpis">
+      <div class="core-kpi"><b>${tot}</b><span>recebidas</span></div>
+      <div class="core-kpi core-ok"><b>${okk}</b><span>com contrato</span></div>
+      <div class="core-kpi core-alerta"><b>${fila}</b><span>na fila</span></div>
+      <div class="core-kpi core-erro"><b>${erros}</b><span>em erro</span></div>
+    </div>
+    <div class="flex items-center gap-2 mb-2">
+      <input id="core-busca" type="search" placeholder="proposta, cliente, ID CRM…" value="${escapeAttr(core.busca)}"
+             class="flex-1 px-2 py-1 text-xs border border-slate-300 rounded-md">
+      <label class="text-[11px] text-slate-600 flex items-center gap-1 whitespace-nowrap"><input type="checkbox" id="core-sofalhas" ${core.soFalhas ? 'checked' : ''}> só problemas</label>
+    </div>
+    <div class="core-lista">
+      ${lista.length ? lista.map(coreItemFilaHTML).join('') : '<p class="text-xs text-slate-400 p-3 text-center">Nenhuma mensagem com esse filtro.</p>'}
+    </div>`;
+}
+
+function coreItemFilaHTML(p) {
+  const sel = core.sel && (core.sel.msgid ? core.sel.msgid === p.msgid : core.sel.recno === p.recno);
+  const nivel = (p.stg1 === 'E' || p.stg2 === 'E') ? 'erro' : p.stg2 === 'S' ? 'ok' : 'alerta';
+  return `
+    <button class="core-item ${sel ? 'is-sel' : ''} ${CORE_NIVEL[nivel].cls}" data-core-msg="${escapeAttr(p.msgid || '')}" data-core-recno="${escapeAttr(p.recno || '')}">
+      <div class="flex items-center gap-1.5">
+        ${coreSemaforo(p.stg1, 'ZA3_STG1')}${coreSemaforo(p.stg2, 'ZA3_STG2')}${coreSemaforo(p.stipa, 'ZA3_STIPA')}
+        <span class="font-semibold text-slate-800 truncate">${escapeHtml(p.proposta || p.idcrm || p.msgid || '(sem id)')}</span>
+        <span class="ml-auto text-[10px] text-slate-500 whitespace-nowrap">${coreData(p.dtinc)} ${escapeHtml(p.hrinc || '')}</span>
+      </div>
+      <div class="text-[11px] text-slate-600 truncate">${escapeHtml(p.cliente || '')}</div>
+      <div class="text-[10px] text-slate-500 flex gap-2 flex-wrap">
+        ${p.contrato ? `<span>📜 ${escapeHtml(p.contrato)}${p.contrato_cn9 ? '' : ' <span class="text-rose-600">(não está na CN9)</span>'}</span>` : ''}
+        ${p.projetos ? `<span>🗂️ ${p.projetos} proj.</span>` : ''}
+        ${p.ordens != null ? `<span>${p.ordens} OV</span>` : ''}
+        ${p.tipo_venda ? `<span>TV ${escapeHtml(p.tipo_venda)}</span>` : ''}
+        ${p.modalidade ? `<span>Mod ${escapeHtml(p.modalidade)}</span>` : ''}
+      </div>
+      ${p.erro ? `<div class="text-[10px] text-rose-700 mt-0.5 line-clamp-2">${escapeHtml(p.erro)}</div>` : ''}
+    </button>`;
+}
+
+function coreTrilhaHTML() {
+  if (!core.sel) {
+    return `<div class="core-vazio">
+      <div class="text-3xl mb-2">🧭</div>
+      <p class="font-semibold text-slate-700">Escolha uma mensagem na fila</p>
+      <p class="text-sm text-slate-500 mt-1">A trilha mostra, para aquela proposta, cada estágio da integração com os dados reais da base — e os conceitos do catálogo C01–C25 comparados com o que foi gravado.</p>
+      <p class="text-xs text-slate-400 mt-3">Fluxo: Proposta no CRM → iPaaS/Etapa 1 (ZA3) → Etapa 2 (Sincronizar) → Painel de Projetos (ZA0/ZA1/SB1/CTD) → Contratos (CN9/CNA/CNB) → Retorno.</p>
+    </div>`;
+  }
+  const t = core.trilha;
+  if (!t && core.carregandoTrilha) return '<p class="text-sm text-slate-400 p-6 text-center"><span class="inline-block animate-spin mr-2">⟳</span>Lendo ZA3, ZA0/ZA1, SB1, CTD, CN9/CNA/CNB…</p>';
+  if (!t && core.erroTrilha) return blocoErro('Não foi possível montar a trilha', core.erroTrilha, () => carregaCoreTrilha(core.sel));
+  if (!t) return '';
+  const r = t.resumo || {};
+  const cab = `
+    <div class="core-cab">
+      <div>
+        <div class="text-[11px] uppercase tracking-wider text-slate-500">Proposta</div>
+        <div class="text-lg font-semibold text-slate-800">${escapeHtml(r.numeroProposta || t.za3?.ZA3_IDCRM || '—')}</div>
+        <div class="text-xs text-slate-600">${escapeHtml(r.clienteNome || '')} ${r.cliente ? `· ${escapeHtml(r.cliente)}/${escapeHtml(r.clienteLoja || '')}` : ''}</div>
+      </div>
+      <div class="text-[11px] text-slate-500 text-right">
+        <div>ID CRM <code>${escapeHtml(t.za3?.ZA3_IDCRM || '—')}</code></div>
+        <div>messageId <code>${escapeHtml((t.za3?.ZA3_MSGID || '—').slice(0, 48))}</code></div>
+        <div>lido às ${coreHora(t.lido_em)} · ${t.ms} ms ${core.carregandoTrilha ? '<span class="inline-block animate-spin">⟳</span>' : ''}</div>
+      </div>
+    </div>
+    ${core.erroTrilha ? `<div class="mb-2 rounded-lg border border-rose-200 bg-rose-50 text-rose-800 px-3 py-1.5 text-xs"><b>Última leitura falhou:</b> ${escapeHtml(core.erroTrilha)}</div>` : ''}
+    ${(t.avisos || []).length ? `<div class="mb-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-900 px-3 py-1.5 text-xs">${t.avisos.map(a => escapeHtml(a)).join('<br>')}</div>` : ''}`;
+  return cab + coreFluxoHTML(t) + coreEstagioDetalheHTML(t) + coreConceitosHTML(t);
+}
+
+function coreFluxoHTML(t) {
+  return `<div class="core-fluxo">${t.estagios.map((e, i) => `
+    ${i ? `<div class="core-seta ${CORE_NIVEL[(t.estagios[i].nivel)]?.cls || ''}">›</div>` : ''}
+    <button class="core-card ${CORE_NIVEL[e.nivel]?.cls || 'core-na'} ${core.estagio === e.id ? 'is-aberto' : ''}" data-core-est="${e.id}" title="Toque para ${core.estagio === e.id ? 'recolher' : 'expandir'}">
+      <div class="flex items-center gap-2">
+        <span class="text-lg">${CORE_ICONE[e.id] || '•'}</span>
+        <div class="min-w-0">
+          <div class="font-semibold text-slate-800 leading-tight">${escapeHtml(e.rotulo)}</div>
+          <div class="text-[10px] text-slate-500 truncate">${escapeHtml(e.sub)}</div>
+        </div>
+        <span class="ml-auto">${coreBadge(e.nivel)}</span>
+      </div>
+      ${e.kpis?.length ? `<div class="core-card-kpis">${e.kpis.map(([k, v]) => `<div><span>${escapeHtml(k)}</span><b>${escapeHtml(String(v))}</b></div>`).join('')}</div>` : ''}
+      ${e.resumo?.length ? `<div class="core-card-resumo">${e.resumo.slice(0, 2).map(s => `<div class="truncate">${escapeHtml(s)}</div>`).join('')}</div>` : ''}
+      <div class="core-card-toque">${core.estagio === e.id ? '▲ recolher' : '▼ detalhes'}</div>
+    </button>`).join('')}</div>`;
+}
+
+/** Campos de uma linha, com o título do dicionário. Só os preenchidos. */
+function coreCamposHTML(row, tab, t, opts = {}) {
+  if (!row) return '<p class="text-xs text-slate-400">Sem registro.</p>';
+  const tit = (t.titulos || {})[tab] || {};
+  const leg = t.legendas || {};
+  const ocultar = new Set(['RECNO', ...(opts.ocultar || [])]);
+  const entradas = Object.entries(row).filter(([k, v]) => !k.startsWith('_') && !ocultar.has(k) && String(v ?? '').trim() !== '');
+  const memos = entradas.filter(([k, v]) => String(v).length > 120 || /\n/.test(String(v)));
+  const curtos = entradas.filter(e => !memos.includes(e));
+  const campo = ([k, v]) => `
+    <div class="core-campo">
+      <div class="core-campo-rot">${escapeHtml(tit[k] || k)} <code>${escapeHtml(k)}</code></div>
+      <div class="core-campo-val">${leg[k] ? coreLegenda(k, v) : /_(DT|DATA|EMISSA|DTINIC|DTFIM|DTINC|DTFIM)/.test(k) && /^\d{8}$/.test(String(v)) ? coreData(v) : escapeHtml(String(v))}</div>
+    </div>`;
+  return `<div class="core-campos">${curtos.map(campo).join('')}</div>` +
+    memos.map(([k, v]) => `<details class="core-memo"><summary>${escapeHtml(tit[k] || k)} <code>${escapeHtml(k)}</code> · ${String(v).length} caracteres</summary><pre>${escapeHtml(coreJsonBonito(v))}</pre></details>`).join('');
+}
+function coreJsonBonito(v) {
+  try { return JSON.stringify(JSON.parse(v), null, 2); } catch (_) { return String(v); }
+}
+function coreTabela(linhas, cols, t, tab) {
+  if (!linhas?.length) return '<p class="text-xs text-slate-400">Nenhum registro.</p>';
+  const tit = (t.titulos || {})[tab] || {};
+  const leg = t.legendas || {};
+  return `<div class="overflow-x-auto"><table class="core-tab"><thead><tr>${cols.map(c => `<th title="${escapeAttr(c)}">${escapeHtml(tit[c] || c)}</th>`).join('')}</tr></thead>
+    <tbody>${linhas.map(l => `<tr>${cols.map(c => `<td>${leg[c] ? coreLegenda(c, l[c]) : /VL|PRV1|VLTOT|VLUNIT/.test(c) && l[c] !== undefined && l[c] !== '' ? coreMoeda(l[c]) : escapeHtml(String(l[c] ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+function coreEstagioDetalheHTML(t) {
+  const id = core.estagio;
+  if (!id) return '';
+  const e = t.estagios.find(x => x.id === id);
+  let corpo = '';
+  if (id === 'crm') {
+    const r = t.resumo || {};
+    const cab = Object.entries(r).filter(([k, v]) => k !== 'ordensVenda' && v !== null && v !== undefined && String(v).trim() !== '');
+    corpo = `
+      <h4>Cabeçalho da proposta <span class="text-slate-400 font-normal">(objeto oportunidade)</span></h4>
+      <div class="core-campos">${cab.map(([k, v]) => `<div class="core-campo"><div class="core-campo-rot">${escapeHtml(k)}</div><div class="core-campo-val">${k === 'memorialCalculo' ? `<details><summary>${String(v).length} caracteres</summary><pre class="whitespace-pre-wrap">${escapeHtml(String(v))}</pre></details>` : k === 'valorTotal' ? coreMoeda(v) : escapeHtml(String(v))}</div></div>`).join('') || '<p class="text-xs text-slate-400">JSON sem cabeçalho reconhecido.</p>'}</div>
+      <h4 class="mt-3">Ordens de venda <span class="text-slate-400 font-normal">· cada uma gera 1 projeto e 1 planilha</span></h4>
+      ${(t.ordens || []).length ? t.ordens.map((o, i) => `
+        <details class="core-ov" ${i === 0 ? 'open' : ''}>
+          <summary><b>OV ${i + 1}</b> ${escapeHtml(o.descricao || o.id || '')} · plataforma ${escapeHtml(o.plataforma || '—')} · ${o.tipoProduto === '1' ? 'Físico' : o.tipoProduto === '2' ? 'Virtual' : escapeHtml(o.tipoProduto || '—')} · natureza ${escapeHtml(o.natureza || '—')} · ${o.itens.length} item(ns) · ${coreMoeda(o.valorTotal)}</summary>
+          <div class="core-campos mt-1">${[['tipoManutencao', o.tipoManutencao], ['clienteUsuario', o.clienteUsuario], ['projetoOrigem', o.projetoOrigem], ['instrucaoTecnica', o.instrucaoTecnica]].filter(x => x[1]).map(([k, v]) => `<div class="core-campo"><div class="core-campo-rot">${k}</div><div class="core-campo-val">${escapeHtml(v)}</div></div>`).join('')}</div>
+          <table class="core-tab mt-1"><thead><tr><th>Código</th><th>Descrição</th><th class="text-right">Qtd</th><th class="text-right">Unitário</th><th class="text-right">Total</th></tr></thead>
+          <tbody>${o.itens.map(it => `<tr class="${(!it.valorUnitario && !it.valorTotal) ? 'core-zero' : ''}"><td><code>${escapeHtml(it.codigo)}</code></td><td>${escapeHtml(it.descricao)}</td><td class="text-right">${it.quantidade ?? ''}</td><td class="text-right">${it.valorUnitario != null ? coreMoeda(it.valorUnitario) : ''}</td><td class="text-right">${coreMoeda(it.valorTotal ?? ((it.quantidade || 0) * (it.valorUnitario || 0)))}</td></tr>`).join('')}</tbody></table>
+        </details>`).join('') : '<p class="text-xs text-slate-400">Nenhuma ordem de venda no JSON.</p>'}
+      <details class="core-memo mt-2"><summary>JSON completo recebido (ZA3_JSONFI / blocos)</summary><pre>${escapeHtml(JSON.stringify(t.json, null, 2) || '—')}</pre></details>`;
+  } else if (id === 'etapa1') {
+    corpo = `<h4>Registro na ZA3</h4>${coreCamposHTML(t.za3, 'ZA3', t, { ocultar: ['ZA3_JSONFI', 'ZA3_OPORT', 'ZA3_ITOPOR', 'ZA3_ORDVEN'] })}
+      ${(t.irmas || []).length > 1 ? `<h4 class="mt-3">Outras mensagens da mesma oportunidade <span class="text-slate-400 font-normal">(reprocessamentos)</span></h4>${coreTabela(t.irmas, ['ZA3_MSGID', 'ZA3_STG1', 'ZA3_STG2', 'ZA3_STIPA', 'ZA3_DTINC', 'ZA3_HRINC', 'ZA3_CONTRA'], t, 'ZA3')}` : ''}`;
+  } else if (id === 'etapa2') {
+    const z = t.za3 || {};
+    corpo = `<div class="core-campos">
+        <div class="core-campo"><div class="core-campo-rot">Etapa 2 <code>ZA3_STG2</code></div><div class="core-campo-val">${coreLegenda('ZA3_STG2', z.ZA3_STG2)}</div></div>
+        <div class="core-campo"><div class="core-campo-rot">Contrato gerado <code>ZA3_CONTRA</code></div><div class="core-campo-val">${escapeHtml(z.ZA3_CONTRA || '—')}</div></div>
+        <div class="core-campo"><div class="core-campo-rot">Concluído <code>ZA3_DTFIM/HRFIM</code></div><div class="core-campo-val">${coreData(z.ZA3_DTFIM)} ${escapeHtml(z.ZA3_HRFIM || '')}</div></div>
+      </div>
+      ${z.ZA3_PROJET ? `<h4 class="mt-2">Projetos gravados na ZA3</h4><pre class="core-pre">${escapeHtml(coreJsonBonito(z.ZA3_PROJET))}</pre>` : ''}
+      ${z.ZA3_ERRO ? `<h4 class="mt-2 text-rose-700">Detalhe do erro</h4><pre class="core-pre core-pre-erro">${escapeHtml(z.ZA3_ERRO)}</pre>` : ''}
+      <p class="text-xs text-slate-500 mt-2">Transação única: se qualquer parte falhar (projeto, produto, item contábil ou contrato), nada fica gravado. U_CRMPROJT está sem agendamento — a Etapa 2 roda pelo botão <b>Sincronizar</b> do monitor da ZA3.</p>`;
+  } else if (id === 'painel') {
+    corpo = (t.projetos || []).length ? t.projetos.map((p, i) => {
+      const cod = p._COD || p.ZA0_CODIGO;
+      const its = (t.itens || []).filter(x => x._PRJ === cod);
+      const prj = (t.sb1 || []).filter(b => its.some(x => x._PRODUTO === b.B1_COD));
+      const ctd = (t.ctd || []).filter(c => String(c.CTD_ITEM || '').replace(/ /g, '') === String(cod).replace(/ /g, ''));
+      const ns = (t.ns || []).filter(n => Object.values(n).includes(cod));
+      return `<details class="core-ov" ${i === 0 ? 'open' : ''}>
+        <summary><b>${escapeHtml(cod)}</b> · ${escapeHtml(p.ZA0_NOME || '')} · ${coreLegenda('ZA0_TPPROD', p.ZA0_TPPROD)} · ${coreLegenda('ZA0_STATUS', p.ZA0_STATUS)} · ${its.length} item(ns) · CTD ${ctd.length ? '✓' : '✕'} · NS ${escapeHtml(p.ZA0_NUMSER || '—')}</summary>
+        <h4 class="mt-2">Projeto (ZA0)</h4>${coreCamposHTML(p, 'ZA0', t)}
+        <h4 class="mt-2">Itens (ZA1)</h4>${coreTabela(its, ['ZA1_ITEM', '_PRODUTO', 'ZA1_DESCRI', 'ZA1_QUANT', 'ZA1_CRM', 'ZA1_AUTO'].filter(c => its.some(x => c in x)), t, 'ZA1')}
+        ${prj.length ? `<h4 class="mt-2">Produto do projeto (SB1 · PRJ)</h4>${coreCamposHTML(prj[0], 'SB1', t)}` : (p.ZA0_TPPROD === '1' ? '<p class="text-xs text-rose-700 mt-2">Projeto físico sem produto PRJ no SB1.</p>' : '')}
+        <h4 class="mt-2">Item Contábil (CTD)</h4>${coreTabela(ctd, ['CTD_ITEM', 'CTD_DESC01', 'CTD_CLASSE', 'CTD_BLOQ'].filter(c => ctd.some(x => c in x)), t, 'CTD')}
+        ${ns.length ? `<h4 class="mt-2">Números de série (ZA4)</h4>${coreTabela(ns, Object.keys(ns[0]).filter(k => !k.startsWith('_') && k !== 'RECNO').slice(0, 9), t, 'ZA4')}` : ''}
+      </details>`;
+    }).join('') : '<p class="text-xs text-slate-400">Nenhum projeto na ZA0 para o contrato desta mensagem.</p>';
+  } else if (id === 'contrato') {
+    const c = (t.cn9 || [])[0];
+    corpo = c ? `<h4>Contrato (CN9) <span class="text-slate-400 font-normal">· revisão vigente ${escapeHtml(c.CN9_REVISA || '')}</span></h4>${coreCamposHTML(c, 'CN9', t)}
+      <h4 class="mt-3">Planilhas (CNA) <span class="text-slate-400 font-normal">· uma por projeto</span></h4>${coreTabela(t.cna, ['CNA_NUMERO', '_PRJ', 'CNA_ZPLATA', 'CNA_CLIENT', 'CNA_LOJACL', 'CNA_VLTOT'].filter(k => (t.cna || []).some(x => k in x)), t, 'CNA')}
+      <h4 class="mt-3">Itens (CNB) <span class="text-slate-400 font-normal">· físico = 1 item PRJ · virtual = 1 por produto · todos com ITEMCTA = projeto</span></h4>${coreTabela(t.cnb, ['CNB_NUMERO', 'CNB_ITEM', 'CNB_PRODUT', 'CNB_DESCRI', 'CNB_QUANT', 'CNB_VLUNIT', 'CNB_VLTOT', 'CNB_ITEMCTA', 'CNB_ZFATUR'].filter(k => (t.cnb || []).some(x => k in x)), t, 'CNB')}`
+      : '<p class="text-xs text-slate-400">Nenhum contrato na CN9 para esta mensagem.</p>';
+  } else if (id === 'retorno') {
+    corpo = `<div class="core-campos"><div class="core-campo"><div class="core-campo-rot">Retorno ao iPaaS/CRM <code>ZA3_STIPA</code></div><div class="core-campo-val">${coreLegenda('ZA3_STIPA', t.za3?.ZA3_STIPA)}</div></div></div>
+      <p class="text-xs text-slate-500 mt-2">A especificação cria o status de retorno, mas não descreve o que é devolvido ao CRM nem quando (P11). Hoje o resultado chega por e-mail aos endereços do MV_ZMAILPP.</p>`;
+  }
+  return `<div class="core-detalhe ${CORE_NIVEL[e?.nivel]?.cls || ''}">
+    <div class="flex items-center gap-2 mb-2"><span class="text-base">${CORE_ICONE[id]}</span><b>${escapeHtml(e?.rotulo || id)}</b> ${coreBadge(e?.nivel)} <button class="ml-auto text-xs text-slate-500 hover:text-slate-800" data-core-est="${id}">▲ recolher</button></div>
+    ${corpo}
+  </div>`;
+}
+
+function coreConceitosHTML(t) {
+  let lista = t.conceitos || [];
+  const cont = { todos: lista.length, erro: lista.filter(c => c.nivel === 'erro').length, alerta: lista.filter(c => c.nivel === 'alerta').length, ok: lista.filter(c => c.nivel === 'ok').length };
+  if (core.filtroConc === 'problemas') lista = lista.filter(c => c.nivel === 'erro' || c.nivel === 'alerta');
+  else if (core.filtroConc !== 'todos') lista = lista.filter(c => c.estagio === core.filtroConc);
+  const chip = (id, rot) => `<button class="core-chip ${core.filtroConc === id ? 'is-on' : ''}" data-core-fc="${id}">${rot}</button>`;
+  return `<div class="core-conc-cab">
+      <h3>Conceitos da integração <span class="text-slate-400 font-normal text-sm">· catálogo C01–C25 · esperado × observado</span></h3>
+      <div class="flex gap-1 flex-wrap">
+        ${chip('todos', `Todos (${cont.todos})`)}${chip('problemas', `Divergências (${cont.erro + cont.alerta})`)}
+        ${chip('crm', 'Proposta')}${chip('painel', 'Painel')}${chip('contrato', 'Contratos')}
+      </div>
+    </div>
+    <div class="core-conc-grid">${lista.length ? lista.map((c, i) => {
+      const aberto = core.conceito === `${c.cod}|${i}`;
+      return `<div class="core-conc ${CORE_NIVEL[c.nivel]?.cls || ''} ${aberto ? 'is-aberto' : ''}" data-core-conc="${c.cod}|${i}">
+        <div class="flex items-center gap-2">
+          <span class="core-conc-cod">${escapeHtml(c.cod)}</span>
+          <span class="font-semibold text-slate-800 text-sm leading-tight">${escapeHtml(c.titulo)}</span>
+          <span class="ml-auto">${coreBadge(c.nivel)}</span>
+        </div>
+        <div class="core-conc-eo">
+          <div><span>Esperado</span><b>${escapeHtml(c.esperado)}</b></div>
+          <div><span>Observado</span><b>${escapeHtml(c.observado)}</b></div>
+        </div>
+        ${aberto ? `<div class="core-conc-mais">
+          <p><b>Regra:</b> ${escapeHtml(c.regra)}</p>
+          ${c.dica ? `<p class="text-slate-600"><b>Nota:</b> ${escapeHtml(c.dica)}</p>` : ''}
+          <div class="flex gap-2 mt-2">
+            <button data-interno class="core-btn" data-core-ocorr="${i}">⚑ Registrar ocorrência no Radar</button>
+            <span class="text-[11px] text-slate-500 self-center">estágio: ${escapeHtml(c.estagio)}</span>
+          </div>
+        </div>` : `<div class="core-card-toque">▼ regra e ações</div>`}
+      </div>`;
+    }).join('') : '<p class="text-xs text-slate-400 p-3">Nenhum conceito neste filtro.</p>'}</div>`;
+}
+
+function coreBind(box) {
+  box.querySelectorAll('[data-core-msg]').forEach(b => b.addEventListener('click', () => {
+    const p = (core.lista?.propostas || []).find(x => (b.dataset.coreMsg && x.msgid === b.dataset.coreMsg) || String(x.recno) === b.dataset.coreRecno);
+    if (p) carregaCoreTrilha(p);
+  }));
+  box.querySelectorAll('[data-core-est]').forEach(b => b.addEventListener('click', () => {
+    core.estagio = core.estagio === b.dataset.coreEst ? null : b.dataset.coreEst; renderCore();
+    if (core.estagio) $('.core-detalhe')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }));
+  box.querySelectorAll('[data-core-fc]').forEach(b => b.addEventListener('click', () => { core.filtroConc = b.dataset.coreFc; renderCore(); }));
+  box.querySelectorAll('[data-core-conc]').forEach(b => b.addEventListener('click', (ev) => {
+    if (ev.target.closest('[data-core-ocorr]')) return;
+    core.conceito = core.conceito === b.dataset.coreConc ? null : b.dataset.coreConc; renderCore();
+  }));
+  box.querySelectorAll('[data-core-ocorr]').forEach(b => b.addEventListener('click', (ev) => { ev.stopPropagation(); coreRegistraOcorrencia(Number(b.dataset.coreOcorr)); }));
+  const busca = box.querySelector('#core-busca');
+  if (busca) busca.addEventListener('input', () => { core.busca = busca.value; const f = box.querySelector('.core-fila'); if (f) { f.innerHTML = coreFilaHTML(); coreBind(f); const nb = f.querySelector('#core-busca'); if (nb) { nb.focus(); nb.setSelectionRange(nb.value.length, nb.value.length); } } });
+  const sf = box.querySelector('#core-sofalhas');
+  if (sf) sf.addEventListener('change', () => { core.soFalhas = sf.checked; renderCore(); });
+}
+
+async function coreRegistraOcorrencia(i) {
+  const t = core.trilha; const c = t?.conceitos?.[i];
+  if (!c) return;
+  if (!core.radarProcs) {
+    try { const r = await api(`/api/radar/${coreEnc()}`); core.radarProcs = (r.processos || []).filter(p => p.tipo === 'processo'); }
+    catch (e) { alert('Não foi possível carregar os processos do Radar: ' + e.message); return; }
+  }
+  const procs = core.radarProcs;
+  if (!procs.length) { alert('O Radar deste cliente ainda não tem processos cadastrados.'); return; }
+  const pref = procs.find(p => /integra/i.test(p.nome)) || procs.find(p => /painel|projeto/i.test(p.nome)) || procs.find(p => /crm/i.test(p.nome)) || procs[0];
+  const base = (AMB[core.ambiente] || AMB.producao).label;
+  const r = t.resumo || {};
+  const titulo = `[Protótipo Core] ${c.cod} — ${c.titulo}`;
+  const contexto = `Protótipo Core · ${base} · ${new Date().toLocaleString('pt-BR')}\nProposta ${r.numeroProposta || '—'} · ID CRM ${t.za3?.ZA3_IDCRM || '—'} · messageId ${t.za3?.ZA3_MSGID || '—'} · contrato ${t.za3?.ZA3_CONTRA || '—'}\n\nRegra: ${c.regra}\nEsperado: ${c.esperado}\nObservado: ${c.observado}${c.dica ? `\nNota: ${c.dica}` : ''}`;
+  const m = modal('Registrar ocorrência no Radar de Definições', `
+    ${campo('oc-titulo', 'Título', titulo)}
+    <label class="block"><span class="text-xs text-slate-500">Processo</span>
+      <select id="oc-proc" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md">${procs.map(p => `<option value="${p.id}" ${p.id === pref.id ? 'selected' : ''}>${escapeHtml(p.nome)}</option>`).join('')}</select></label>
+    <div class="grid grid-cols-2 gap-2">
+      <label class="block"><span class="text-xs text-slate-500">Com quem está</span>
+        <select id="oc-lado" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md"><option>TOTVS</option><option>DIGITRO</option><option>AMBOS</option></select></label>
+      <label class="block"><span class="text-xs text-slate-500">Prioridade</span>
+        <select id="oc-prio" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md"><option value="alta" ${c.nivel === 'erro' ? 'selected' : ''}>alta</option><option value="media" ${c.nivel !== 'erro' ? 'selected' : ''}>média</option><option value="baixa">baixa</option></select></label>
+    </div>
+    <label class="block"><span class="text-xs text-slate-500">Contexto (evidência)</span>
+      <textarea id="oc-ctx" rows="8" class="mt-1 w-full px-3 py-2 border border-slate-300 rounded-md text-xs font-mono">${escapeHtml(contexto)}</textarea></label>`, 'Registrar');
+  m.aoConfirmar(async () => {
+    m.ocupado(true, 'Gravando…');
+    try {
+      const r2 = await api(`/api/radar/${coreEnc()}/item`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ titulo: m.campo('oc-titulo').value, contexto: m.campo('oc-ctx').value, processo_id: Number(m.campo('oc-proc').value),
+                               dono_lado: m.campo('oc-lado').value, prioridade: m.campo('oc-prio').value, status: 'aberta', tipo: 'definicao' }) });
+      m.fecha();
+      alert(`Ocorrência ${r2.codigo || ''} registrada no Radar.`);
+    } catch (e) { m.ocupado(false, 'Registrar'); m.erro(e.message); }
+  });
+}
+
+$('#core-ambiente-sel')?.addEventListener('change', (e) => {
+  core.ambiente = e.target.value; core.lista = null; core.sel = null; core.trilha = null; carregaCoreLista();
+});
+$('#core-reload')?.addEventListener('click', () => { carregaCoreLista(); if (core.sel) carregaCoreTrilha(core.sel, true); });
+$('#core-auto')?.addEventListener('change', (e) => { core.auto = e.target.checked; coreAutoTimer(); });
+
 </script>
 </body>
 </html>
