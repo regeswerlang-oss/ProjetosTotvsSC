@@ -14930,9 +14930,10 @@ CORE_CAMPOS_MINIMOS = {
             ("ZA0_ENDINS", "C")],
     "ZA1": [("ZA1_FILIAL", "C"), ("ZA1_CODIGO", "C"), ("ZA1_ITEM", "C"), ("ZA1_PRODUT", "C"),
             ("ZA1_DESCRI", "C"), ("ZA1_QUANT", "N"), ("ZA1_CRM", "C"), ("ZA1_AUTO", "C")],
-    "ZA4": [("ZA4_FILIAL", "C"), ("ZA4_CODCLI", "C"), ("ZA4_LOJA", "C"), ("ZA4_PROJET", "C"),
-            ("ZA4_PRODUT", "C"), ("ZA4_TIPO", "C"), ("ZA4_SEQ", "C"), ("ZA4_NUMSER", "C"),
-            ("ZA4_STATUS", "C"), ("ZA4_ORIGEM", "C")],
+    "ZA4": [("ZA4_FILIAL", "C"), ("ZA4_SEQUEN", "C"), ("ZA4_CODCLI", "C"), ("ZA4_LOJCLI", "C"),
+            ("ZA4_CODPRJ", "C"), ("ZA4_TIPO", "C"), ("ZA4_PLATAF", "C"), ("ZA4_PRODUT", "C"),
+            ("ZA4_NUMSER", "C"), ("ZA4_ORIGEM", "C"), ("ZA4_USER", "C"), ("ZA4_DATA", "D"),
+            ("ZA4_HORA", "C"), ("ZA4_STATUS", "C")],
     "CN9": [("CN9_FILIAL", "C"), ("CN9_NUMERO", "C"), ("CN9_REVISA", "C"), ("CN9_SITUAC", "C"),
             ("CN9_TPCTO", "C"), ("CN9_DTINIC", "D"), ("CN9_DTFIM", "D"), ("CN9_VIGE", "N"),
             ("CN9_UNVIGE", "C"), ("CN9_VLTOT", "N"), ("CN9_CONDPG", "C"), ("CN9_ZCODVD", "C"),
@@ -14959,7 +14960,7 @@ CORE_CHAVES = {
     "ZA0_COD": ("ZA0_CODIGO", r"^ZA0_(CODIGO|COD|PROJET|NUM)$"),
     "ZA1_COD": ("ZA1_CODIGO", r"^ZA1_(CODIGO|COD|PROJET|CODPRJ|NUMPRJ)$"),
     "ZA1_PROD": ("ZA1_PRODUT", r"^ZA1_(PRODUT|COD(PRO|PRD)|PRODUTO|ITEMSB1)$"),
-    "ZA4_PRJ": ("ZA4_PROJET", r"^ZA4_(PROJET|CODPRJ|PROJ|CODIGO)$"),
+    "ZA4_PRJ": ("ZA4_CODPRJ", r"^ZA4_(CODPRJ|PROJET|PROJ|CODIGO)$"),
     "CNA_PRJ": ("CNA_XPROJ", r"^CNA_(XPROJ|ZPROJ|PROJET|XPROJET)$"),
     "CNB_CTA": ("CNB_ITEMCTA", r"^CNB_ITEMCTA$"),
     "CNB_PROD": ("CNB_PRODUT", r"^CNB_PRODUT$"),
@@ -15120,6 +15121,18 @@ def _core_chave(dic, nome):
         if re.match(rx, n):
             return n
     return padrao
+
+
+def _core_ordem(dic, tab, *candidatos):
+    """ORDER BY só com colunas que EXISTEM no dicionário da base (ZA4_SEQ ×
+    ZA4_SEQUEN custou um ORA-00904 em 09/11). Sem nenhuma: R_E_C_N_O_."""
+    nomes = {f["campo"] for f in dic.get(tab, [])}
+    cols = []
+    for c in candidatos:
+        nome, _, dirc = c.partition(" ")
+        if nome in nomes or nome == "R_E_C_N_O_":
+            cols.append(c)
+    return ", ".join(cols) if cols else "R_E_C_N_O_"
 
 
 def _core_select(dic, tab, sufixo, where, order, banco, chunks, variante, limite=None):
@@ -15730,16 +15743,16 @@ def api_core_trilha(customer):
     k_za4, k_cna, k_cnb_cta, k_ctd = _core_chave(dic, "ZA4_PRJ"), _core_chave(dic, "CNA_PRJ"), _core_chave(dic, "CNB_CTA"), _core_chave(dic, "CTD_ITEM")
     if ct:
         ctq = esc(ct)
-        projetos, e, _ = _core_roda(cfg, customer, amb, dic, "ZA0", f"RTRIM(ZA0_CONTRA) = '{ctq}'", k_za0, chunks=3)
+        projetos, e, _ = _core_roda(cfg, customer, amb, dic, "ZA0", f"RTRIM(ZA0_CONTRA) = '{ctq}'", _core_ordem(dic, "ZA0", k_za0), chunks=3)
         if e:
             avisos.append(f"ZA0: {e}")
-        cn9s, e, _ = _core_roda(cfg, customer, amb, dic, "CN9", f"RTRIM(CN9_NUMERO) = '{ctq}'", "CN9_REVISA DESC", chunks=3)
+        cn9s, e, _ = _core_roda(cfg, customer, amb, dic, "CN9", f"RTRIM(CN9_NUMERO) = '{ctq}'", _core_ordem(dic, "CN9", "CN9_REVISA DESC"), chunks=3)
         if e:
             avisos.append(f"CN9: {e}")
-        cnas, e, _ = _core_roda(cfg, customer, amb, dic, "CNA", f"RTRIM(CNA_CONTRA) = '{ctq}'", "CNA_REVISA DESC, CNA_NUMERO", chunks=1)
+        cnas, e, _ = _core_roda(cfg, customer, amb, dic, "CNA", f"RTRIM(CNA_CONTRA) = '{ctq}'", _core_ordem(dic, "CNA", "CNA_REVISA DESC", "CNA_NUMERO"), chunks=1)
         if e:
             avisos.append(f"CNA: {e}")
-        cnbs, e, _ = _core_roda(cfg, customer, amb, dic, "CNB", f"RTRIM(CNB_CONTRA) = '{ctq}'", "CNB_REVISA DESC, CNB_NUMERO, CNB_ITEM", chunks=1)
+        cnbs, e, _ = _core_roda(cfg, customer, amb, dic, "CNB", f"RTRIM(CNB_CONTRA) = '{ctq}'", _core_ordem(dic, "CNB", "CNB_REVISA DESC", "CNB_NUMERO", "CNB_ITEM"), chunks=1)
         if e:
             avisos.append(f"CNB: {e}")
         # Só a revisão vigente (maior) do contrato
@@ -15751,7 +15764,7 @@ def api_core_trilha(customer):
             a["_PRJ"] = a.get(k_cna) or ""
     cods = _core_lista_in([p.get(k_za0) for p in projetos])
     if cods:
-        itens, e, _ = _core_roda(cfg, customer, amb, dic, "ZA1", f"RTRIM({k_za1}) IN ({cods})", f"{k_za1}, ZA1_ITEM", chunks=1)
+        itens, e, _ = _core_roda(cfg, customer, amb, dic, "ZA1", f"RTRIM({k_za1}) IN ({cods})", _core_ordem(dic, "ZA1", k_za1, "ZA1_ITEM", "R_E_C_N_O_"), chunks=1)
         if e:
             avisos.append(f"ZA1: {e}")
         for i in itens:
@@ -15759,10 +15772,10 @@ def api_core_trilha(customer):
             i["_PRODUTO"] = i.get(k_za1p) or ""
         cods_sem = _core_lista_in([(p.get(k_za0) or "").replace(" ", "") for p in projetos]) or cods
         ctds, e, _ = _core_roda(cfg, customer, amb, dic, "CTD",
-                                f"RTRIM({k_ctd}) IN ({cods}) OR RTRIM({k_ctd}) IN ({cods_sem})", k_ctd, chunks=1)
+                                f"RTRIM({k_ctd}) IN ({cods}) OR RTRIM({k_ctd}) IN ({cods_sem})", _core_ordem(dic, "CTD", k_ctd), chunks=1)
         if e:
             avisos.append(f"CTD: {e}")
-        ns, e, _ = _core_roda(cfg, customer, amb, dic, "ZA4", f"RTRIM({k_za4}) IN ({cods})", f"{k_za4}, ZA4_SEQ", chunks=1)
+        ns, e, _ = _core_roda(cfg, customer, amb, dic, "ZA4", f"RTRIM({k_za4}) IN ({cods})", _core_ordem(dic, "ZA4", k_za4, "ZA4_SEQUEN", "ZA4_SEQ", "R_E_C_N_O_"), chunks=1)
         if e and "ZA4" in dic:
             avisos.append(f"ZA4: {e}")
         prod_prj = _core_lista_in([i.get("_PRODUTO") for i in itens if (i.get("_PRODUTO") or "").startswith(CRM_PRJ)]
