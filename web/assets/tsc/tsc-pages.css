@@ -94,3 +94,23 @@ html.tsc-tw .bg-indigo-50, html.tsc-tw .bg-indigo-100 { background-color: rgba(1
 html.tsc-tw .bg-violet-50, html.tsc-tw .bg-violet-100 { background-color: rgba(167,139,250,.13) !important; } html.tsc-tw .bg-violet-200 { background-color: rgba(167,139,250,.22) !important; } html.tsc-tw .text-violet-600, html.tsc-tw .text-violet-700, html.tsc-tw .text-violet-800, html.tsc-tw .text-violet-900 { color: #c4b5fd !important; } html.tsc-tw .border-violet-100, html.tsc-tw .border-violet-200, html.tsc-tw .border-violet-300 { border-color: rgba(167,139,250,.35) !important; }
 html.tsc-tw .bg-purple-50, html.tsc-tw .bg-purple-100 { background-color: rgba(167,139,250,.13) !important; } html.tsc-tw .bg-purple-200 { background-color: rgba(167,139,250,.22) !important; } html.tsc-tw .text-purple-600, html.tsc-tw .text-purple-700, html.tsc-tw .text-purple-800, html.tsc-tw .text-purple-900 { color: #d8b4fe !important; } html.tsc-tw .border-purple-100, html.tsc-tw .border-purple-200, html.tsc-tw .border-purple-300 { border-color: rgba(167,139,250,.35) !important; }
 html.tsc-tw .bg-fuchsia-50, html.tsc-tw .bg-fuchsia-100 { background-color: rgba(217,70,239,.13) !important; } html.tsc-tw .bg-fuchsia-200 { background-color: rgba(217,70,239,.22) !important; } html.tsc-tw .text-fuchsia-600, html.tsc-tw .text-fuchsia-700, html.tsc-tw .text-fuchsia-800, html.tsc-tw .text-fuchsia-900 { color: #f0abfc !important; } html.tsc-tw .border-fuchsia-100, html.tsc-tw .border-fuchsia-200, html.tsc-tw .border-fuchsia-300 { border-color: rgba(217,70,239,.35) !important; }
+
+/* variantes com opacidade (bg-rose-50/60, bg-amber-50/40…): o Tailwind gera a cor
+   pastel CLARA com alfa e a regra acima não as pega — no fundo escuro viravam
+   blocos rosados/esverdeados lavados com texto ilegível. Mesmo tom das pastéis. */
+html.tsc-tw [class*="bg-emerald-50/"], html.tsc-tw [class*="bg-emerald-100/"] { background-color: rgba(34,197,94,.10) !important; }
+html.tsc-tw [class*="bg-green-50/"], html.tsc-tw [class*="bg-green-100/"] { background-color: rgba(34,197,94,.10) !important; }
+html.tsc-tw [class*="bg-teal-50/"], html.tsc-tw [class*="bg-teal-100/"] { background-color: rgba(45,212,191,.10) !important; }
+html.tsc-tw [class*="bg-amber-50/"], html.tsc-tw [class*="bg-amber-100/"] { background-color: rgba(245,158,11,.10) !important; }
+html.tsc-tw [class*="bg-yellow-50/"], html.tsc-tw [class*="bg-yellow-100/"] { background-color: rgba(245,158,11,.10) !important; }
+html.tsc-tw [class*="bg-orange-50/"], html.tsc-tw [class*="bg-orange-100/"] { background-color: rgba(251,146,60,.10) !important; }
+html.tsc-tw [class*="bg-rose-50/"], html.tsc-tw [class*="bg-rose-100/"] { background-color: rgba(239,68,68,.10) !important; }
+html.tsc-tw [class*="bg-red-50/"], html.tsc-tw [class*="bg-red-100/"] { background-color: rgba(239,68,68,.10) !important; }
+html.tsc-tw [class*="bg-pink-50/"], html.tsc-tw [class*="bg-pink-100/"] { background-color: rgba(236,72,153,.10) !important; }
+html.tsc-tw [class*="bg-sky-50/"], html.tsc-tw [class*="bg-sky-100/"] { background-color: rgba(56,189,248,.10) !important; }
+html.tsc-tw [class*="bg-blue-50/"], html.tsc-tw [class*="bg-blue-100/"] { background-color: rgba(61,110,245,.10) !important; }
+html.tsc-tw [class*="bg-cyan-50/"], html.tsc-tw [class*="bg-cyan-100/"] { background-color: rgba(34,211,238,.10) !important; }
+html.tsc-tw [class*="bg-indigo-50/"], html.tsc-tw [class*="bg-indigo-100/"] { background-color: rgba(129,140,248,.10) !important; }
+html.tsc-tw [class*="bg-violet-50/"], html.tsc-tw [class*="bg-violet-100/"] { background-color: rgba(167,139,250,.10) !important; }
+html.tsc-tw [class*="bg-purple-50/"], html.tsc-tw [class*="bg-purple-100/"] { background-color: rgba(167,139,250,.10) !important; }
+html.tsc-tw [class*="bg-fuchsia-50/"], html.tsc-tw [class*="bg-fuchsia-100/"] { background-color: rgba(217,70,239,.10) !important; }

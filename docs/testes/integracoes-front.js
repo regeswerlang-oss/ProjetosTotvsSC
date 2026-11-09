@@ -283,6 +283,13 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
     initIntegracoes();
   });
   await pg.waitForFunction(() => document.querySelector('[data-int-ind="tra_sem_retorno"]'), null, { timeout: 5000 }).catch(() => {});
+  if (process.env.SHOT) {   // captura opcional dos cartões (revisão visual do tema)
+    await pg.setViewportSize({ width: 1600, height: 1000 });
+    await pg.$eval('[data-int-ind="tra_sem_retorno"]', n => n.scrollIntoView({ block: 'start' }));
+    await pg.screenshot({ path: process.env.SHOT });
+    await pg.$eval('[data-int-tra-quem="cadastro"]', n => n.scrollIntoView({ block: 'center' })).catch(() => {});
+    await pg.screenshot({ path: process.env.SHOT.replace('.png', '-2.png') });
+  }
   const rd = await txt('#int-conteudo');
   t('transmite: 9 cartões, nenhum de RH', (await pg.$$('[data-int-ind]')).length === 9 && await pg.$('[data-int-ind^="quirons"]') === null);
   t('transmite: grupo nomeado', /TOTVS Transmite/.test(rd));

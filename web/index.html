@@ -72,6 +72,14 @@
   .rs-item .t { flex:1; min-width:0; color:var(--tsc-t1); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .rs-item .m { font-size:11px; color:var(--tsc-t2); white-space:nowrap; }
   .rs-pill { font-size:10px; font-weight:600; padding:1px 7px; border-radius:999px; white-space:nowrap; }
+  /* Cartões de indicador (Integrações e Tributos): superfície escura + acento do nível */
+  .int-card { position:relative; background:var(--tsc-s1); border:1px solid var(--tsc-line);
+              border-left:4px solid var(--int-acc, var(--tsc-t3)); }
+  .int-card[data-int-nivel="vermelho"] { background:linear-gradient(90deg, rgba(239,68,68,.10), var(--tsc-s1) 55%); }
+  .int-card[data-int-nivel="amarelo"]  { background:linear-gradient(90deg, rgba(245,158,11,.09), var(--tsc-s1) 55%); }
+  .int-card[data-int-nivel="verde"]    { background:linear-gradient(90deg, rgba(34,197,94,.07), var(--tsc-s1) 55%); }
+  .int-card[data-int-nivel="info"]     { background:linear-gradient(90deg, rgba(56,189,248,.08), var(--tsc-s1) 55%); }
+  .int-card svg { color:var(--int-acc) !important; opacity:.75; }
   .rs-vazio { font-size:12px; color:var(--tsc-t2); padding:14px 0; text-align:center; }
 
   .bar-track { background: var(--tsc-s3); height: 0.5rem; border-radius: 999px; overflow: hidden; position: relative; }
@@ -14033,12 +14041,14 @@ const integ = { customer: null, ambiente: 'producao', dados: null, carregando: f
                 duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '' } };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
+// `cor` = faixa à esquerda do cartão (tema escuro: superfície neutra + acento,
+// em vez de fundo pastel claro que lavava o texto).
 const INT_NIVEL = {
-  verde:    { rot: 'OK',       ico: '✓', card: 'border-emerald-300 bg-emerald-50/60', pill: 'bg-emerald-100 text-emerald-800' },
-  amarelo:  { rot: 'Atenção',  ico: '!', card: 'border-amber-300 bg-amber-50/60',     pill: 'bg-amber-100 text-amber-900' },
-  vermelho: { rot: 'Crítico',  ico: '✕', card: 'border-rose-300 bg-rose-50/60',       pill: 'bg-rose-100 text-rose-800' },
-  cinza:    { rot: 'Sem dado', ico: '–', card: 'border-slate-200 bg-slate-50',        pill: 'bg-slate-100 text-slate-600' },
-  info:     { rot: 'Informativo', ico: 'ℹ', card: 'border-sky-200 bg-sky-50/60',     pill: 'bg-sky-100 text-sky-800' },
+  verde:    { rot: 'OK',          ico: '✓', cor: 'var(--tsc-ok)',   card: 'int-card', pill: 'bg-emerald-100 text-emerald-800' },
+  amarelo:  { rot: 'Atenção',     ico: '!', cor: 'var(--tsc-warn)', card: 'int-card', pill: 'bg-amber-100 text-amber-900' },
+  vermelho: { rot: 'Crítico',     ico: '✕', cor: 'var(--tsc-err)',  card: 'int-card', pill: 'bg-rose-100 text-rose-800' },
+  cinza:    { rot: 'Sem dado',    ico: '–', cor: 'var(--tsc-t3)',   card: 'int-card', pill: 'bg-slate-100 text-slate-600' },
+  info:     { rot: 'Informativo', ico: 'ℹ', cor: 'var(--tsc-info)', card: 'int-card', pill: 'bg-sky-100 text-sky-800' },
 };
 const INT_GRUPOS = [
   { id: 'quirons', rot: 'Quírons (NG)', sub: 'cadastros de RH enviados pelo JOB GPEM923 · fila RJP · erros RU7' },
@@ -14322,7 +14332,7 @@ function intSpark(chave) {
 function intCartao(i) {
   const n = INT_NIVEL[i.nivel] || INT_NIVEL.cinza;
   const valor = i.valor === null || i.valor === undefined ? '—' : i.valor;
-  return `<div class="rounded-lg border ${n.card} px-4 py-3 flex flex-col" data-int-ind="${escapeHtml(i.chave)}">
+  return `<div class="rounded-lg ${n.card} px-4 py-3 flex flex-col" style="--int-acc:${n.cor}" data-int-nivel="${escapeHtml(i.nivel || 'cinza')}" data-int-ind="${escapeHtml(i.chave)}">
     <div class="flex items-start justify-between gap-2">
       <p class="text-xs text-slate-600 font-semibold">${escapeHtml(i.rotulo)}</p>${intPill(i.nivel)}</div>
     <p class="text-2xl font-totvs text-totvs-petroleo mt-1">${escapeHtml(String(valor))}</p>
@@ -15280,7 +15290,7 @@ function tribCartoes(d) {
   if (!inds.length) return '';
   return `<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-5">${inds.map(i => {
     const n = INT_NIVEL[i.nivel] || INT_NIVEL.cinza;
-    return `<div class="rounded-lg border p-3 ${n.card}" title="${escapeHtml(i.texto || '')}">
+    return `<div class="rounded-lg p-3 ${n.card}" style="--int-acc:${n.cor}" data-int-nivel="${escapeHtml(i.nivel || 'cinza')}" title="${escapeHtml(i.texto || '')}">
       <div class="flex items-start justify-between gap-2"><div class="text-xs text-slate-600 leading-tight">${escapeHtml(i.rotulo)}</div>${intPill(i.nivel)}</div>
       <div class="mt-1 text-2xl font-bold text-totvs-petroleo">${i.valor === null || i.valor === undefined ? '—' : escapeHtml(String(i.valor))}</div>
       <div class="mt-1 text-[11px] text-slate-500 leading-snug">${escapeHtml(i.texto || '')}</div>
