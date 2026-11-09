@@ -258,7 +258,24 @@ def allowed_customers():
         return None
     rows = q("select customer from cockpit.usuario_clientes where lower(email)=%s",
              (email.lower(),))
-    return {r["customer"] for r in rows}
+    lib = {r["customer"] for r in rows}
+    # Gestor de Demandas (09/11/2026): aqui ele vê os projetos em que atua como
+    # consultor (usuario_clientes) E os clientes da carteira que ele gere. No
+    # cockpit-unico-tsc é diferente de propósito: lá vê SÓ a carteira.
+    if perfil_do(email) in PERFIS_POR_CARTEIRA:
+        lib |= set(carteira_do_gestor(email))
+    return lib
+
+
+def carteira_do_gestor(email):
+    """Clientes da carteira de demandas do gestor. Banco sem a tabela (migration
+    0015 do cockpit-unico-tsc ainda não aplicada) = carteira vazia, nunca erro."""
+    try:
+        return [r["customer"] for r in q(
+            "select customer from cockpit.carteira_demandas where lower(email)=%s",
+            ((email or "").lower(),))]
+    except Exception:
+        return []
 
 
 def deny_customer(cust):
@@ -274,14 +291,22 @@ def deny_customer(cust):
 #
 # Esconder o botão na tela NÃO é proteger: quem não é interno é barrado aqui,
 # no servidor (require_interno), mesmo chamando a rota na mão.
-PERFIS = ("admin", "comum", "consultoria", "cliente", "leitor")
+PERFIS = ("admin", "gestor", "comum", "consultoria", "cliente", "leitor")
 # 'consultoria' = consultor que trabalha nos projetos (TOTVS ou parceiro): tem o
 # MESMO poder de 'comum', só o rótulo é próprio, para dar para separar quem é
 # consultoria de quem é do time fixo sem inventar um terceiro eixo de permissão.
 # ARMADILHA: a tabela usuarios_login é compartilhada com o cockpit-unico-tsc, e
 # lá perfil desconhecido degrada para 'leitor' — o perfil novo tem que entrar no
 # CHECK do banco E no src/lib/auth/perfis.ts antes de ser usado de verdade.
-PERFIS_INTERNOS = ("admin", "comum", "consultoria", "leitor")   # gente da TOTVS
+PERFIS_INTERNOS = ("admin", "gestor", "comum", "consultoria", "leitor")   # gente da TOTVS
+# 'gestor' = Gestor de Demandas (09/11/2026). Poder de 'comum' + a CARTEIRA DE
+# DEMANDAS (cockpit.carteira_demandas, um gestor por cliente). Continua podendo
+# ter papel de consultor nos projetos (é interno). Mesmo trio de sempre: CHECK
+# do banco (migration 0015 do cockpit-unico-tsc), aqui e o perfis.ts de lá.
+PERFIS_POR_CARTEIRA = ("gestor",)
+PERFIL_LABEL = {"admin": "Administrador", "gestor": "Gestor de Demandas",
+                "comum": "Comum", "consultoria": "Consultoria",
+                "cliente": "Cliente", "leitor": "Leitor"}
 
 # Catálogo das abas do detalhe do projeto. 'cliente' diz se a aba PODE ser
 # liberada para um usuário do cliente — 'consumo' fica de fora de propósito
@@ -624,12 +649,19 @@ def api_acessos():
                         from cockpit.usuario_clientes uc
                         left join cockpit.clientes c on c.customer = uc.customer
                        order by uc.customer, uc.email""")
-    clientes = q("select customer, nome from cockpit.clientes order by nome")
+    clientes = q("select customer, nome, tipo from cockpit.clientes order by nome")
+    try:
+        carteira = q("select customer, email from cockpit.carteira_demandas order by customer")
+        carteira_ok = True
+    except Exception:          # banco sem a migration 0015: a tela não cai por isso
+        carteira, carteira_ok = [], False
     # Papel e módulos vêm JUNTO das abas porque é a mesma pergunta do admin:
     # "o que essa pessoa faz neste cliente?". Ter que abrir o modal do protótipo
     # só para dizer que fulano valida Faturamento era o atrito que sobrava.
     return _json({"ok": True, "usuarios": usuarios, "liberacoes": liberacoes,
                   "clientes": clientes, "abas": ABAS, "perfis": list(PERFIS),
+                  "perfil_label": PERFIL_LABEL,
+                  "carteira": carteira, "carteira_ok": carteira_ok,
                   "abas_padrao_cliente": ABAS_PADRAO_CLIENTE,
                   "papeis": [{"id": p, "label": PROTO_PAPEL_LABEL[p],
                               "totvs": p in PROTO_PAPEIS_TOTVS} for p in PROTO_PAPEIS],
@@ -776,6 +808,80 @@ def api_acessos_salvar():
                   "modulos_ignorados": sorted(set(ignorados))})
 
 
+# ── CARTEIRA DE DEMANDAS — qual gestor cuida de cada cliente (09/11/2026) ────
+# Um gestor por cliente (PK = customer). É o recorte do perfil 'gestor' no
+# cockpit-unico-tsc (Cockpit e Triagem mostram SÓ a carteira) e soma aos
+# clientes dele aqui. Vive em tabela própria e NÃO em usuario_clientes: lá ficam
+# os projetos em que a pessoa é consultor, com papel e abas.
+@app.post("/api/acessos/carteira")
+def api_acessos_carteira():
+    """Body: {customers: [...], email: "gestor@" | null}. email null = tira o
+    gestor desses clientes. Só aceita login ativo com perfil 'gestor'."""
+    if (r := require_admin()):
+        return r
+    b = request.get_json(silent=True) or {}
+    customers = sorted({str(c).strip() for c in (b.get("customers") or []) if str(c).strip()})
+    email = (b.get("email") or "").strip().lower() or None
+    if not customers:
+        return _err(400, "Escolha pelo menos um cliente.")
+    conhecidos = {r["customer"] for r in q("select customer from cockpit.clientes")}
+    if (nc := [c for c in customers if c not in conhecidos]):
+        return _err(409, "Cliente não cadastrado em cockpit.clientes: " + ", ".join(nc))
+    try:
+        if email is None:
+            execute("delete from cockpit.carteira_demandas where customer = any(%s)",
+                    (customers,))
+            return _json({"ok": True, "customers": customers, "email": None})
+        u = q("select email, perfil, ativo from cockpit.usuarios_login where lower(email)=%s",
+              (email,), one=True)
+        if not u:
+            return _err(404, f"Login não encontrado: {email}")
+        if u["perfil"] not in PERFIS_POR_CARTEIRA:
+            return _err(409, f"{u['email']} não tem o perfil Gestor de Demandas — "
+                             "promova antes de dar carteira.")
+        if not u["ativo"]:
+            return _err(409, f"{u['email']} está inativo.")
+        with db() as conn, conn.cursor() as cur:
+            execute_values(cur,
+                """insert into cockpit.carteira_demandas (customer, email, created_by)
+                   values %s
+                   on conflict (customer) do update
+                      set email = excluded.email, updated_at = now(),
+                          created_by = excluded.created_by""",
+                [(c, u["email"], current_user()) for c in customers])
+    except psycopg2.errors.UndefinedTable:
+        return _err(503, "Tabela cockpit.carteira_demandas ainda não existe — aplique a "
+                         "migration 0015_gestor_demandas do cockpit-unico-tsc.")
+    return _json({"ok": True, "customers": customers, "email": u["email"]})
+
+
+@app.post("/api/acessos/perfil")
+def api_acessos_perfil():
+    """Troca o perfil de um login existente (promover a Gestor de Demandas e
+    voltar). Não concede nem tira 'admin' — isso é decisão rara, fica no banco."""
+    if (r := require_admin()):
+        return r
+    b = request.get_json(silent=True) or {}
+    email = (b.get("email") or "").strip().lower()
+    perfil = (b.get("perfil") or "").strip().lower()
+    if perfil not in PERFIS or perfil == "admin":
+        return _err(400, f"Perfil inválido aqui: {perfil or '(vazio)'}")
+    u = q("select email, perfil from cockpit.usuarios_login where lower(email)=%s",
+          (email,), one=True)
+    if not u:
+        return _err(404, "Usuário não encontrado.")
+    if u["perfil"] == "admin" or email == (current_user() or "").lower():
+        return _err(409, "Perfil de administrador não se altera por aqui.")
+    try:
+        execute("update cockpit.usuarios_login set perfil=%s, updated_at=now() "
+                "where email=%s", (perfil, u["email"]))
+    except psycopg2.errors.CheckViolation:
+        return _err(503, f"O banco ainda não aceita o perfil '{perfil}' — aplique a "
+                         "migration 0015_gestor_demandas do cockpit-unico-tsc.")
+    return _json({"ok": True, "email": u["email"], "perfil": perfil,
+                  "antes": u["perfil"]})
+
+
 @app.delete("/api/acessos")
 def api_acessos_remover():
     """Tira a liberação de um par (email, customer). Não apaga o login."""
@@ -847,11 +953,15 @@ def api_health():
 #   perfil 'consultoria'  → só a PRÓPRIA linha, e só edita a própria
 #                           autoavaliação. Nunca vê a nota que o gestor deu a
 #                           outra pessoa, nem o recorte da célula.
+#   perfil 'gestor'       → igual a 'consultoria' (09/11/2026): o Gestor de
+#                           Demandas vem da consultoria e gere a fila de
+#                           demandas, não a maturidade dos colegas.
 #   admin / comum / leitor → a célula inteira (é o CP e o time fixo).
 #   cliente                → nada: require_interno() barra antes.
 # O vínculo login→consultor é o e-mail em pdi.consultores.email, preenchido na
 # sub-aba Cadastro. SEM vínculo, um 'consultoria' não vê linha nenhuma — falhar
 # fechado é melhor que mostrar a pessoa errada.
+RX_SO_EU = ("consultoria", "gestor")
 RX_UUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
 
@@ -885,7 +995,7 @@ def _rx_ctx():
     """(email, perfil, so_eu, meu_id). so_eu=True ⇒ enxerga uma linha só."""
     email = effective_user() or ""
     perfil = perfil_do(email)
-    so_eu = perfil == "consultoria"
+    so_eu = perfil in RX_SO_EU
     meu = q("select id from pdi.consultores where ativo and lower(email)=%s",
             (email.lower(),), one=True) if email else None
     return email, perfil, so_eu, (meu["id"] if meu else None)
@@ -896,7 +1006,7 @@ def _rx_gestor():
     vínculo de e-mail e arquivamento. Consultor não mexe em nada disso."""
     if (r := require_interno()):
         return r
-    if perfil_do(effective_user() or "") == "consultoria":
+    if perfil_do(effective_user() or "") in RX_SO_EU:
         return _err(403, "Ação restrita à coordenação.")
     return None
 

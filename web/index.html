@@ -11498,7 +11498,9 @@ $('#pro-atribuir').addEventListener('click', abreAtribuirProto);
 // ("fulano@, ciclano@ e beltrano@") e cola inteira — o backend extrai os
 // endereços de qualquer formato, inclusive "Nome <email>".
 const acs = { dados: null, sel: new Set(), abas: new Set(), busca: '',
-              emails: '', papel: '', papelMod: '', mods: new Set() };
+              emails: '', papel: '', papelMod: '', mods: new Set(),
+              // Carteira de demandas (09/11/2026): segunda visão do mesmo modal.
+              vista: 'lib', cartBusca: '', cartFiltro: '', cartSel: new Set() };
 
 async function abreAcessos() {
   const fundo = document.createElement('div');
@@ -11509,6 +11511,10 @@ async function abreAcessos() {
         <div>
           <h3 class="font-totvs text-totvs-petroleo">Acessos · quem vê o quê</h3>
           <p class="text-xs text-slate-500 mt-0.5">Libere e-mails em um ou mais clientes e marque as abas que cada um enxerga.</p>
+          <div class="mt-2 flex gap-1 text-xs" id="acs-vistas">
+            <button data-vista="lib" class="px-3 py-1 rounded-md border">Liberações</button>
+            <button data-vista="cart" class="px-3 py-1 rounded-md border">🗂 Carteira de demandas</button>
+          </div>
         </div>
         <button data-fechar class="text-slate-400 hover:text-slate-700 text-2xl leading-none">×</button>
       </div>
@@ -11521,6 +11527,12 @@ async function abreAcessos() {
   fundo.querySelectorAll('[data-fechar]').forEach(b => b.addEventListener('click', fecha));
   fundo.addEventListener('click', e => { if (e.target === fundo) fecha(); });
   acs.el = fundo; acs.fecha = fecha;
+  acs.vista = 'lib'; acs.cartBusca = ''; acs.cartFiltro = ''; acs.cartSel = new Set();
+  fundo.querySelectorAll('[data-vista]').forEach(b => b.addEventListener('click', () => {
+    acs.vista = b.dataset.vista;
+    if (acs.dados) pintaAcessos();
+  }));
+  pintaVistasAcessos();
   acs.sel = new Set(); acs.abas = new Set(); acs.busca = '';
   acs.emails = ''; acs.papel = ''; acs.papelMod = ''; acs.mods = new Set();
   try {
@@ -11620,7 +11632,18 @@ function renderModulosAcessos() {
   if (pm) pm.addEventListener('change', () => { acs.papelMod = pm.value; });
 }
 
+function pintaVistasAcessos() {
+  acs.el.querySelectorAll('[data-vista]').forEach(b => {
+    const on = b.dataset.vista === acs.vista;
+    b.className = 'px-3 py-1 rounded-md border ' + (on
+      ? 'bg-totvs-petroleo text-white border-totvs-petroleo font-semibold'
+      : 'border-slate-300 text-slate-600 hover:bg-slate-50');
+  });
+}
+
 function pintaAcessos() {
+  pintaVistasAcessos();
+  if (acs.vista === 'cart') return pintaCarteira();
   const d = acs.dados;
   const perfil = perfilAcessos();
   // 23/10/2026: todas as abas são liberáveis, inclusive para o perfil
@@ -11692,6 +11715,7 @@ function pintaAcessos() {
             <option value="leitor">Leitor — somente visualização</option>
             <option value="comum">Comum — equipe TOTVS</option>
             <option value="consultoria">Consultoria — consultor que cadastra no projeto</option>
+            <option value="gestor">Gestor de Demandas — gere a carteira (Cockpit e Triagem)</option>
           </select>
           <label class="flex items-center gap-1.5 text-xs text-slate-500">
             <input type="checkbox" id="acs-aplicar-perfil" class="rounded"> aplicar a quem já existe
@@ -11818,6 +11842,176 @@ function pintaAcessos() {
     } catch (e) { alert('Não foi possível tirar: ' + e.message); }
   }));
   el('#acs-salvar').addEventListener('click', salvaAcessos);
+}
+
+// ── CARTEIRA DE DEMANDAS (09/11/2026) ──────────────────────────────────────
+// Qual Gestor de Demandas cuida de cada cliente. UM gestor por cliente. No
+// Cockpit Único e na Triagem o gestor vê SÓ estes clientes; aqui, no Projetos,
+// eles SOMAM aos projetos em que ele é consultor. Tabela própria
+// (cockpit.carteira_demandas) — não é usuario_clientes, onde mora o papel de
+// consultor com abas e módulos.
+function pintaCarteira() {
+  const d = acs.dados;
+  const corpo = acs.el.querySelector('#acs-corpo');
+  if (!d.carteira_ok) {
+    corpo.innerHTML = `<div class="border border-amber-300 bg-amber-50 rounded-md p-4 text-amber-900">
+      A tabela <code>cockpit.carteira_demandas</code> ainda não existe no banco. Aplique a migration
+      <b>0015_gestor_demandas</b> do cockpit-unico-tsc e reabra esta tela.</div>`;
+    return;
+  }
+  const gestores = d.usuarios.filter(u => u.perfil === 'gestor' && u.ativo !== false);
+  const ehGestor = Object.fromEntries(gestores.map(u => [u.email.toLowerCase(), true]));
+  const nomeUsr = Object.fromEntries(d.usuarios.map(u => [u.email.toLowerCase(), u.nome || u.email]));
+  const dono = Object.fromEntries(d.carteira.map(c => [c.customer, c.email.toLowerCase()]));
+  const qtd = {};
+  d.carteira.forEach(c => { const e = c.email.toLowerCase(); qtd[e] = (qtd[e] || 0) + 1; });
+  const semGestor = d.clientes.filter(c => !dono[c.customer]).length;
+  // Promovível: login interno, ativo, que ainda não é gestor nem admin.
+  const promoviveis = d.usuarios.filter(u => u.ativo !== false && !u.is_admin
+    && ['comum', 'consultoria', 'leitor'].includes(u.perfil || 'comum'));
+  const rotPerfil = d.perfil_label || {};
+
+  const busca = semAcento(acs.cartBusca);
+  const f = acs.cartFiltro;
+  const clis = d.clientes.filter(c =>
+    (!busca || semAcento(`${c.nome} ${c.customer}`).includes(busca))
+    && (!f || (f === '__sem' ? !dono[c.customer] : dono[c.customer] === f)));
+
+  const optsGestor = (atual) => {
+    const ops = [`<option value="">— sem gestor —</option>`]
+      .concat(gestores.map(g => `<option value="${escapeAttr(g.email.toLowerCase())}" ${
+        atual === g.email.toLowerCase() ? 'selected' : ''}>${escapeHtml(g.nome || g.email)}</option>`));
+    // Dono que deixou de ser gestor: a linha fica inerte (o recorte só vale para
+    // o perfil gestor). Mostrar, senão o select "mente" que está sem gestor.
+    if (atual && !ehGestor[atual])
+      ops.push(`<option value="${escapeAttr(atual)}" selected>⚠ ${escapeHtml(nomeUsr[atual] || atual)} (não é mais gestor)</option>`);
+    return ops.join('');
+  };
+
+  const chip = (rot, n, val, extra = '') => `<button data-cart-filtro="${escapeAttr(val)}"
+      class="chip-aba ${f === val ? 'ring-2 ring-totvs-blue' : ''}" style="${extra}">${rot} <b>${n}</b></button>`;
+
+  corpo.innerHTML = `
+    <div class="space-y-4">
+      <div class="bg-sky-50 border border-sky-100 rounded-md px-3 py-2 text-xs text-slate-700">
+        <b>Um gestor por cliente.</b> No <b>Cockpit Único</b> e na <b>Triagem</b>, o Gestor de Demandas vê
+        <b>só</b> os clientes desta carteira. Aqui no Projetos eles se somam aos projetos em que ele atua como consultor
+        (aba Liberações). Cliente sem gestor continua visível para o administrador e para quem tem liberação.
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="text-xs text-slate-500">Gestores:</span>
+        ${gestores.length ? gestores.map(g => `<span class="inline-flex items-center gap-1">
+            ${chip(escapeHtml(g.nome || g.email), qtd[g.email.toLowerCase()] || 0, g.email.toLowerCase(),
+                   'background:rgba(0,200,140,0.12);color:#0b7a5a')}
+            <button data-rebaixa="${escapeAttr(g.email)}" title="Voltar para Consultoria"
+              class="text-slate-400 hover:text-rose-600 text-xs">✕</button></span>`).join('')
+          : '<span class="text-xs text-slate-400">nenhum ainda — promova abaixo</span>'}
+        ${chip('sem gestor', semGestor, '__sem', 'background:rgba(248,67,67,0.12);color:#c03030')}
+        ${f ? '<button data-cart-filtro="" class="text-xs text-totvs-blue hover:underline">ver todos</button>' : ''}
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+        <span class="text-xs text-slate-500">Promover a Gestor de Demandas:</span>
+        <select id="cart-promover" class="px-2 py-1 border border-slate-300 rounded-md text-xs min-w-[16rem]">
+          <option value="">— escolha um login da TOTVS —</option>
+          ${promoviveis.map(u => `<option value="${escapeAttr(u.email)}">${escapeHtml(u.nome || u.email)} · ${
+            escapeHtml(rotPerfil[u.perfil || 'comum'] || u.perfil || 'comum')}</option>`).join('')}
+        </select>
+        <button id="cart-promover-btn" class="px-3 py-1 rounded-md bg-totvs-blue text-totvs-petroleo text-xs font-semibold hover:bg-totvs-verde">Promover</button>
+        <span class="text-[11px] text-slate-400">Os papéis de consultor nos projetos continuam valendo.</span>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+        <input id="cart-busca" type="search" placeholder="filtrar cliente…" value="${escapeAttr(acs.cartBusca)}"
+          class="px-2 py-1 border border-slate-300 rounded-md text-xs w-56">
+        <span class="text-xs text-slate-500">Marcados <b id="cart-n">${acs.cartSel.size}</b> → </span>
+        <select id="cart-lote" class="px-2 py-1 border border-slate-300 rounded-md text-xs">${optsGestor('')}</select>
+        <button id="cart-lote-btn" class="px-3 py-1 rounded-md border border-slate-300 text-xs hover:bg-slate-50">Aplicar aos marcados</button>
+        <button id="cart-marca-vis" class="text-xs text-totvs-blue hover:underline">marcar os ${clis.length} visíveis</button>
+        <button id="cart-limpa" class="text-xs text-totvs-blue hover:underline">limpar</button>
+        <p id="cart-msg" class="text-xs"></p>
+      </div>
+
+      <div class="border border-slate-200 rounded-md max-h-[26rem] overflow-y-auto">
+        <table class="w-full text-xs">
+          <thead class="bg-slate-50 text-slate-500 sticky top-0"><tr>
+            <th class="w-8 p-2"></th><th class="text-left p-2">Cliente</th>
+            <th class="text-left p-2 w-28">Código</th><th class="text-left p-2 w-16">Tipo</th>
+            <th class="text-left p-2 w-64">Gestor de Demandas</th></tr></thead>
+          <tbody>
+          ${clis.map(c => `<tr class="border-t border-slate-100 ${dono[c.customer] ? '' : 'bg-rose-50/40'}">
+              <td class="p-2 text-center"><input type="checkbox" data-cart-cli="${escapeAttr(c.customer)}"
+                ${acs.cartSel.has(c.customer) ? 'checked' : ''} class="rounded"></td>
+              <td class="p-2">${escapeHtml(c.nome || c.customer)}</td>
+              <td class="p-2 font-mono text-slate-500">${escapeHtml(c.customer)}</td>
+              <td class="p-2">${c.tipo ? `<span class="chip-aba">${escapeHtml(c.tipo)}</span>` : ''}</td>
+              <td class="p-2"><select data-cart-dono="${escapeAttr(c.customer)}"
+                class="w-full px-2 py-1 border border-slate-300 rounded-md">${optsGestor(dono[c.customer] || '')}</select></td>
+            </tr>`).join('') || '<tr><td colspan="5" class="p-6 text-center text-slate-400">Nenhum cliente com esse filtro.</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+
+  const el = (q) => acs.el.querySelector(q);
+  const msg = (txt, cls) => { const m = el('#cart-msg'); if (m) { m.className = 'text-xs ' + cls; m.textContent = txt; } };
+  const recarrega = async () => { acs.dados = await api('/api/acessos'); pintaAcessos(); };
+  const grava = async (customers, email) => api('/api/acessos/carteira', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ customers, email: email || null }) });
+
+  el('#cart-busca').addEventListener('input', (e) => {
+    acs.cartBusca = e.target.value; pintaAcessos();
+    const b = el('#cart-busca'); b.focus(); b.setSelectionRange(b.value.length, b.value.length);
+  });
+  acs.el.querySelectorAll('[data-cart-filtro]').forEach(b => b.addEventListener('click', () => {
+    acs.cartFiltro = acs.cartFiltro === b.dataset.cartFiltro ? '' : b.dataset.cartFiltro; pintaAcessos();
+  }));
+  acs.el.querySelectorAll('[data-cart-cli]').forEach(c => c.addEventListener('change', () => {
+    c.checked ? acs.cartSel.add(c.dataset.cartCli) : acs.cartSel.delete(c.dataset.cartCli);
+    el('#cart-n').textContent = acs.cartSel.size;
+  }));
+  el('#cart-marca-vis').addEventListener('click', () => { clis.forEach(c => acs.cartSel.add(c.customer)); pintaAcessos(); });
+  el('#cart-limpa').addEventListener('click', () => { acs.cartSel = new Set(); pintaAcessos(); });
+
+  // Troca 1-a-1: grava na hora, sem botão Salvar — é a operação mais comum.
+  acs.el.querySelectorAll('[data-cart-dono]').forEach(sel => sel.addEventListener('change', async () => {
+    const cust = sel.dataset.cartDono;
+    sel.disabled = true;
+    try { await grava([cust], sel.value); await recarrega();
+          msg(`${cust}: ${sel.value ? 'gestor definido' : 'sem gestor'}.`, 'text-emerald-700'); }
+    catch (e) { sel.disabled = false; msg(e.message, 'text-rose-600'); }
+  }));
+  el('#cart-lote-btn').addEventListener('click', async () => {
+    const lista = [...acs.cartSel];
+    if (!lista.length) return msg('Marque pelo menos um cliente.', 'text-amber-700');
+    const email = el('#cart-lote').value;
+    const quem = email ? (nomeUsr[email] || email) : 'ninguém (tirar o gestor)';
+    if (!confirm(`${lista.length} cliente(s) → ${quem}?\n\nQuem já cuidava desses clientes deixa de cuidar.`)) return;
+    try { await grava(lista, email); acs.cartSel = new Set(); await recarrega();
+          msg(`${lista.length} cliente(s) → ${quem}.`, 'text-emerald-700'); }
+    catch (e) { msg(e.message, 'text-rose-600'); }
+  });
+  const trocaPerfil = async (email, perfil) => api('/api/acessos/perfil', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, perfil }) });
+  el('#cart-promover-btn').addEventListener('click', async () => {
+    const email = el('#cart-promover').value;
+    if (!email) return msg('Escolha quem promover.', 'text-amber-700');
+    try { await trocaPerfil(email, 'gestor'); await recarrega();
+          msg(`${nomeUsr[email.toLowerCase()] || email} agora é Gestor de Demandas — distribua a carteira abaixo.`, 'text-emerald-700'); }
+    catch (e) { msg(e.message, 'text-rose-600'); }
+  });
+  acs.el.querySelectorAll('[data-rebaixa]').forEach(b => b.addEventListener('click', async () => {
+    const email = b.dataset.rebaixa;
+    const n = qtd[email.toLowerCase()] || 0;
+    if (!confirm(`Voltar ${nomeUsr[email.toLowerCase()] || email} para Consultoria?\n\n`
+      + (n ? `Os ${n} cliente(s) da carteira dele ficam marcados com ⚠ até você passar para outro gestor.`
+           : 'Ele não tem clientes na carteira.'))) return;
+    try { await trocaPerfil(email, 'consultoria'); await recarrega(); }
+    catch (e) { msg(e.message, 'text-rose-600'); }
+  }));
 }
 
 async function salvaAcessos() {
