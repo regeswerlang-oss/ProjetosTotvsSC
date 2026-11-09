@@ -1293,7 +1293,7 @@
             </select>
             <button id="core-reload" data-interno class="px-3 py-1.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50" title="Relê a fila da ZA3 e a trilha aberta">⚡ Atualizar agora</button>
             <label data-interno class="text-xs text-slate-600 flex items-center gap-1"><input type="checkbox" id="core-auto"> atualizar a cada 30 s</label>
-            <span class="ml-auto text-[11px] text-slate-400">Proposta no CRM → iPaaS/Etapa 1 → Etapa 2 → Painel de Projetos → Contratos → Retorno</span>
+            <span class="ml-auto text-[11px] text-slate-400">Proposta no CRM → iPaaS/Etapa 1 → Etapa 2 → Painel de Projetos → Contratos</span>
           </div>
           <div id="core-conteudo"></div>
         </div>
@@ -17811,7 +17811,7 @@ function coreItemFilaHTML(p) {
   return `
     <button class="core-item ${sel ? 'is-sel' : ''} ${CORE_NIVEL[nivel].cls}" data-core-msg="${escapeAttr(p.msgid || '')}" data-core-recno="${escapeAttr(p.recno || '')}">
       <div class="flex items-center gap-1.5">
-        ${coreSemaforo(p.stg1, 'ZA3_STG1')}${coreSemaforo(p.stg2, 'ZA3_STG2')}${coreSemaforo(p.stipa, 'ZA3_STIPA')}
+        ${coreSemaforo(p.stg1, 'ZA3_STG1')}${coreSemaforo(p.stg2, 'ZA3_STG2')}${core.lista?.retorno_ativo ? coreSemaforo(p.stipa, 'ZA3_STIPA') : ''}
         <span class="font-semibold text-slate-800 truncate">${escapeHtml(p.proposta || p.idcrm || p.msgid || '(sem id)')}</span>
         <span class="ml-auto text-[10px] text-slate-500 whitespace-nowrap">${coreData(p.dtinc)} ${escapeHtml(p.hrinc || '')}</span>
       </div>
@@ -17833,7 +17833,7 @@ function coreTrilhaHTML() {
       <div class="text-3xl mb-2">🧭</div>
       <p class="font-semibold text-slate-700">Escolha uma mensagem na fila</p>
       <p class="text-sm text-slate-500 mt-1">A trilha mostra, para aquela proposta, cada estágio da integração com os dados reais da base — e os conceitos do catálogo C01–C25 comparados com o que foi gravado.</p>
-      <p class="text-xs text-slate-400 mt-3">Fluxo: Proposta no CRM → iPaaS/Etapa 1 (ZA3) → Etapa 2 (Sincronizar) → Painel de Projetos (ZA0/ZA1/SB1/CTD) → Contratos (CN9/CNA/CNB) → Retorno.</p>
+      <p class="text-xs text-slate-400 mt-3">Fluxo: Proposta no CRM → iPaaS/Etapa 1 (ZA3) → Etapa 2 (Sincronizar) → Painel de Projetos (ZA0/ZA1/SB1/CTD) → Contratos (CN9/CNA/CNB).</p>
     </div>`;
   }
   const t = core.trilha;
@@ -17927,7 +17927,7 @@ function coreEstagioDetalheHTML(t) {
       <details class="core-memo mt-2"><summary>JSON completo recebido (ZA3_JSONFI / blocos)</summary><pre>${escapeHtml(JSON.stringify(t.json, null, 2) || '—')}</pre></details>`;
   } else if (id === 'etapa1') {
     corpo = `<h4>Registro na ZA3</h4>${coreCamposHTML(t.za3, 'ZA3', t, { ocultar: ['ZA3_JSONFI', 'ZA3_OPORT', 'ZA3_ITOPOR', 'ZA3_ORDVEN'] })}
-      ${(t.irmas || []).length > 1 ? `<h4 class="mt-3">Outras mensagens da mesma oportunidade <span class="text-slate-400 font-normal">(reprocessamentos)</span></h4>${coreTabela(t.irmas, ['ZA3_MSGID', 'ZA3_STG1', 'ZA3_STG2', 'ZA3_STIPA', 'ZA3_DTINC', 'ZA3_HRINC', 'ZA3_CONTRA'], t, 'ZA3')}` : ''}`;
+      ${(t.irmas || []).length > 1 ? `<h4 class="mt-3">Outras mensagens da mesma oportunidade <span class="text-slate-400 font-normal">(reprocessamentos)</span></h4>${coreTabela(t.irmas, ['ZA3_MSGID', 'ZA3_STG1', 'ZA3_STG2', ...(core.lista?.retorno_ativo ? ['ZA3_STIPA'] : []), 'ZA3_DTINC', 'ZA3_HRINC', 'ZA3_CONTRA'], t, 'ZA3')}` : ''}`;
   } else if (id === 'etapa2') {
     const z = t.za3 || {};
     corpo = `<div class="core-campos">
