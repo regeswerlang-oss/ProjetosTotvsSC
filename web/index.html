@@ -14527,7 +14527,45 @@ function intPrazo(emissao, hoje) {
   return `<span class="inline-flex px-2 py-0.5 rounded-full text-xs font-semibold whitespace-nowrap ${INT_NIVEL[nivel].pill}">${INT_NIVEL[nivel].ico} ${txt}</span>`;
 }
 const intNw = (t) => `<span class="whitespace-nowrap">${escapeHtml(t)}</span>`;
-const intStran = (v) => intNw(v ? `${v} · ${INT_TRA_STRAN[v] || 'não classificada'}` : '(vazio) · não classificada');
+// Legenda detalhada do CKO_STRAN (mesmas fontes de INT_TRA_STRAN): o que cada valor quer
+// dizer, o que o Transmite mostra, quem grava e o que fazer quando a nota para ali.
+const INT_TRA_STRAN_DET = [
+  { v: '0', transmite: '—', rot: 'Fora da integração',
+    txt: 'Documento com data anterior ao MV_DTINITR. O Protheus não tenta atualizar o Transmite.',
+    quem: 'Importador, ao gravar na CKOCOL', acao: 'Nada a fazer, salvo se o MV_DTINITR estiver errado.' },
+  { v: '1', transmite: 'ainda não informado', rot: 'Recebido, sem aviso',
+    txt: 'XML baixado para a CKOCOL e ainda não informado ao Transmite. É a condição para o SCHEDUPDTRA pedir "Exportada".',
+    quem: 'SCHEDIMPTRA (baixa)', acao: 'Parado aqui por muito tempo: conferir o agendamento do SCHEDUPDTRA.' },
+  { v: '2', transmite: 'Exportada', rot: 'Exportada',
+    txt: 'O Transmite já sabe que o XML chegou, mas ainda não há pré-nota nem documento. Em geral está no Reprocessar do Monitor por erro (fornecedor, produto, amarração).',
+    quem: 'SCHEDIMPTRA / SCHEDUPDTRA', acao: 'Ver o código de erro (CKO_CODERR) e corrigir o cadastro ou lançar à mão.' },
+  { v: '3', transmite: 'Integrada', rot: 'Integrada (pré-nota)',
+    txt: 'Pré-nota gerada (SF1/SD1, F1_STATUS diferente de A), ainda não classificada.',
+    quem: 'SCHEDUPDTRA', acao: 'Classificar a pré-nota no Documento de Entrada.' },
+  { v: '4', transmite: 'Classificada', rot: 'Classificada',
+    txt: 'Documento classificado (F1_STATUS = A). Para o Transmite a nota está concluída no ERP e a Confirmação da Operação pode ser manifestada.',
+    quem: 'SCHEDUPDTRA', acao: 'Nada. Só avança se número, série, fornecedor e loja forem iguais na SDS e na SF1.' },
+];
+const intStran = (v) => {
+  const d = INT_TRA_STRAN_DET.find(x => x.v === v);
+  const tip = d ? `${d.rot} — ${d.txt} O que fazer: ${d.acao}` : 'Sem situação gravada: XML ainda não processado pelo Importador.';
+  return `<span class="whitespace-nowrap cursor-help border-b border-dotted border-slate-400" title="${escapeHtml(tip)}">${
+    escapeHtml(v ? `${v} · ${INT_TRA_STRAN[v] || 'não classificada'}` : '(vazio) · não classificada')}</span>`;
+};
+/** Quadro fixo com a legenda detalhada do CKO_STRAN (aba Integrações → Transmite). */
+function intTraLegendaStran() {
+  return `<details class="mb-4 rounded-lg border border-slate-200 bg-white" data-int-legenda-stran open>
+    <summary class="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 uppercase tracking-wide">Legenda do CKO_STRAN — situação do XML no Importador e no Transmite</summary>
+    <div class="px-3 pb-3">${intTabela([
+      { rot: 'Valor', fmt: d => `<b class="font-mono">${d.v}</b>` },
+      { rot: 'Situação', fmt: d => `<b class="whitespace-nowrap">${escapeHtml(d.rot)}</b>` },
+      { rot: 'No Transmite', fmt: d => intNw(d.transmite) },
+      { rot: 'O que significa', fmt: d => escapeHtml(d.txt) },
+      { rot: 'Quem grava', fmt: d => escapeHtml(d.quem) },
+      { rot: 'O que fazer', fmt: d => escapeHtml(d.acao) }], INT_TRA_STRAN_DET)}
+    <p class="text-[11px] text-slate-500 mt-1">O SCHEDUPDTRA só avança a situação com CKO_CHVDOC preenchido, CKO_DT_IMP posterior ao MV_DTINITR e CKO_CODEDI 109, 214, 273 ou 319. Fonte: Central de Atendimento TOTVS (artigos 19877027865495, 23130965724823, 23130208065303, 22989114562839 e 20324530948119).</p></div>
+  </details>`;
+}
 // Coleta anterior a 09/11 gravou "fiscal" para COM003/COM004: é o mesmo grupo.
 const intTraQ = (q) => (q === 'fiscal' ? 'nao_atendido' : q);
 const intTraQuem = (q) => {
@@ -14681,6 +14719,7 @@ function intCaixaTransmite(B, hoje, nivel) {
         { rot: 'Emissão', fmt: l => intData(l.EMISSAO) }, { rot: 'Prazo do evento', fmt: l => intPrazo(l.EMISSAO, hoje) },
         { rot: 'Importado', fmt: l => intData(l.DT_IMP) }] : []),
       { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhum documento em revisão.')) +
+    intTraLegendaStran() +
     intSub('XML importados por situação (CKOCOL)', B.tra_fila, (ls) => intTabela([
       { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) }, { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) },
       { k: 'QTD', rot: 'XML', dir: 1 }, { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) },

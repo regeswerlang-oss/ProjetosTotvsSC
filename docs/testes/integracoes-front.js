@@ -289,6 +289,8 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
     await pg.screenshot({ path: process.env.SHOT });
     await pg.$eval('[data-int-tra-quem="cadastro"]', n => n.scrollIntoView({ block: 'center' })).catch(() => {});
     await pg.screenshot({ path: process.env.SHOT.replace('.png', '-2.png') });
+    const legEl = await pg.$('[data-int-legenda-stran]');
+    if (legEl) await legEl.screenshot({ path: process.env.SHOT.replace('.png', '-3.png') });
   }
   const rd = await txt('#int-conteudo');
   t('transmite: 9 cartões, nenhum de RH', (await pg.$$('[data-int-ind]')).length === 9 && await pg.$('[data-int-ind^="quirons"]') === null);
@@ -310,6 +312,10 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('complementos: a lista principal mostra só as normais', await pg.$$eval('#int-conteudo table', ts => {
     const t0 = ts.find(t => /000013687/.test(t.textContent)); return !!t0 && !/000689328|000041132/.test(t0.textContent); }));
   t('erros: quadro do Importador', /Por que o Importador parou/.test(rd));
+  const leg = await pg.$eval('[data-int-legenda-stran]', n => n.textContent.replace(/\s+/g, ' ')).catch(() => '');
+  t('legenda do CKO_STRAN com os 5 valores e o que fazer', /Fora da integração/.test(leg) && /Recebido, sem aviso/.test(leg)
+    && /Integrada \(pré-nota\)/.test(leg) && /Classificar a pré-nota/.test(leg) && /MV_DTINITR/.test(leg), leg.slice(0, 120));
+  t('CKO_STRAN com dica ao passar o mouse', await pg.$eval('#int-conteudo span[title^="Exportada —"]', n => /O que fazer/.test(n.title)).catch(() => false));
   const tq = async (q) => pg.$eval(`[data-int-tra-quem="${q}"]`, n => n.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
   t('erros: contagem por quem resolve', /Cadastro 35/.test(await tq('cadastro')) && /Sem ação 55/.test(await tq('nada'))
     && /Não mapeado 2/.test(await tq('outros')) && /Não atendido pelo Importador 34/.test(await tq('nao_atendido')) && await pg.$('[data-int-tra-quem="fiscal"]') === null, await tq('nao_atendido'));
