@@ -157,21 +157,24 @@
      lugar único, previsível, e o painel exportado (#tab-*) deixa de carregar
      botão nenhum. A régua de cada aba ficou só com CONTEXTO e FILTRO
      (cliente, selo do ambiente, Situação atual/Evolução, ↻ Atualizar). */
-  .rail-grupo { display: flex; flex-wrap: wrap; gap: 6px; }
+  /* 09/11/2026: virou BARRA horizontal acima do card das abas — mesmos ids e
+     grupos (data-rail), só o layout mudou: botões em linha, grupo global
+     (Exportar/Gmail) encostado à direita, sub-rótulo inline. */
+  #tab-acoes:not(.hidden) { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .rail-grupo { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .rail-grupo.hidden { display: none !important; }
-  .rail-btn { text-align: left; padding: 6px 9px; border-radius: 6px;
+  #tab-acoes > .rail-grupo.rail-sep { margin-left: auto; margin-top: 0; padding-top: 0; border-top: 0;
+                                      padding-left: 10px; border-left: 1px solid var(--tsc-line); }
+  .rail-btn { text-align: left; padding: 5px 10px; border-radius: 6px; white-space: nowrap;
               font-size: 12.5px; line-height: 1.25; color: var(--tsc-t1); background: var(--tsc-s1);
               border: 1px solid var(--tsc-line); cursor: pointer; }
   .rail-btn:hover { background: rgba(95,158,221,0.14); border-color: var(--tsc-line2); }
   .rail-btn-cta { background: var(--totvs-blue); border-color: var(--totvs-blue);
                   color: var(--tsc-t1); font-weight: 700; }
   .rail-btn-cta:hover { background: var(--totvs-verde); border-color: var(--totvs-verde); }
-  .rail-sub { display: block; font-size: 10px; font-weight: 400; opacity: .75; margin-top: 1px; }
-  .rail-sep { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--tsc-line); }
-  @media (min-width: 768px) {
-    .rail-grupo { flex-direction: column; flex-wrap: nowrap; }
-    .rail-btn { width: 100%; }
-  }
+  .rail-sub { display: inline; font-size: 10px; font-weight: 400; opacity: .75; margin-left: 5px; }
+  .rail-sub::before { content: "· "; }
+  .rail-btn.rail-sep { margin-left: 6px; padding-left: 10px; border-top: 0; margin-top: 0; padding-top: 5px; }
 
   /* ── Aba Raio X — escopo fechado em .rx para não vazar nas outras abas ───── */
   .rx {
@@ -398,7 +401,7 @@
 
   /* Rail de ações */
   body .rail-btn { border-radius: 9px; transition: background-color .15s, border-color .15s, transform .12s, box-shadow .15s; }
-  body .rail-btn:hover { transform: translateX(2px); }
+  body .rail-btn:hover { transform: translateY(-1px); }
   body .rail-btn-cta { background: linear-gradient(135deg, #00DBFF, #19e0ff); box-shadow: 0 4px 12px -6px rgba(0,219,255,.7); }
   body .rail-btn-cta:hover { background: linear-gradient(135deg, rgba(61,255,222,0.14), #00DBFF); }
 
@@ -630,16 +633,17 @@
         </div>
       </div>
 
-      <!-- Detalhe = rail de ações (esquerda) + card das abas (direita).
-           Em telas < 768px o rail vira uma faixa horizontal acima do card. -->
-      <div class="flex flex-col md:flex-row items-stretch md:items-start gap-3">
+      <!-- Detalhe = barra de ações (em cima) + card das abas. 09/11/2026: o
+           rail saiu da lateral para uma faixa horizontal acima do card, para
+           devolver a largura às abas (pedido do Reges). -->
+      <div class="flex flex-col gap-3">
 
-      <!-- RAIL DE AÇÕES — id mantido em #tab-acoes de propósito: setTab() e
+      <!-- BARRA DE AÇÕES — id mantido em #tab-acoes de propósito: setTab() e
            aplicaAbas() já sabem mostrar/esconder esse id. Grupos por aba via
-           data-rail; o grupo global (Exportar/Gmail) vale para TODAS. -->
-      <aside id="tab-acoes" class="hidden w-full md:w-[178px] md:shrink-0 self-start md:sticky md:top-[84px]
-                                   bg-white rounded-lg border border-slate-200 p-2.5">
-        <p class="px-1 pb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ações</p>
+           data-rail; o grupo global (Exportar/Gmail) vale para TODAS e fica à
+           direita. -->
+      <aside id="tab-acoes" class="hidden w-full bg-white rounded-lg border border-slate-200 px-3 py-2">
+        <p class="text-[10px] font-semibold uppercase tracking-wide text-slate-400 mr-1 self-center">Ações</p>
 
         <div id="acoes-arvore" data-rail="arvore" class="rail-grupo hidden">
           <button data-act="expand-all"   class="rail-btn">▾ Expandir tudo</button>
