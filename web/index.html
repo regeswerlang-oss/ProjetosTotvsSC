@@ -14092,7 +14092,10 @@ const intGruposCfg = () => integ.dados?.ambiente_cfg?.integ_grupos || ['rh'];
 // Transmite: CKO_STRAN = último status aceito pelo Transmite (Central TOTVS
 // 19877027865495 e 23130965724823; o 0 visto na base em XML que o Importador
 // não processa, ex.: COM052).
-const INT_TRA_STRAN = { '0': 'não processado', '1': 'pendente', '2': 'Exportada', '3': 'Integrada', '4': 'Classificada' };
+// CKO_STRAN — Central de Atendimento TOTVS (artigos 19877027865495, 23130965724823,
+// 23130208065303, 22989114562839 e 20324530948119), lidos em 09/11/2026.
+const INT_TRA_STRAN = { '0': 'fora da integração (antes do MV_DTINITR)', '1': 'recebido, sem aviso ao Transmite',
+                        '2': 'Exportada', '3': 'Integrada (pré-nota)', '4': 'Classificada' };
 const INT_TRA_TIPO_NF = { N: 'normal', I: 'compl. ICMS', P: 'compl. IPI', C: 'compl. preço/frete', D: 'devolução', B: 'beneficiamento' };
 // = TRA_TIPOS_FORA (api): complemento não passa pelo Transmite — lista própria.
 const INT_TRA_FORA = ['C', 'I', 'P'];
@@ -14107,7 +14110,9 @@ const INT_TRA_QUEM = {
 };
 const INT_TRA_TIPO = { NFE: 'NF-e', NFSE: 'NFS-e', CTE: 'CT-e' };
 const INT_TRA_DS = { B: 'revisão cadastral' };
-const INT_TRA_EDI = { '109': 'NF-e', '214': 'CT-e' };
+// 109/214/273/319 são os códigos que o SCHEDUPDTRA trata (Central 23130965724823).
+// 319 = NFS-e pela chave na base (data|CNPJ|número, sem os 44 dígitos); 273 sem descrição oficial.
+const INT_TRA_EDI = { '109': 'NF-e', '214': 'CT-e', '319': 'NFS-e' };
 const INT_TRA_PRAZO = 90, INT_TRA_AMARELO = 60, INT_TRA_VERMELHO = 80;   // = TRA_PRAZO* (api)
 const INT_TIPO_RUM = { '1': 'Funcionário', '2': 'Afastamento' };
 const INT_STATUS_RUM = { '0': 'Não integrado', '3': 'Inconsistência', '4': 'Aguardando retorno', '6': 'Integrado' };

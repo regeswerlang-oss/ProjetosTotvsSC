@@ -9231,6 +9231,10 @@ TRA_CODERR = {
     "COM005": ("Chave de NF-e já registrada em outra nota de entrada", "duplicado"),
     "COM007": ("Fornecedor inexistente na base", "cadastro"),
     "COM020": ("CT-e cita documento de entrada inexistente", "cadastro"),
+    # COM025: na Rio Deserto (09/11/2026) eram NFS-e já digitadas à mão antes de o XML
+    # chegar, e NFS-e com número repetido (250000000, 260000000) — conferir na SF1.
+    "COM025": ("Documento já processado — conferir se já está lançado no Documento de Entrada", "duplicado"),
+    "COM030": ("Fornecedor bloqueado na base", "cadastro"),
     "COM036": ("CT-e cancelado", "nada"),
     "COM040": ("NF-e cancelada", "nada"),
     "COM044": ("Documento de entrada já existe no Monitor", "duplicado"),
