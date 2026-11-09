@@ -211,6 +211,11 @@ confere('lista IN escapa aspas', ns['_core_lista_in'](["a'b", 'c', ' c ']) == "'
 confere('lista IN vazia', ns['_core_lista_in'](['', None]) is None)
 confere('data AAAAMMDD', ns['_core_data']('20261109') == '09/11/2026')
 confere('legendas STG2', ns['CORE_LEGENDAS']['ZA3_STG2']['S'] == 'Sucesso')
+# ORDER BY só com colunas do dicionário (ORA-00904 ZA4_SEQ, 09/11)
+confere('ordem: só colunas existentes', ns['_core_ordem'](DIC, 'ZA4', 'ZA4_CODPRJ', 'ZA4_SEQUEN', 'ZA4_SEQ') == 'ZA4_CODPRJ, ZA4_SEQUEN')
+confere('ordem: DESC preservado', ns['_core_ordem'](DIC, 'CN9', 'CN9_REVISA DESC') == 'CN9_REVISA DESC')
+confere('ordem: nada existe → RECNO', ns['_core_ordem'](DIC, 'ZA4', 'ZA4_XPTO') == 'R_E_C_N_O_')
+confere('chave ZA4 padrão CODPRJ', ns['_core_chave'](DIC, 'ZA4_PRJ') == 'ZA4_CODPRJ')
 
 print(f'{ok} ok, {falhou} falhou')
 raise SystemExit(1 if falhou else 0)
