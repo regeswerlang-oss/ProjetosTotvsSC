@@ -312,6 +312,15 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('complementos: a lista principal mostra só as normais', await pg.$$eval('#int-conteudo table', ts => {
     const t0 = ts.find(t => /000013687/.test(t.textContent)); return !!t0 && !/000689328|000041132/.test(t0.textContent); }));
   t('erros: quadro do Importador', /Por que o Importador parou/.test(rd));
+  // clique no cartão → detalhamento abaixo
+  await pg.click('[data-int-ind="tra_sem_monitor"], [data-int-ind="tra_sem_retorno"]');
+  await pg.waitForTimeout(400);
+  const flash = await pg.$eval('.int-flash', n => n.dataset.intSub || '').catch(() => '');
+  t('cartão leva ao detalhamento (e destaca)', /Lançadas fora do Importador — notas uma a uma|Classificadas no Protheus sem/.test(flash), flash);
+  const todosTem = await pg.$$eval('#int-conteudo .int-link[data-int-ind]', (cs, M) => cs.every(c => {
+    const t = M[c.dataset.intInd]; return !t || !!document.querySelector(`[data-int-sub="${t.replace(/"/g, '\\"')}"]`); }),
+    await pg.evaluate(() => INT_DETALHE));
+  t('todo cartão do Transmite aponta para um detalhe que existe', todosTem);
   const leg = await pg.$eval('[data-int-legenda-stran]', n => n.textContent.replace(/\s+/g, ' ')).catch(() => '');
   t('legenda do CKO_STRAN com os 5 valores e o que fazer', /Fora da integração/.test(leg) && /Recebido, sem aviso/.test(leg)
     && /Integrada \(pré-nota\)/.test(leg) && /Classificar a pré-nota/.test(leg) && /MV_DTINITR/.test(leg), leg.slice(0, 120));

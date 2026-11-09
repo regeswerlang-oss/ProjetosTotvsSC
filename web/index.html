@@ -80,6 +80,14 @@
   .int-card[data-int-nivel="verde"]    { background:linear-gradient(90deg, rgba(34,197,94,.07), var(--tsc-s1) 55%); }
   .int-card[data-int-nivel="info"]     { background:linear-gradient(90deg, rgba(56,189,248,.08), var(--tsc-s1) 55%); }
   .int-card svg { color:var(--int-acc) !important; opacity:.75; }
+  .int-link { cursor:pointer; transition:border-color .15s, transform .15s; }
+  .int-link:hover { border-color:var(--tsc-line2); transform:translateY(-1px); }
+  .int-link:hover .int-ver, .int-link:focus-visible .int-ver { color:var(--tsc-blue); }
+  #int-conteudo [data-int-sub], #int-conteudo .rel-bloco { scroll-margin-top:140px; }
+  .int-flash { animation:intFlash 2.2s ease-out; border-radius:10px; }
+  @keyframes intFlash { 0%,35% { box-shadow:0 0 0 2px var(--tsc-blue), 0 0 24px -4px rgba(0,219,255,.45); }
+                        100% { box-shadow:0 0 0 2px transparent; } }
+  @media (prefers-reduced-motion: reduce) { .int-flash { animation:none; outline:2px solid var(--tsc-blue); } .int-link:hover { transform:none; } }
   .rs-vazio { font-size:12px; color:var(--tsc-t2); padding:14px 0; text-align:center; }
 
   .bar-track { background: var(--tsc-s3); height: 0.5rem; border-radius: 999px; overflow: hidden; position: relative; }
@@ -14337,13 +14345,58 @@ function intSpark(chave) {
 function intCartao(i) {
   const n = INT_NIVEL[i.nivel] || INT_NIVEL.cinza;
   const valor = i.valor === null || i.valor === undefined ? '—' : i.valor;
-  return `<div class="rounded-lg ${n.card} px-4 py-3 flex flex-col" style="--int-acc:${n.cor}" data-int-nivel="${escapeHtml(i.nivel || 'cinza')}" data-int-ind="${escapeHtml(i.chave)}">
+  return `<div class="rounded-lg ${n.card} int-link px-4 py-3 flex flex-col" style="--int-acc:${n.cor}" data-int-nivel="${escapeHtml(i.nivel || 'cinza')}" data-int-ind="${escapeHtml(i.chave)}" data-int-grupo="${escapeHtml(i.grupo || '')}" role="button" tabindex="0" title="Ver o detalhamento abaixo">
     <div class="flex items-start justify-between gap-2">
       <p class="text-xs text-slate-600 font-semibold">${escapeHtml(i.rotulo)}</p>${intPill(i.nivel)}</div>
     <p class="text-2xl font-totvs text-totvs-petroleo mt-1">${escapeHtml(String(valor))}</p>
     <p class="text-xs text-slate-600 mt-1 leading-snug">${escapeHtml(i.texto || '')}</p>
-    ${intSpark(i.chave)}
+    <div class="flex items-end justify-between gap-2 mt-auto pt-1">${intSpark(i.chave)}<span class="int-ver text-[11px] text-slate-500 whitespace-nowrap">Ver detalhe ↓</span></div>
   </div>`;
+}
+
+// Cartão → tabela de detalhe da caixa abaixo (pelo título do intSub). Sem par aqui,
+// o clique leva à caixa do grupo.
+const INT_DETALHE = {
+  quirons_fila: 'Fila pendente por tabela', quirons_envios: 'Envios por dia (7 dias)', quirons_erros: 'Erros de envio (7 dias)',
+  ahgora_inconsistencias: 'Registros para agir (inconsistência, retorno perdido, não enviado)',
+  ahgora_aguardando: 'Registros para agir (inconsistência, retorno perdido, não enviado)',
+  ahgora_nao_enviados: 'Registros para agir (inconsistência, retorno perdido, não enviado)',
+  sst_pendentes: 'Não transmitidos',
+  tra_sem_retorno: 'Classificadas no Protheus sem "Classificada" no Transmite',
+  tra_prazo: 'Classificadas no Protheus sem "Classificada" no Transmite',
+  tra_complementos: 'Complementos fora do Transmite (Tipo NF C · I · P)',
+  tra_hora_futura: 'Data/hora de digitação no futuro',
+  tra_revisao: 'Em revisão cadastral (B)',
+  tra_fila: 'XML há mais de 30 dias sem "Classificada"',
+  tra_entrada: 'XML importados por situação (CKOCOL)',
+  tra_sem_monitor: 'Lançadas fora do Importador — notas uma a uma',
+  tra_erros: 'Por que o Importador parou (CKO_CODERR)',
+  tra_nao_atendidos: 'Não atendidos pelo Importador, um a um (lançar à mão)',
+  tra_params: 'Parâmetros do Importador (SX6)',
+  crm_recebidas: 'Registros por etapa (ZA3)', crm_erros: 'Propostas com erro ou paradas na fila (ZA3)',
+  crm_fila: 'Propostas com erro ou paradas na fila (ZA3)', crm_retorno: 'Rastreio: proposta → projetos → contrato → medições',
+  crm_contratos: 'Contratos gerados (CN9)', crm_medicoes: 'Medições dos contratos gerados (CND)',
+  crm_cad_produtos: 'Produtos ativos sem preço em tabela vigente', crm_cad_tabelas: 'Tabelas de preço (DA0)',
+  crm_params: 'Parâmetros da integração (SX6)',
+  eai_sem_retorno: 'Mensagens abertas, das mais antigas (até 30 por mensagem)',
+  eai_aguardando: 'Mensagens abertas, das mais antigas (até 30 por mensagem)',
+  eai_falhas: 'Mensagens abertas, das mais antigas (até 30 por mensagem)',
+  eai_canal: 'Fila por mensagem, status e canal (XX3)', eai_cobertura: 'Por tipo de informação',
+  eai_depara: 'De-para gravado (XXF)', eai_agendamentos: 'Agendamentos (XX1 · XX2 · SCHDTSK)',
+  eai_jobs: 'Agendamentos (XX1 · XX2 · SCHDTSK)', eai_params: 'Parâmetros do EAI (SX6)',
+};
+function intIrDetalhe(chave, grupo) {
+  const caixa = grupo === 'quirons' && chave === 'quirons_laudo' ? 'config' : grupo;
+  if (caixa && !integ.abertas.has(caixa)) { integ.abertas.add(caixa); renderIntegracoes(); }
+  const tit = INT_DETALHE[chave];
+  let alvo = tit && [...document.querySelectorAll('#int-conteudo [data-int-sub]')].find(n => n.dataset.intSub === tit);
+  if (!alvo && caixa) alvo = document.querySelector(`#int-conteudo [data-int-caixa="${caixa}"]`)?.closest('.rel-bloco');
+  if (!alvo) return false;
+  const lento = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  alvo.scrollIntoView({ behavior: lento ? 'smooth' : 'auto', block: 'start' });
+  alvo.classList.remove('int-flash'); void alvo.offsetWidth; alvo.classList.add('int-flash');
+  setTimeout(() => alvo.classList.remove('int-flash'), 2200);
+  return true;
 }
 
 function intTabela(cols, linhas, vazio = 'Nada a mostrar.') {
@@ -14364,7 +14417,7 @@ function intSub(titulo, b, corpo) {
   else if (!b.ok) miolo = `<p class="text-xs text-slate-500 py-2">${b.ausente ? 'ℹ' : '⚠'} ${escapeHtml(b.erro || 'Não lido.')}</p>`;
   else miolo = corpo(b.linhas || []) + (b.truncado
     ? `<p class="text-xs text-amber-800 mt-1">Mostrando as ${b.limite} primeiras linhas — a lista foi cortada.</p>` : '');
-  return `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">${escapeHtml(titulo)}</h4>${miolo}</div>`;
+  return `<div class="mb-4" data-int-sub="${escapeHtml(titulo)}"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">${escapeHtml(titulo)}</h4>${miolo}</div>`;
 }
 
 function intCaixa(id, titulo, sub, nivel, corpoFn) {
@@ -14691,7 +14744,7 @@ function intCaixaTransmite(B, hoje, nivel) {
         escapeHtml(Object.entries(tipos).map(([t, q]) => `${t} · ${INT_TRA_TIPO_NF[t] || '?'}: ${q}`).join(' · '))}.</p>` : '') +
         intTabela(intTraColsSemRetorno(cs, hoje, true), cs, 'Nenhuma nota de complemento sem retorno.');
     }) +
-    `<div class="mb-4"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">Por que o Importador parou (CKO_CODERR)</h4>${intTraErros(B.tra_erros)}</div>` +
+    `<div class="mb-4" data-int-sub="Por que o Importador parou (CKO_CODERR)"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">Por que o Importador parou (CKO_CODERR)</h4>${intTraErros(B.tra_erros)}</div>` +
     intSub('XML parados com motivo do Importador, um a um', B.tra_erros_lista, (ls) => intTabela(intTraColsErros(B),
       ls.filter(l => intTraQErro(B, l) !== 'nao_atendido'), 'Nenhum XML com motivo de erro.')) +
     intSub('Não atendidos pelo Importador, um a um (lançar à mão)', B.tra_erros_lista, (ls) => intTabela(intTraColsErros(B),
@@ -15155,6 +15208,11 @@ function ligaIntegracoes() {
     renderIntegracoes();
   }));
   $$('#int-conteudo [data-int-amb]').forEach(b => b.addEventListener('click', abreAmbienteIntegracoes));
+  $$('#int-conteudo .int-link[data-int-ind]').forEach(c => {
+    const ir = () => intIrDetalhe(c.dataset.intInd, c.dataset.intGrupo);
+    c.addEventListener('click', (ev) => { if (!ev.target.closest('circle')) ir(); });
+    c.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ir(); } });
+  });
   $$('#int-conteudo [data-int-semmon]').forEach(sl => sl.addEventListener('change', () => {
     integ.semMon[sl.dataset.intSemmon] = sl.value;
     renderIntegracoes();
