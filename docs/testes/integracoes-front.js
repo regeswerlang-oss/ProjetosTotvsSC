@@ -237,21 +237,32 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
       { FILIAL: '0102', DOC: '000000001', SERIE: '1', FORNECEDOR: 'F00002', LOJA: '01', EMISSAO: '20260701', DTDIGIT: '20261002',
         HORA: '11:00:00', STRAN: '', CODEDI: '214', DT_IMP: '20260702', DS_STATUS: '', CHAVE: '4226<i>zz</i>' },
       { FILIAL: '010113', DOC: '000121659', SERIE: '2', FORNECEDOR: '83286500', LOJA: '0012', EMISSAO: '20261020', DTDIGIT: '20261020',
-        HORA: '11:16:00', STRAN: '2', CODEDI: '109', DT_IMP: '20261020', DS_STATUS: '', TEM_SDS: 'S', TIPO_NF: 'I', CHAVE: '42261083286500001211550020001216591539161896' }] },
+        HORA: '11:16:00', STRAN: '2', CODEDI: '109', DT_IMP: '20261020', DS_STATUS: '', TEM_SDS: 'S', TIPO_NF: 'N', CHAVE: '42261083286500001211550020001216591539161896' },
+      { FILIAL: '010112', DOC: '000689328', SERIE: '2', FORNECEDOR: '04195643', LOJA: '0006', EMISSAO: '20261015', DTDIGIT: '20261020',
+        HORA: '13:57:24', STRAN: '2', CODEDI: '214', DT_IMP: '20261015', DS_STATUS: '', TEM_SDS: 'S', TIPO_NF: 'C', CHAVE: '35261004195643000601570020006893281066893285' },
+      { FILIAL: '010112', DOC: '000041132', SERIE: '1', FORNECEDOR: '08432868', LOJA: '0001', EMISSAO: '20261028', DTDIGIT: '20261028',
+        HORA: '16:01:36', STRAN: '2', CODEDI: '109', DT_IMP: '20261028', DS_STATUS: '', TEM_SDS: 'N', TIPO_NF: 'I', CHAVE: '42261008432868000172550010000411321211839841' }] },
     tra_erros: { ok: true, linhas: [], resumo: { acao: 37, sem_acao: 55, sem_erro: 614, sem_erro_por_situacao: { '2': 614 },
       mais_antigo_acao: '20261001', codigos: [
         { codigo: 'COM007', qtd: 35, tipos: { NFE: 30, NFSE: 5 }, texto: 'Fornecedor inexistente na base', fonte: 'padrao', quem: 'cadastro', mais_antigo: '20261001', mais_recente: '20261030' },
         { codigo: 'COM099', qtd: 2, tipos: { CTE: 2 }, texto: 'Código sem <b>descrição</b>', fonte: 'nenhuma', quem: 'outros', mais_antigo: '20261010', mais_recente: '20261010' },
         { codigo: 'COM052', qtd: 34, tipos: { NFE: 34 }, texto: 'Este XML não pertence a nenhuma empresa/filial e não podera ser processado.', fonte: 'base', quem: 'nada', mais_antigo: '20261001', mais_recente: '20261029' },
-        { codigo: 'COM040', qtd: 21, tipos: { NFE: 21 }, texto: 'NF-e cancelada', fonte: 'padrao', quem: 'nada', mais_antigo: '20260920', mais_recente: '20261029' }] } },
+        { codigo: 'COM040', qtd: 21, tipos: { NFE: 21 }, texto: 'NF-e cancelada', fonte: 'padrao', quem: 'nada', mais_antigo: '20260920', mais_recente: '20261029' },
+        { codigo: 'COM004', qtd: 25, tipos: { NFE: 25 }, texto: 'Tipo NF-e de ajustes não será tratado pelo Importador XML.', fonte: 'base', quem: 'fiscal', mais_antigo: '20261001', mais_recente: '20261104' },
+        { codigo: 'COM047', qtd: 9, tipos: { CTE: 9 }, texto: 'Complemento de imposto não é tratado pelo Totvs Colaboração/Importador.', fonte: 'base', quem: 'outros', mais_antigo: '20261104', mais_recente: '20261104' }] } },
     tra_erros_lista: { ok: true, linhas: [
-      { ERRO: 'COM007', STRAN: '2', CODEDI: '109', DT_IMP: '20261001', DOC: '123', DESTINO: '83286500001211', CHAVE: '42261000000000000000550010000001231000000010' }] },
+      { ERRO: 'COM007', STRAN: '2', CODEDI: '109', DT_IMP: '20261001', DOC: '123', DESTINO: '83286500001211', CHAVE: '42261000000000000000550010000001231000000010' },
+      { ERRO: 'COM047', STRAN: '2', CODEDI: '214', DT_IMP: '20261104', DOC: '777', DESTINO: '83286500001211', CHAVE: '42261100000000000000570010000007771000000010' }] },
     tra_sem_retorno: { ok: true, linhas: [{ FILIAL: '0101', QTD: '31', DIGIT_MAIS_ANTIGA: '20260905', EMISSAO_MAIS_ANTIGA: '20260701', VENCIDAS: '1', CRITICAS: '2', ATENCAO: '5' }] },
     tra_futuras_lista: { ok: true, linhas: [] },
     tra_revisao: { ok: true, linhas: [{ STATUS: 'B', QTD: '6', MAIS_ANTIGO: '20260920', MAIS_RECENTE: '20261010' }] },
     tra_revisao_lista: { ok: false, erro: 'Não lido: o tempo da coleta acabou antes deste bloco.', linhas: [] },
     tra_fila: { ok: true, linhas: [{ CODEDI: '109', STRAN: '4', QTD: '300', MAIS_ANTIGO: '20260701', MAIS_RECENTE: '20261016' }] },
     tra_fila_antigos: { ok: true, linhas: [] }, tra_sem_monitor: { ok: true, linhas: [] },
+    tra_sem_monitor_lista: { ok: true, linhas: [
+      { FILIAL: '010113', ESPECIE: 'SPED', DOC: '000500001', SERIE: '1', FORNECEDOR: 'F1', LOJA: '01', EMISSAO: '20261109', DTDIGIT: '20261109', HORA: '08:00:00', TIPO_NF: 'N', CHAVE: 'K1', STRAN: '2', NA_CKO: '1' },
+      { FILIAL: '010113', ESPECIE: 'NFCOM', DOC: '000500002', SERIE: '1', FORNECEDOR: 'F2', LOJA: '01', EMISSAO: '20261009', DTDIGIT: '20261009', HORA: '09:00:00', TIPO_NF: 'N', CHAVE: 'K2', STRAN: '', NA_CKO: '0' },
+      { FILIAL: '070701', ESPECIE: 'NF3E', DOC: '000500003', SERIE: '1', FORNECEDOR: 'F3', LOJA: '01', EMISSAO: '20261009', DTDIGIT: '20261010', HORA: '10:00:00', TIPO_NF: 'N', CHAVE: 'K3', STRAN: '', NA_CKO: '0' }] },
     tra_config: { ok: true, linhas: [{ PARAMETRO: 'MV_APITRAN', FILIAL: '', CONTEUDO: '(preenchido)' }] },
   };
   const RD_CFG = Object.assign({}, CFG, { environment: 'RDESERTO_PROD', integ_desde: null, integ_grupos: ['transmite'], tem_senha: false });
@@ -286,16 +297,33 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('transmite: STRAN vazio e sem SDS', /\(vazio\) · não classificada/.test(l2) && /sem SDS/.test(l2) && /214 · CT-e/.test(l2));
   const l3 = tl.find(l => /000121659/.test(l)) || '';
   t('transmite: Importador com status vazio ≠ sem SDS', /\(vazio\) · sem status/.test(l3) && !/sem SDS/.test(l3), l3);
-  t('transmite: tipo da NF (complemento ICMS)', /I · compl\. ICMS/.test(l3), l3);
+  const lCompl = tl.find(l => /000689328/.test(l)) || '';
+  t('complementos: fora da lista de sem retorno, em lista própria', /C · compl\. preço\/frete/.test(lCompl) && /Complementos fora do Transmite/.test(rd)
+    && /C · compl\. preço\/frete: 1 · I · compl\. ICMS: 1/.test(rd), lCompl);
+  t('complementos: a lista principal mostra só as normais', await pg.$$eval('#int-conteudo table', ts => {
+    const t0 = ts.find(t => /000013687/.test(t.textContent)); return !!t0 && !/000689328|000041132/.test(t0.textContent); }));
   t('erros: quadro do Importador', /Por que o Importador parou/.test(rd));
   const tq = async (q) => pg.$eval(`[data-int-tra-quem="${q}"]`, n => n.textContent.replace(/\s+/g, ' ').trim()).catch(() => '');
   t('erros: contagem por quem resolve', /Cadastro 35/.test(await tq('cadastro')) && /Sem ação 55/.test(await tq('nada'))
-    && /Não mapeado 2/.test(await tq('outros')) && /Fiscal \(fora do Importador\) 0/.test(await tq('fiscal')), await tq('nada'));
+    && /Não mapeado 2/.test(await tq('outros')) && /Não atendido pelo Importador 34/.test(await tq('nao_atendido')) && await pg.$('[data-int-tra-quem="fiscal"]') === null, await tq('nao_atendido'));
+  const tNa = await pg.$eval('[data-int-tra-nao-atendidos]', n => n.textContent.replace(/\s+/g, ' ')).catch(() => '');
+  t('erros: não atendidos em quadro próprio (COM004 antigo "fiscal" e COM047)', /COM004/.test(tNa) && /COM047/.test(tNa) && !/COM007/.test(tNa), tNa);
+  const lNa = tl.find(l => /^COM047/.test(l) && /777/.test(l)) || '';
+  t('erros: XML não atendido na lista própria', /Não atendido pelo Importador/.test(lNa) && /Não atendidos pelo Importador, um a um/.test(rd), lNa);
   const lc = tl.find(l => /^COM007/.test(l)) || '';
   t('erros: linha do código com motivo, quem e tipo', /Fornecedor inexistente na base/.test(lc) && /Cadastro/.test(lc) && /NF-e 30 · NFS-e 5/.test(lc), lc);
   t('erros: texto da base marcado', /não podera ser processado\. \(texto da base\)/.test(rd));
   t('erros: texto escapado', await pg.$('#int-conteudo b:has-text("descrição")') === null && /Código sem <b>descrição<\/b>/.test(rd));
   t('erros: fila sem motivo explicada', /Sem motivo gravado: 614 XML/.test(rd) && /2 · Exportada 614/.test(rd));
+  t('sem SDS: notas abertas com filtro', /Lançadas fora do Importador — notas uma a uma/.test(rd) && /3 de 3 nota\(s\)/.test(rd)
+    && /não chegou ao Transmite/.test(rd) && /000500003/.test(rd));
+  await pg.selectOption('[data-int-semmon="filial"]', '010113');
+  const rdF = await txt('#int-conteudo');
+  t('sem SDS: filtro por filial', /2 de 3 nota\(s\)/.test(rdF) && /000500001/.test(rdF) && !/000500003/.test(rdF));
+  await pg.selectOption('[data-int-semmon="especie"]', 'NFCOM');
+  const rdE = await txt('#int-conteudo');
+  t('sem SDS: filial + espécie', /1 de 3 nota\(s\)/.test(rdE) && /000500002/.test(rdE) && !/000500001/.test(rdE));
+  await pg.selectOption('[data-int-semmon="filial"]', ''); await pg.selectOption('[data-int-semmon="especie"]', '');
   const ll = tl.find(l => /83286500001211/.test(l) && /COM007/.test(l)) || '';
   t('erros: lista um a um com destino e quem resolve', /Cadastro/.test(ll) && /123/.test(ll), ll);
   t('transmite: chave escapada', await pg.$('#int-conteudo i:has-text("zz")') === null && /4226<i>zz<\/i>/.test(rd));

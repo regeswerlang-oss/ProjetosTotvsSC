@@ -229,3 +229,27 @@ cancelado ou sem destino no grupo.
   complemento de preço/frete…).
 - **Legenda do `CKO_STRAN`.** Agora vai completa: 0 não processado,
   1 pendente, 2 Exportada, 3 Integrada, 4 Classificada.
+
+## Revisão 09/11/2026 — o que o Transmite não atende fica à parte
+
+Reunião interna com a consultoria (09/11): o painel misturava documentos que o
+Transmite/Importador **não trata** com falhas reais. Separado assim:
+
+1. **Complementos fora do Transmite** (`tra_complementos`, novo cartão informativo).
+   SF1 classificada, de terceiro, sem `CKO_STRAN = 4` e com `F1_TIPO` em
+   `TRA_TIPOS_FORA` (C = preço/frete, I = ICMS, P = IPI). O cartão
+   "Classificadas sem retorno" (e o de prazo do evento) passa a contar só o
+   que **não** é complemento. A lista `tra_sem_retorno_lista` continua trazendo
+   tudo; a tela divide pelo `TIPO_NF` em duas tabelas.
+2. **Não atendidos pelo Importador** (`tra_nao_atendidos`, novo cartão informativo).
+   CKO_CODERR COM003 (devolução/complemento ICMS-IPI), COM004 (NF-e de ajuste)
+   e COM047 (complemento de imposto) saem de "quem resolve = fiscal/não mapeado"
+   para `nao_atendido`, fora de `TRA_QUEM_ACAO`: deixam de contar em
+   "XML parados por erro do Importador". Quadro e lista um a um próprios.
+3. **Lançadas fora do Importador — notas uma a uma** (`tra_sem_monitor_lista`):
+   as notas do resumo SF1 sem SDS abertas, com filtro de filial e espécie na
+   tela e a situação na CKOCOL (subconsulta: não duplica reimportação) —
+   "não chegou ao Transmite" quando a chave não está na CKOCOL.
+
+Nível `info` (azul, "Informativo"): aparece no cartão mas não pesa na cor do
+grupo nem na situação geral.

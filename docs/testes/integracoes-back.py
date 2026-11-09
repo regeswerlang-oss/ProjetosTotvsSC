@@ -267,7 +267,7 @@ confere('hora limite sem agora', hl(None) is None)
 
 tra = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('transmite',), AGORA)
 tid = [s['id'] for s in tra]
-confere('transmite: 13 blocos', len(tra) == 13)
+confere('transmite: 15 blocos', len(tra) == 15)
 confere('transmite: nenhum bloco de RH', not any(i in tid for i in ('config', 'rjp_fila', 'rum_resumo')))
 confere('transmite: resumos antes dos detalhes',
         max(tid.index(i) for i in tid if not tra[tid.index(i)].get('detalhe'))
@@ -313,7 +313,7 @@ confere('corte encurta a janela', "F1_DTDIGIT >= '20261001'" in cor['tra_sem_ret
 velho = {s['id']: s['sql'] for s in ns['_integ_scripts']('010', HOJE, date(2025, 1, 1), 'oracle', ('transmite',), AGORA)}
 confere('corte mais antigo não alarga a janela', "'20260615'" in velho['tra_fila'])
 ambos = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('rh', 'transmite'), AGORA)
-confere('rh + transmite = 23 blocos', len(ambos) == 23 and ambos[0]['id'] == 'config')
+confere('rh + transmite = 25 blocos', len(ambos) == 25 and ambos[0]['id'] == 'config')
 confere('padrão continua só RH', len(ns['_integ_scripts']('010', HOJE)) == 10)
 
 # ── indicadores Transmite ───────────────────────────────────────────────────
@@ -330,7 +330,7 @@ tra_ok = {
     'tra_sem_monitor': bloco(),
 }
 ti = ns['_integ_indicadores'](tra_ok, {'ok': False}, HOJE, ('transmite',))
-confere('transmite: 9 indicadores, nenhum de RH', len(ti) == 9 and all(i['grupo'] == 'transmite' for i in ti))
+confere('transmite: 11 indicadores, nenhum de RH', len(ti) == 11 and all(i['grupo'] == 'transmite' for i in ti))
 confere('transmite saudável = verde', ns['_integ_pior'](i['nivel'] for i in ti) == 'verde')
 confere('classificada (4) não conta como parada', ind(ti, 'tra_fila')['valor'] == 0)
 confere('última importação hoje = 0 dias', ind(ti, 'tra_entrada')['valor'] == 0)
@@ -385,7 +385,7 @@ sem_data = dict(tra_ok, tra_revisao=dict(bloco({'STATUS': 'B', 'QTD': '2'}), var
 rv = ind(ns['_integ_indicadores'](sem_data, {'ok': False}, HOJE, ('transmite',)), 'tra_revisao')
 confere('revisão sem campo de data = amarelo e avisa', rv['nivel'] == 'amarelo' and 'sem janela' in rv['texto'])
 ambos_i = ns['_integ_indicadores'](dict(saudavel, **tra_ok), health_ok, HOJE, ('rh', 'transmite'))
-confere('rh + transmite = 17 indicadores', len(ambos_i) == 17)
+confere('rh + transmite = 19 indicadores', len(ambos_i) == 19)
 
 # ══ Transmite: motivo do Importador (CKO_CODERR) — 30/10/2026 ═══════════════
 por_banco = {b: {x['id']: x for x in ns['_integ_scripts']('010', HOJE, None, b, ('transmite',), AGORA)}
@@ -454,6 +454,44 @@ ie = ind(ns['_integ_indicadores'](dict(tra_ok), {'ok': False}, HOJE, ('transmite
 confere('cartão erros: bloco não lido = cinza', ie['nivel'] == 'cinza')
 pronto = dict(tra_ok, tra_erros=dict(bloco(), resumo={'codigos': [], 'acao': 0, 'sem_acao': 0, 'sem_erro': 0, 'mais_antigo_acao': None}))
 confere('cartão erros: usa o resumo gravado', ind(ns['_integ_indicadores'](pronto, {'ok': False}, HOJE, ('transmite',)), 'tra_erros')['nivel'] == 'verde')
+
+
+
+# ── 09/11/2026: complementos e "não atendidos" separados ─────────────────
+T2 = {x['id']: x for x in ns['_tra_scripts']('010', HOJE)}
+confere('sem retorno: sem complemento', "SF1.F1_TIPO NOT IN ('C', 'I', 'P')" in T2['tra_sem_retorno']['sql'])
+confere('complementos: só C/I/P e mesma regra de retorno', "SF1.F1_TIPO IN ('C', 'I', 'P')" in T2['tra_complementos']['sql']
+        and 'EXISTS (SELECT 1 FROM CKOCOL CKO' in T2['tra_complementos']['sql']
+        and "F1_FORMUL <> 'S'" in T2['tra_complementos']['sql'])
+cmp = dict(tra_ok)
+cmp['tra_complementos'] = bloco({'FILIAL': '010112', 'TIPO_NF': 'I', 'QTD': '1', 'DIGIT_MAIS_ANTIGA': '20261028', 'EMISSAO_MAIS_ANTIGA': '20261028'},
+                                {'FILIAL': '010112', 'TIPO_NF': 'C', 'QTD': '2', 'DIGIT_MAIS_ANTIGA': '20261020', 'EMISSAO_MAIS_ANTIGA': '20261015'},
+                                {'FILIAL': '020204', 'TIPO_NF': 'I', 'QTD': '1', 'DIGIT_MAIS_ANTIGA': '20261029', 'EMISSAO_MAIS_ANTIGA': '20261028'})
+ti2 = ns['_integ_indicadores'](cmp, {'ok': False}, HOJE, ('transmite',))
+ic = ind(ti2, 'tra_complementos')
+confere('complementos: 4, informativo', ic['valor'] == 4 and ic['nivel'] == 'info')
+confere('complementos: por tipo e filial', 'C 2' in ic['texto'] and 'I 2' in ic['texto'] and '010112 3' in ic['texto'])
+confere('complementos não pesam na cor do grupo', ns['_integ_pior'](i['nivel'] for i in ti2) == 'verde')
+confere('sem bloco de complementos = cinza', ind(ns['_integ_indicadores'](tra_ok, {'ok': False}, HOJE, ('transmite',)), 'tra_complementos')['nivel'] == 'cinza')
+
+er = dict(tra_ok)
+er['tra_erros'] = bloco({'ERRO': 'COM004', 'STRAN': '2', 'TIPO': 'NFE', 'QTD': '25', 'MAIS_ANTIGO': '20260901', 'MAIS_RECENTE': '20261010'},
+                        {'ERRO': 'COM003', 'STRAN': '2', 'TIPO': 'NFE', 'QTD': '12', 'MAIS_ANTIGO': '20260901', 'MAIS_RECENTE': '20261010'},
+                        {'ERRO': 'COM047', 'STRAN': '2', 'TIPO': 'CTE', 'QTD': '9', 'MAIS_ANTIGO': '20261004', 'MAIS_RECENTE': '20261004'},
+                        {'ERRO': 'COM007', 'STRAN': '2', 'TIPO': 'NFE', 'QTD': '44', 'MAIS_ANTIGO': '20261001', 'MAIS_RECENTE': '20261010'})
+r2 = ns['_tra_erros_resumo'](er)
+confere('não atendidos fora da ação', r2['acao'] == 44 and r2['nao_atendido'] == 46)
+ti3 = ns['_integ_indicadores'](er, {'ok': False}, HOJE, ('transmite',))
+confere('erros do Importador só com o que pede ação', ind(ti3, 'tra_erros')['valor'] == 44
+        and 'Não atendidos pelo Importador (cartão à parte): 46' in ind(ti3, 'tra_erros')['texto'])
+ina = ind(ti3, 'tra_nao_atendidos')
+confere('não atendidos: 46 informativo com os 3 códigos', ina['valor'] == 46 and ina['nivel'] == 'info'
+        and all(c in ina['texto'] for c in ('COM003', 'COM004', 'COM047')))
+confere('sem tra_erros: não atendidos cinza', ind(ns['_integ_indicadores'](tra_ok, {'ok': False}, HOJE, ('transmite',)), 'tra_nao_atendidos')['nivel'] == 'cinza')
+sm = T2['tra_sem_monitor_lista']
+confere('sem SDS uma a uma: detalhe, mesma regra do resumo', sm.get('detalhe') and 'NOT EXISTS (SELECT 1 FROM SDS010 SDS' in sm['sql']
+        and "F1_FORMUL <> 'S'" in sm['sql'] and 'AS FILIAL' in sm['sql'] and 'AS ESPECIE' in sm['sql'])
+confere('sem SDS uma a uma: situação na CKOCOL sem JOIN (não duplica)', 'JOIN' not in sm['sql'] and 'AS NA_CKO' in sm['sql'])
 
 print(f'{ok} asserções OK, {falhou} falha(s)')
 raise SystemExit(1 if falhou else 0)

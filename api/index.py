@@ -9211,27 +9211,36 @@ TRA_FILA_AMARELO, TRA_FILA_VERMELHO = 30, 60   # dias na CKOCOL sem classificar
 TRA_FOLGA_MIN = 10                 # min de folga entre o relógio do painel e o do AppServer
 TRA_STRAN = {"4": "Classificada"}  # único código documentado; os outros vão crus
 TRA_DS_STATUS = {"B": "revisão cadastral"}
+# F1_TIPO de complemento (preço/frete, ICMS, IPI): o Transmite não trata nota de
+# complemento — ela nunca recebe "Classificada". Sai do cartão de sem retorno e
+# vai para o seu próprio (reunião com a consultoria, 09/11/2026).
+TRA_TIPOS_FORA = {"C": "complemento de preço/frete", "I": "complemento de ICMS",
+                  "P": "complemento de IPI"}
 # Motivo de o Importador não processar o XML (CKO_CODERR). Texto lido da base
 # da Rio Deserto em 30/10/2026 (CKO_MSGERR); quando a coleta consegue ler o
 # memo, vale o texto da base. `quem` diz QUEM resolve — é a pergunta do cartão:
 #   cadastro  → falta cadastro no Protheus (fornecedor, amarração, nota de origem)
-#   fiscal    → o Importador não trata esse tipo: lançar à mão e manifestar no Transmite
+#   nao_atendido → o Importador/Transmite não atende esse tipo (ajuste, devolução ou
+#                  complemento de imposto): lançar à mão — fica fora da conta de erros
+#                  que pedem ação e ganha cartão próprio (reunião de 09/11/2026)
 #   duplicado → o documento já existe (Monitor ou SF1): conferir e descartar o XML
 #   nada      → cancelada pelo emitente ou XML sem destino no grupo: sem ação
 TRA_CODERR = {
-    "COM003": ("Devolução/complemento de ICMS-IPI não é tratado pelo Importador", "fiscal"),
-    "COM004": ("NF-e de ajuste não é tratada pelo Importador", "fiscal"),
+    "COM003": ("Devolução/complemento de ICMS-IPI não é tratado pelo Importador", "nao_atendido"),
+    "COM004": ("NF-e de ajuste não é tratada pelo Importador", "nao_atendido"),
     "COM005": ("Chave de NF-e já registrada em outra nota de entrada", "duplicado"),
     "COM007": ("Fornecedor inexistente na base", "cadastro"),
     "COM020": ("CT-e cita documento de entrada inexistente", "cadastro"),
     "COM036": ("CT-e cancelado", "nada"),
     "COM040": ("NF-e cancelada", "nada"),
     "COM044": ("Documento de entrada já existe no Monitor", "duplicado"),
+    "COM047": ("Complemento de imposto não é tratado pelo Colaboração/Importador — gerar o documento manualmente",
+               "nao_atendido"),
     "COM052": ("XML não pertence a nenhuma empresa/filial", "nada"),
 }
-TRA_QUEM = {"cadastro": "Cadastro", "fiscal": "Fiscal (fora do Importador)",
+TRA_QUEM = {"cadastro": "Cadastro", "nao_atendido": "Não atendido pelo Importador",
             "duplicado": "Duplicidade", "nada": "Sem ação", "outros": "Não mapeado"}
-TRA_QUEM_ACAO = ("cadastro", "fiscal", "duplicado", "outros")   # pedem alguém
+TRA_QUEM_ACAO = ("cadastro", "duplicado", "outros")   # pedem alguém
 TRA_ERRO_VERMELHO = 7              # dias: erro que pede ação parado há 7+ dias
 
 
@@ -9900,6 +9909,9 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None, banco=None):
     futura = (f"(SF1.F1_DTDIGIT > '{h}'"
               + (f" OR (SF1.F1_DTDIGIT = '{h}' AND SF1.F1_HORA > '{hl}')" if hl else "") + ")")
     sds_datas = ("DS_DATAIMP", "DS_EMISSA")              # a 1ª que a base tiver
+    tipos_fora = ", ".join(f"'{t}'" for t in TRA_TIPOS_FORA)
+    normal = f"SF1.F1_TIPO NOT IN ({tipos_fora})"        # o que o Transmite trata
+    compl = f"SF1.F1_TIPO IN ({tipos_fora})"
     return [
         {"id": "tra_config", "rotulo": "Transmite — parâmetros do Importador (SX6)",
          "tabela": f"SX6{s}", "limite": 200,
@@ -9927,10 +9939,19 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None, banco=None):
                  f"THEN 1 ELSE 0 END) AS CRITICAS, "
                  f"SUM(CASE WHEN SF1.F1_EMISSAO > '{e_vm}' AND SF1.F1_EMISSAO <= '{e_am}' "
                  f"THEN 1 ELSE 0 END) AS ATENCAO "
-                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} "
+                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} AND {normal} "
                  f"AND SF1.F1_DTDIGIT >= '{j}' AND EXISTS (SELECT 1 FROM {cko} CKO "
                  f"WHERE {mesma_chave} AND {nao4}) "
                  f"GROUP BY SF1.F1_FILIAL ORDER BY QTD DESC")},
+        # Complementos sem "Classificada": não é falha do Transmite, ele não os trata.
+        {"id": "tra_complementos", "rotulo": "Transmite — complementos fora do Transmite (SF1 tipo C/I/P × CKOCOL)",
+         "tabela": f"SF1{s}", "limite": 200,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_TIPO) AS TIPO_NF, COUNT(*) AS QTD, "
+                 f"MIN(SF1.F1_DTDIGIT) AS DIGIT_MAIS_ANTIGA, MIN(SF1.F1_EMISSAO) AS EMISSAO_MAIS_ANTIGA "
+                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} AND {compl} "
+                 f"AND SF1.F1_DTDIGIT >= '{j}' AND EXISTS (SELECT 1 FROM {cko} CKO "
+                 f"WHERE {mesma_chave} AND {nao4}) "
+                 f"GROUP BY SF1.F1_FILIAL, SF1.F1_TIPO ORDER BY QTD DESC")},
         {"id": "tra_futuras", "rotulo": "Transmite — digitação com data/hora no futuro (SF1)",
          "tabela": f"SF1{s}", "limite": 200,
          "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, SF1.F1_DTDIGIT AS DTDIGIT, COUNT(*) AS QTD, "
@@ -9999,6 +10020,21 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None, banco=None):
                  f"AND SDS.D_E_L_E_T_ = ' ' "
                  f"WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} AND SF1.F1_DTDIGIT >= '{j}' "
                  f"ORDER BY SF1.F1_EMISSAO, SF1.F1_FILIAL, SF1.F1_DOC")},
+        # As notas de "lançadas fora do Importador", uma a uma (a tela filtra por
+        # filial/espécie). Situação na CKOCOL por subconsulta: XML reimportado
+        # tem 2 linhas e um JOIN duplicaria a nota.
+        {"id": "tra_sem_monitor_lista", "rotulo": "Transmite — notas lançadas fora do Importador, uma a uma",
+         "tabela": f"SF1{s}", "limite": 1000, "detalhe": True,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_ESPECIE) AS ESPECIE, RTRIM(SF1.F1_DOC) AS DOC, "
+                 f"RTRIM(SF1.F1_SERIE) AS SERIE, RTRIM(SF1.F1_FORNECE) AS FORNECEDOR, RTRIM(SF1.F1_LOJA) AS LOJA, "
+                 f"SF1.F1_EMISSAO AS EMISSAO, SF1.F1_DTDIGIT AS DTDIGIT, RTRIM(SF1.F1_HORA) AS HORA, "
+                 f"RTRIM(SF1.F1_TIPO) AS TIPO_NF, RTRIM(SF1.F1_CHVNFE) AS CHAVE, "
+                 f"(SELECT MAX(RTRIM(CKO.CKO_STRAN)) FROM {cko} CKO WHERE {mesma_chave}) AS STRAN, "
+                 f"(SELECT COUNT(*) FROM {cko} CKO WHERE {mesma_chave}) AS NA_CKO "
+                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} "
+                 f"AND SF1.F1_DTDIGIT >= '{j}' AND NOT EXISTS (SELECT 1 FROM SDS{s} SDS "
+                 f"WHERE RTRIM(SDS.DS_CHAVENF) = RTRIM(SF1.F1_CHVNFE) AND SDS.D_E_L_E_T_ = ' ') "
+                 f"ORDER BY SF1.F1_FILIAL, SF1.F1_ESPECIE, SF1.F1_DTDIGIT, SF1.F1_DOC")},
         {"id": "tra_futuras_lista", "rotulo": "Transmite — notas com data/hora no futuro",
          "tabela": f"SF1{s}", "limite": 100, "detalhe": True,
          "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_DOC) AS DOC, RTRIM(SF1.F1_SERIE) AS SERIE, "
@@ -10073,7 +10109,7 @@ def _tra_erros_resumo(blocos):
         c["fonte"] = "base" if c["codigo"] in msgs else ("padrao" if padrao else "nenhuma")
         c["quem"] = padrao[1] if padrao else "outros"
         cods.append(c)
-    cods.sort(key=lambda c: (c["quem"] == "nada", -c["qtd"], c["codigo"]))
+    cods.sort(key=lambda c: (c["quem"] == "nada", c["quem"] == "nao_atendido", -c["qtd"], c["codigo"]))
     acao = [c for c in cods if c["quem"] in TRA_QUEM_ACAO]
     antigas = [c["mais_antigo"] for c in acao if c["mais_antigo"]]
     for c in cods:
@@ -10081,6 +10117,7 @@ def _tra_erros_resumo(blocos):
             c[k] = c[k].strftime("%Y%m%d") if c[k] else None
     return {"codigos": cods, "acao": sum(c["qtd"] for c in acao),
             "sem_acao": sum(c["qtd"] for c in cods if c["quem"] == "nada"),
+            "nao_atendido": sum(c["qtd"] for c in cods if c["quem"] == "nao_atendido"),
             "sem_erro": sum(sem_erro.values()), "sem_erro_por_situacao": sem_erro,
             "mais_antigo_acao": min(antigas).strftime("%Y%m%d") if antigas else None}
 
@@ -10137,6 +10174,38 @@ def _tra_indicadores(blocos, hoje):
             txt = ("Emissão: " + "; ".join(p for p in partes if p) +
                    ". Sem a Confirmação no prazo, a nota cai na malha fiscal estadual.")
         out.append(_integ_ind("tra_prazo", G, f"Prazo do evento ({TRA_PRAZO} dias)", risco, nivel, txt))
+
+    # ── 2b. Complementos: fora do Transmite (não é falha) ─────────────────
+    b = blocos.get("tra_complementos")
+    rot = "Complementos fora do Transmite"
+    if not b or not b.get("ok"):
+        out.append(_integ_bloco_falhou(b, "tra_complementos", G, rot))
+    else:
+        ls = b["linhas"]
+        n = _tra_soma(ls)
+        if n == 0:
+            nivel, txt = "verde", "Nenhuma nota de complemento classificada sem retorno no período."
+        else:
+            nivel = "info"          # informativo: não pesa na cor do grupo
+            por_tipo = {}
+            for x in ls:
+                t = (x.get("TIPO_NF") or "?").strip() or "?"
+                por_tipo[t] = por_tipo.get(t, 0) + _integ_int(x.get("QTD"))
+            tipos = " · ".join(f"{t} {q} ({TRA_TIPOS_FORA.get(t, '?')})" for t, q in
+                               sorted(por_tipo.items(), key=lambda kv: -kv[1]))
+            por_fil = {}
+            for x in ls:
+                f = x.get("FILIAL") or "—"
+                por_fil[f] = por_fil.get(f, 0) + _integ_int(x.get("QTD"))
+            fil = " · ".join(f"{f} {q}" for f, q in sorted(por_fil.items(), key=lambda kv: -kv[1])[:6])
+            em = _tra_min_data(ls, "EMISSAO_MAIS_ANTIGA")
+            txt = (f"Notas de complemento (F1_TIPO {'/'.join(TRA_TIPOS_FORA)}) não são tratadas pelo "
+                   f"Transmite e nunca recebem 'Classificada' — separadas do cartão de sem retorno. "
+                   f"{tipos}. Por filial: {fil}.")
+            if em:
+                txt += (f" Emissão mais antiga {_integ_ddmm(em)} ({(hoje - em).days} dia(s)): a "
+                        f"Confirmação da Operação dessas notas, se exigida, é feita fora do Transmite.")
+        out.append(_integ_ind("tra_complementos", G, rot, n, nivel, txt))
 
     # ── 3. Data/hora de digitação no futuro ───────────────────────────────
     b = blocos.get("tra_futuras")
@@ -10232,6 +10301,8 @@ def _tra_indicadores(blocos, hoje):
     res = (blocos.get("tra_erros") or {}).get("resumo") or _tra_erros_resumo(blocos)
     if res is None:
         out.append(_integ_bloco_falhou(blocos.get("tra_erros"), "tra_erros", G, rot))
+        out.append(_integ_bloco_falhou(blocos.get("tra_erros"), "tra_nao_atendidos", G,
+                                       "Não atendidos pelo Importador"))
     else:
         antiga = _integ_data(res.get("mais_antigo_acao"))
         idade = (hoje - antiga).days if antiga else 0
@@ -10241,9 +10312,24 @@ def _tra_indicadores(blocos, hoje):
         txt = ("Nenhum XML parado por erro que peça ação." if n == 0 else
                "Por motivo: " + " · ".join(f"{c['codigo']} {c['texto'][:48]} ({c['qtd']})" for c in top)
                + f". Mais antigo de {_integ_ddmm(antiga)} ({idade} dia(s)).")
+        if res.get("nao_atendido"):
+            txt += f" Não atendidos pelo Importador (cartão à parte): {res['nao_atendido']}."
         if res["sem_acao"]:
             txt += f" Sem ação (cancelados ou fora do grupo): {res['sem_acao']}."
         out.append(_integ_ind("tra_erros", G, rot, n, nivel, txt))
+
+        # ── 8b. Não atendidos pelo Importador (ajuste/complemento) ────────
+        na = [c for c in res["codigos"] if c["quem"] == "nao_atendido"]
+        n_na = sum(c["qtd"] for c in na)
+        if n_na == 0:
+            txt = "Nenhum XML de ajuste, devolução ou complemento de imposto parado no Importador."
+        else:
+            ant = min((_integ_data(c.get("mais_antigo")) for c in na if c.get("mais_antigo")), default=None)
+            txt = ("O Importador/Transmite não atende estes tipos — lançar à mão no Documento de "
+                   "Entrada. Por motivo: " + " · ".join(f"{c['codigo']} {c['texto'][:48]} ({c['qtd']})" for c in na)
+                   + (f". Mais antigo de {_integ_ddmm(ant)} ({(hoje - ant).days} dia(s))." if ant else "."))
+        out.append(_integ_ind("tra_nao_atendidos", G, "Não atendidos pelo Importador", n_na,
+                              "info" if n_na else "verde", txt))
 
     # ── 9. Parâmetros ─────────────────────────────────────────────────────
     b = blocos.get("tra_config")
