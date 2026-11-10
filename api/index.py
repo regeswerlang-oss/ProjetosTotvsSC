@@ -15110,7 +15110,11 @@ CORE_LEGENDAS = {
 }
 
 # Estágios do fluxo que a tela desenha (ordem = ordem no desenho).
-CORE_ESTAGIOS = [
+# 09/11/2026 (Reges): o retorno ao CRM (ZA3_STIPA) fica FORA da tela até ser
+# configurado — a chave religa o estágio, o conceito P11 e o 3º semáforo da fila.
+CORE_RETORNO_ATIVO = False
+
+CORE_ESTAGIOS_TODOS = [
     {"id": "crm", "rotulo": "Proposta no CRM", "sub": "oportunidade · itens · ordens de venda"},
     {"id": "etapa1", "rotulo": "iPaaS → Etapa 1", "sub": "POST /api/v1/CRMIntegracao · ZA3"},
     {"id": "etapa2", "rotulo": "Etapa 2 · Sincronizar", "sub": "U_CRMPROJT · transação única"},
@@ -15118,6 +15122,7 @@ CORE_ESTAGIOS = [
     {"id": "contrato", "rotulo": "Contratos", "sub": "CN9 · CNA planilhas · CNB itens"},
     {"id": "retorno", "rotulo": "Retorno ao CRM", "sub": "ZA3_STIPA · P11"},
 ]
+CORE_ESTAGIOS = [e for e in CORE_ESTAGIOS_TODOS if CORE_RETORNO_ATIVO or e["id"] != "retorno"]
 
 
 def _core_dialeto(banco):
@@ -15631,11 +15636,12 @@ def _core_conceitos(resumo, ordens, za3, projetos, itens, prjs, ctds, cn9s, cnas
             f"ZA0_CODCLI {p.get('ZA0_CODCLI') or '—'}/{p.get('ZA0_LOJCLI') or '—'} {p.get('ZA0_RAZCLI') or ''} · usuário(s): {', '.join(sorted(usu)) or 'nenhum'}",
             "P17: cliente usuário veio sem loja em 30/10.", "painel")
 
-    # Retorno ao CRM
+    # Retorno ao CRM (só quando configurado)
     st = (za3 or {}).get("ZA3_STIPA") or ""
-    add("P11", "Retorno ao CRM (ZA3_STIPA)", "A especificação cria o status de retorno, mas não define o que volta ao CRM nem quando (P11). Hoje o resultado chega por e-mail (MV_ZMAILPP)",
+    if CORE_RETORNO_ATIVO:
+        add("P11", "Retorno ao CRM (ZA3_STIPA)", "A especificação cria o status de retorno, mas não define o que volta ao CRM nem quando (P11). Hoje o resultado chega por e-mail (MV_ZMAILPP)",
         "erro" if st == "E" else ("ok" if st == "S" else "info"), "S quando implementado",
-        f"ZA3_STIPA = {st or '—'} ({CORE_LEGENDAS['ZA3_STIPA'].get(st, 'não implementado')})", "", "retorno")
+            f"ZA3_STIPA = {st or '—'} ({CORE_LEGENDAS['ZA3_STIPA'].get(st, 'não implementado')})", "", "retorno")
     return C
 
 
@@ -15703,9 +15709,10 @@ def _core_estagios(za3, resumo, ordens, projetos, itens, cn9s, cnas, cnbs):
         co["nivel"] = "erro"
         co["resumo"] = ["Etapa 2 com sucesso, mas o contrato da ZA3 não está na CN9."]
 
-    re_ = est["retorno"]
-    re_["nivel"] = {"S": "ok", "E": "erro", "A": "alerta", "P": "alerta"}.get(sti, "na")
-    re_["kpis"] = [("STIPA", f"{sti or '—'} · {CORE_LEGENDAS['ZA3_STIPA'].get(sti, 'não implementado (P11)')}")]
+    if "retorno" in est:
+        re_ = est["retorno"]
+        re_["nivel"] = {"S": "ok", "E": "erro", "A": "alerta", "P": "alerta"}.get(sti, "na")
+        re_["kpis"] = [("STIPA", f"{sti or '—'} · {CORE_LEGENDAS['ZA3_STIPA'].get(sti, 'não implementado (P11)')}")]
     return [est[e["id"]] for e in CORE_ESTAGIOS]
 
 
@@ -15802,6 +15809,7 @@ def api_core_propostas(customer):
     return _json({"ok": True, "ambiente": amb, "customer": customer, "lido_em": datetime.now(TZ_SP).isoformat(),
                   "dicionario": origem, "memo_variante": var, "banco": cfg.get("banco"),
                   "propostas": lista, "estagios": CORE_ESTAGIOS, "legendas": CORE_LEGENDAS,
+                  "retorno_ativo": CORE_RETORNO_ATIVO,
                   "ms": int((time.time() - ini) * 1000)})
 
 
