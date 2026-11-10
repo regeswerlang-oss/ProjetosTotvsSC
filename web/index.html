@@ -85,6 +85,17 @@
   .int-link:hover .int-ver, .int-link:focus-visible .int-ver { color:var(--tsc-blue); }
   #int-conteudo [data-int-sub], #int-conteudo .rel-bloco { scroll-margin-top:140px; }
   .int-flash { animation:intFlash 2.2s ease-out; border-radius:10px; }
+  .int-sub { border:1px solid var(--tsc-line); border-radius:8px; padding:0 12px; background:var(--tsc-s1); }
+  .int-sub > summary { list-style:none; }
+  .int-sub > summary::-webkit-details-marker { display:none; }
+  .int-sub > summary:hover { color:var(--tsc-t1); }
+  .int-sub-seta { display:inline-block; transition:transform .15s; color:var(--tsc-t3); }
+  .int-sub[open] > summary .int-sub-seta { transform:rotate(90deg); }
+  .int-sub[open] > summary { border-bottom:1px solid var(--tsc-line); margin-bottom:6px; }
+  .int-sub-n { margin-left:auto; font-weight:600; font-size:11px; padding:1px 8px; border-radius:999px;
+               background:var(--tsc-s2, rgba(255,255,255,.06)); color:var(--tsc-t2); letter-spacing:0; }
+  .int-sub-bt { font-size:11px; padding:3px 10px; border-radius:6px; border:1px solid var(--tsc-line); color:var(--tsc-t2); background:transparent; }
+  .int-sub-bt:hover { color:var(--tsc-t1); border-color:var(--tsc-line2); }
   @keyframes intFlash { 0%,35% { box-shadow:0 0 0 2px var(--tsc-blue), 0 0 24px -4px rgba(0,219,255,.45); }
                         100% { box-shadow:0 0 0 2px transparent; } }
   @media (prefers-reduced-motion: reduce) { .int-flash { animation:none; outline:2px solid var(--tsc-blue); } .int-link:hover { transform:none; } }
@@ -14046,7 +14057,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
                 abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai']),
-                duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '' } };
+                duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '' }, subAbertas: new Set() };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
 // `cor` = faixa à esquerda do cartão (tema escuro: superfície neutra + acento,
@@ -14389,9 +14400,11 @@ function intIrDetalhe(chave, grupo) {
   const caixa = grupo === 'quirons' && chave === 'quirons_laudo' ? 'config' : grupo;
   if (caixa && !integ.abertas.has(caixa)) { integ.abertas.add(caixa); renderIntegracoes(); }
   const tit = INT_DETALHE[chave];
+  if (tit) integ.subAbertas.add(tit);
   let alvo = tit && [...document.querySelectorAll('#int-conteudo [data-int-sub]')].find(n => n.dataset.intSub === tit);
   if (!alvo && caixa) alvo = document.querySelector(`#int-conteudo [data-int-caixa="${caixa}"]`)?.closest('.rel-bloco');
   if (!alvo) return false;
+  if (alvo.tagName === 'DETAILS') alvo.open = true;
   const lento = !matchMedia('(prefers-reduced-motion: reduce)').matches;
   alvo.scrollIntoView({ behavior: lento ? 'smooth' : 'auto', block: 'start' });
   alvo.classList.remove('int-flash'); void alvo.offsetWidth; alvo.classList.add('int-flash');
@@ -14411,13 +14424,25 @@ function intTabela(cols, linhas, vazio = 'Nada a mostrar.') {
 }
 
 /** Bloco não lido: cinza com o motivo — tabela ausente é informação, não erro. */
-function intSub(titulo, b, corpo) {
+/** filtro (opcional): quando a seção mostra só parte do bloco, a contagem segue o filtro. */
+function intSub(titulo, b, corpo, filtro) {
   let miolo;
   if (!b) miolo = '<p class="text-xs text-slate-500 py-2">Não lido nesta coleta.</p>';
   else if (!b.ok) miolo = `<p class="text-xs text-slate-500 py-2">${b.ausente ? 'ℹ' : '⚠'} ${escapeHtml(b.erro || 'Não lido.')}</p>`;
   else miolo = corpo(b.linhas || []) + (b.truncado
     ? `<p class="text-xs text-amber-800 mt-1">Mostrando as ${b.limite} primeiras linhas — a lista foi cortada.</p>` : '');
-  return `<div class="mb-4" data-int-sub="${escapeHtml(titulo)}"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">${escapeHtml(titulo)}</h4>${miolo}</div>`;
+  const qtd = !b ? '' : !b.ok ? '⚠' : `${(filtro ? (b.linhas || []).filter(filtro) : (b.linhas || [])).length}${b.truncado ? '+' : ''}`;
+  return intDobra(titulo, qtd, miolo);
+}
+
+/** Seção de detalhe recolhível (aberta só se estiver em integ.subAbertas). */
+function intDobra(titulo, qtd, miolo) {
+  const aberta = integ.subAbertas.has(titulo);
+  const n = qtd === '' || qtd == null ? '' : `<span class="int-sub-n">${escapeHtml(String(qtd))}</span>`;
+  return `<details class="int-sub mb-2" data-int-sub="${escapeHtml(titulo)}"${aberta ? ' open' : ''}>
+    <summary class="flex items-center gap-2 cursor-pointer select-none py-1.5 text-xs font-semibold text-slate-700 uppercase tracking-wide">
+      <span class="int-sub-seta">▸</span><span>${escapeHtml(titulo)}</span>${n}</summary>
+    <div class="pt-1 pb-2">${miolo}</div></details>`;
 }
 
 function intCaixa(id, titulo, sub, nivel, corpoFn) {
@@ -14427,8 +14452,15 @@ function intCaixa(id, titulo, sub, nivel, corpoFn) {
       <span><span class="font-semibold text-totvs-petroleo">${aberta ? '▾' : '▸'} ${escapeHtml(titulo)}</span>
         <span class="block text-xs text-slate-500">${escapeHtml(sub)}</span></span>
       ${nivel ? intPill(nivel) : ''}</button>
-    ${aberta ? `<div class="px-4 pb-3 border-t border-slate-100 pt-3">${corpoFn()}</div>` : ''}
+    ${aberta ? intCaixaCorpo(id, corpoFn()) : ''}
   </div>`;
+}
+function intCaixaCorpo(id, corpo) {
+  const temSub = corpo.includes('data-int-sub=');
+  const barra = temSub ? `<div class="flex justify-end gap-2 -mt-1 mb-2" data-int-sub-barra="${id}">
+      <button type="button" data-int-sub-todos="abrir" class="int-sub-bt">⊞ Expandir todos</button>
+      <button type="button" data-int-sub-todos="fechar" class="int-sub-bt">⊟ Recolher todos</button></div>` : '';
+  return `<div class="px-4 pb-3 border-t border-slate-100 pt-3">${barra}${corpo}</div>`;
 }
 
 function renderIntegracoes() {
@@ -14607,17 +14639,14 @@ const intStran = (v) => {
 };
 /** Quadro fixo com a legenda detalhada do CKO_STRAN (aba Integrações → Transmite). */
 function intTraLegendaStran() {
-  return `<details class="mb-4 rounded-lg border border-slate-200 bg-white" data-int-legenda-stran open>
-    <summary class="cursor-pointer px-3 py-2 text-xs font-semibold text-slate-700 uppercase tracking-wide">Legenda do CKO_STRAN — situação do XML no Importador e no Transmite</summary>
-    <div class="px-3 pb-3">${intTabela([
+  return intDobra('Legenda do CKO_STRAN — situação do XML no Importador e no Transmite', '', `<div data-int-legenda-stran>${intTabela([
       { rot: 'Valor', fmt: d => `<b class="font-mono">${d.v}</b>` },
       { rot: 'Situação', fmt: d => `<b class="whitespace-nowrap">${escapeHtml(d.rot)}</b>` },
       { rot: 'No Transmite', fmt: d => intNw(d.transmite) },
       { rot: 'O que significa', fmt: d => escapeHtml(d.txt) },
       { rot: 'Quem grava', fmt: d => escapeHtml(d.quem) },
       { rot: 'O que fazer', fmt: d => escapeHtml(d.acao) }], INT_TRA_STRAN_DET)}
-    <p class="text-[11px] text-slate-500 mt-1">O SCHEDUPDTRA só avança a situação com CKO_CHVDOC preenchido, CKO_DT_IMP posterior ao MV_DTINITR e CKO_CODEDI 109, 214, 273 ou 319. Fonte: Central de Atendimento TOTVS (artigos 19877027865495, 23130965724823, 23130208065303, 22989114562839 e 20324530948119).</p></div>
-  </details>`;
+    <p class="text-[11px] text-slate-500 mt-1">O SCHEDUPDTRA só avança a situação com CKO_CHVDOC preenchido, CKO_DT_IMP posterior ao MV_DTINITR e CKO_CODEDI 109, 214, 273 ou 319. Fonte: Central de Atendimento TOTVS (artigos 19877027865495, 23130965724823, 23130208065303, 22989114562839 e 20324530948119).</p></div>`);
 }
 // Coleta anterior a 09/11 gravou "fiscal" para COM003/COM004: é o mesmo grupo.
 const intTraQ = (q) => (q === 'fiscal' ? 'nao_atendido' : q);
@@ -14735,7 +14764,7 @@ function intTraColsSemRetorno(ls, hoje, compl = false) {
 function intCaixaTransmite(B, hoje, nivel) {
   return intCaixa('transmite', 'TOTVS Transmite — classificação e evento na SEFAZ', INT_GRUPOS[3].sub, nivel, () =>
     intSub('Classificadas no Protheus sem "Classificada" no Transmite', B.tra_sem_retorno_lista, (ls) => intTabela(
-      intTraColsSemRetorno(ls, hoje), ls.filter(l => !intTraFora(l)), 'Toda nota classificada já voltou ao Transmite.')) +
+      intTraColsSemRetorno(ls, hoje), ls.filter(l => !intTraFora(l)), 'Toda nota classificada já voltou ao Transmite.'), l => !intTraFora(l)) +
     intSub('Complementos fora do Transmite (Tipo NF C · I · P)', B.tra_sem_retorno_lista, (ls) => {
       const cs = ls.filter(intTraFora);
       const tipos = {};
@@ -14743,12 +14772,12 @@ function intCaixaTransmite(B, hoje, nivel) {
       return (cs.length ? `<p class="text-xs text-slate-600 mb-1">O Transmite não trata nota de complemento: ela não recebe "Classificada" e não entra na conta de sem retorno. ${
         escapeHtml(Object.entries(tipos).map(([t, q]) => `${t} · ${INT_TRA_TIPO_NF[t] || '?'}: ${q}`).join(' · '))}.</p>` : '') +
         intTabela(intTraColsSemRetorno(cs, hoje, true), cs, 'Nenhuma nota de complemento sem retorno.');
-    }) +
-    `<div class="mb-4" data-int-sub="Por que o Importador parou (CKO_CODERR)"><h4 class="text-xs font-semibold text-slate-700 uppercase tracking-wide mb-1">Por que o Importador parou (CKO_CODERR)</h4>${intTraErros(B.tra_erros)}</div>` +
+    }, intTraFora) +
+    intDobra('Por que o Importador parou (CKO_CODERR)', (B.tra_erros?.resumo?.codigos || []).length || '', intTraErros(B.tra_erros)) +
     intSub('XML parados com motivo do Importador, um a um', B.tra_erros_lista, (ls) => intTabela(intTraColsErros(B),
-      ls.filter(l => intTraQErro(B, l) !== 'nao_atendido'), 'Nenhum XML com motivo de erro.')) +
+      ls.filter(l => intTraQErro(B, l) !== 'nao_atendido'), 'Nenhum XML com motivo de erro.'), l => intTraQErro(B, l) !== 'nao_atendido') +
     intSub('Não atendidos pelo Importador, um a um (lançar à mão)', B.tra_erros_lista, (ls) => intTabela(intTraColsErros(B),
-      ls.filter(l => intTraQErro(B, l) === 'nao_atendido'), 'Nenhum XML de ajuste, devolução ou complemento de imposto.')) +
+      ls.filter(l => intTraQErro(B, l) === 'nao_atendido'), 'Nenhum XML de ajuste, devolução ou complemento de imposto.'), l => intTraQErro(B, l) === 'nao_atendido') +
     intSub('Sem retorno por filial', B.tra_sem_retorno, (ls) => intTabela([
       { k: 'FILIAL', rot: 'Filial' }, { k: 'QTD', rot: 'Notas', dir: 1 },
       { rot: 'Digitada mais antiga', fmt: l => intData(l.DIGIT_MAIS_ANTIGA) },
@@ -15208,6 +15237,13 @@ function ligaIntegracoes() {
     renderIntegracoes();
   }));
   $$('#int-conteudo [data-int-amb]').forEach(b => b.addEventListener('click', abreAmbienteIntegracoes));
+  $$('#int-conteudo details[data-int-sub]').forEach(d => d.addEventListener('toggle', () => {
+    d.open ? integ.subAbertas.add(d.dataset.intSub) : integ.subAbertas.delete(d.dataset.intSub);
+  }));
+  $$('#int-conteudo [data-int-sub-todos]').forEach(b => b.addEventListener('click', () => {
+    const abrir = b.dataset.intSubTodos === 'abrir';
+    b.closest('.rel-bloco').querySelectorAll('details[data-int-sub]').forEach(d => { d.open = abrir; });
+  }));
   $$('#int-conteudo .int-link[data-int-ind]').forEach(c => {
     const ir = () => intIrDetalhe(c.dataset.intInd, c.dataset.intGrupo);
     c.addEventListener('click', (ev) => { if (!ev.target.closest('circle')) ir(); });

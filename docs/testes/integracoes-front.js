@@ -289,8 +289,8 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
     await pg.screenshot({ path: process.env.SHOT });
     await pg.$eval('[data-int-tra-quem="cadastro"]', n => n.scrollIntoView({ block: 'center' })).catch(() => {});
     await pg.screenshot({ path: process.env.SHOT.replace('.png', '-2.png') });
-    const legEl = await pg.$('[data-int-legenda-stran]');
-    if (legEl) await legEl.screenshot({ path: process.env.SHOT.replace('.png', '-3.png') });
+    const cx = await pg.$('[data-int-caixa="transmite"]');
+    if (cx) await (await cx.evaluateHandle(n => n.closest('.rel-bloco'))).asElement().screenshot({ path: process.env.SHOT.replace('.png', '-3.png') });
   }
   const rd = await txt('#int-conteudo');
   t('transmite: 9 cartões, nenhum de RH', (await pg.$$('[data-int-ind]')).length === 9 && await pg.$('[data-int-ind^="quirons"]') === null);
@@ -298,6 +298,21 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('transmite: caixas de RH somem', await pg.$('[data-int-caixa="quirons"]') === null && await pg.$('[data-int-caixa="config"]') === null);
   t('transmite: sem aviso de senha do RH', !/healthcheck da Quírons exige/.test(rd));
   t('transmite: caixa aberta com a lista', /Classificadas no Protheus sem "Classificada"/.test(rd) && /000013687\/1/.test(rd));
+  // detalhes recolhidos por padrão; expandir/recolher todos e um a um
+  const abertas = () => pg.$$eval('#int-conteudo details[data-int-sub]', ds => ds.filter(d => d.open).length);
+  const nDobras = (await pg.$$('#int-conteudo details[data-int-sub]')).length;
+  t('detalhes recolhidos por padrão', nDobras >= 10 && await abertas() === 0, `${nDobras} dobras`);
+  t('dobra mostra a quantidade de linhas', /^3$/.test(await pg.$eval('details[data-int-sub^="Classificadas no Protheus"] .int-sub-n', n => n.textContent).catch(() => '')));
+  await pg.click('details[data-int-sub="Parâmetros do Importador (SX6)"] > summary');
+  t('expande um a um', await abertas() === 1);
+  await pg.click('[data-int-sub-barra="transmite"] [data-int-sub-todos="abrir"]');
+  t('expandir todos', await abertas() === nDobras);
+  await pg.click('[data-int-sub-barra="transmite"] [data-int-sub-todos="fechar"]');
+  t('recolher todos', await abertas() === 0);
+  await pg.click('[data-int-ind="tra_sem_retorno"]'); await pg.waitForTimeout(300);
+  t('clique no cartão abre só o seu detalhe', await abertas() === 1
+    && await pg.$eval('details[data-int-sub^="Classificadas no Protheus"]', d => d.open));
+  await pg.click('[data-int-sub-barra="transmite"] [data-int-sub-todos="abrir"]');
   const tl = await pg.$$eval('#int-conteudo table tr', trs => trs.map(tr => tr.textContent.replace(/\s+/g, ' ').trim()));
   const l1 = tl.find(l => /000013687/.test(l)) || '', l2 = tl.find(l => /000000001/.test(l)) || '';
   t('transmite: prazo em texto (73 d, faltam 17)', /! 73 d · faltam 17/.test(l1), l1);
