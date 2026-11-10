@@ -22,8 +22,7 @@ const EST = [{ id: 'crm', rotulo: 'Proposta no CRM', sub: 'oportunidade · itens
              { id: 'etapa1', rotulo: 'iPaaS → Etapa 1', sub: 'POST /api/v1/CRMIntegracao · ZA3' },
              { id: 'etapa2', rotulo: 'Etapa 2 · Sincronizar', sub: 'U_CRMPROJT' },
              { id: 'painel', rotulo: 'Painel de Projetos', sub: 'ZA0 · ZA1 · SB1 PRJ · CTD · NS' },
-             { id: 'contrato', rotulo: 'Contratos', sub: 'CN9 · CNA · CNB' },
-             { id: 'retorno', rotulo: 'Retorno ao CRM', sub: 'ZA3_STIPA · P11' }];
+             { id: 'contrato', rotulo: 'Contratos', sub: 'CN9 · CNA · CNB' }];
 const PROPOSTAS = [
   { msgid: 'msg-001', idcrm: 'opp-aaa', stg1: 'L', stg2: 'S', stipa: 'N', dtinc: '20261109', hrinc: '10:05', contrato: '0001/2026', recno: 1,
     proposta: 'PRP-0001', cliente: 'Cliente Teste', tipo_venda: '001', modalidade: '1', ordens: 2, projetos: 2, contrato_cn9: true, erro: '' },
@@ -56,12 +55,11 @@ const TRILHA = {
   cna: [{ _PRJ: '000010 2026', CNA_NUMERO: '001', CNA_ZPLATA: '1', CNA_VLTOT: '200' }, { _PRJ: '000011 2026', CNA_NUMERO: '002', CNA_ZPLATA: '2', CNA_VLTOT: '150' }],
   cnb: [{ CNB_NUMERO: '001', CNB_ITEM: '001', CNB_PRODUT: 'PRJ0000102026', CNB_QUANT: '1', CNB_VLUNIT: '200', CNB_VLTOT: '200', CNB_ITEMCTA: '0000102026' },
         { CNB_NUMERO: '002', CNB_ITEM: '001', CNB_PRODUT: 'L001', CNB_QUANT: '3', CNB_VLUNIT: '50', CNB_VLTOT: '150', CNB_ITEMCTA: '0000112026' }],
-  estagios: EST.map((e, i) => ({ ...e, nivel: i < 5 ? 'ok' : 'na', kpis: [['Teste', 'x']], resumo: ['linha de resumo'] })),
+  estagios: EST.map((e, i) => ({ ...e, nivel: 'ok', kpis: [['Teste', 'x']], resumo: ['linha de resumo'] })),
   conceitos: [{ cod: 'C23', titulo: 'Nº da proposta', regra: 'regra', nivel: 'alerta', esperado: 'PRP-0001', observado: 'CN9_XOPORT PRP-00', dica: 'truncado', estagio: 'contrato' },
               { cod: 'C19', titulo: 'Venda de físico · 000010 2026', regra: 'VENDA: PRJ na CNB', nivel: 'ok', esperado: '1 item PRJ', observado: '1 item PRJ', dica: '', estagio: 'contrato' },
               { cod: 'C07', titulo: 'Físico · 000010 2026', regra: 'PRJ no SB1', nivel: 'ok', esperado: '1', observado: '1', dica: '', estagio: 'painel' },
-              { cod: 'C18', titulo: 'Itens com valor zero', regra: 'zero só no projeto', nivel: 'erro', esperado: 'fora da CNB', observado: '1 na CNB', dica: '', estagio: 'contrato' },
-              { cod: 'P11', titulo: 'Retorno ao CRM', regra: 'P11', nivel: 'info', esperado: 'S', observado: 'N', dica: '', estagio: 'retorno' }],
+              { cod: 'C18', titulo: 'Itens com valor zero', regra: 'zero só no projeto', nivel: 'erro', esperado: 'fora da CNB', observado: '1 na CNB', dica: '', estagio: 'contrato' }],
   titulos: { ZA3: { ZA3_MSGID: 'Message ID', ZA3_STG1: 'Etapa 1' }, ZA0: { ZA0_NOME: 'Nome do Projeto' }, CN9: { CN9_NUMERO: 'Contrato' } },
   legendas: LEG,
 };
@@ -88,7 +86,7 @@ const srv = http.createServer((req, res) => {
       if (u.searchParams.get('msgid') === 'msg-002') return json(200, { ...TRILHA, za3: { ...TRILHA.za3, ZA3_MSGID: 'msg-002', ZA3_STG1: 'E', ZA3_STG2: 'N', ZA3_CONTRA: '', ZA3_ERRO: 'JSON inválido', ZA3_JSONFI: '' },
         json: null, resumo: {}, ordens: [], projetos: [], itens: [], sb1: [], ctd: [], cn9: [], cna: [], cnb: [],
         estagios: EST.map((e, i) => ({ ...e, nivel: i === 1 ? 'erro' : i === 0 ? 'alerta' : 'na', kpis: [], resumo: i === 1 ? ['JSON inválido'] : [] })),
-        conceitos: [TRILHA.conceitos[4]] });
+        conceitos: [] });
       return json(200, TRILHA);
     }
     if (u.pathname === `/api/radar/${CLI}`) return json(200, { ok: true, processos: PROCS, itens: [], propostas: [] });
@@ -139,6 +137,7 @@ const fila = await pag.evaluate(() => ({
 // abre a trilha da 1ª mensagem
 await pag.click('.core-item');
 await pag.waitForSelector('.core-card', { timeout: 5000 });
+const document_has_retorno = await pag.evaluate(() => !!document.querySelector('[data-core-est="retorno"]') || document.querySelectorAll('.core-dot').length / document.querySelectorAll('.core-item').length > 2);
 const trilha = await pag.evaluate(() => ({
   cards: document.querySelectorAll('.core-card').length,
   badges: [...document.querySelectorAll('.core-card .core-badge')].map(b => b.textContent),
@@ -150,7 +149,7 @@ await pag.screenshot({ path: '/home/claude/w/core-trilha.png', fullPage: true })
 
 // expande cada estágio
 const detalhes = {};
-for (const id of ['crm', 'etapa1', 'etapa2', 'painel', 'contrato', 'retorno']) {
+for (const id of ['crm', 'etapa1', 'etapa2', 'painel', 'contrato']) {
   // o CRM já abre expandido na primeira carga (a proposta é o que se quer ver primeiro)
   const jaAberto = await pag.evaluate(i => document.querySelector(`.core-card.is-aberto[data-core-est="${i}"]`) != null, id);
   if (!jaAberto) await pag.click(`.core-card[data-core-est="${id}"]`);
@@ -212,14 +211,14 @@ const ok = (n, c) => { if (!c) { falhas++; console.log('FALHOU:', n); } };
 ok('aba visível', abaVisivel);
 ok('3 mensagens na fila e trilha vazia', fila.itens === 3 && fila.vazio);
 ok('KPIs', fila.kpis.length === 4 && fila.kpis[0].startsWith('3'));
-ok('6 cards de estágio', trilha.cards === 6);
+ok('5 cards de estágio (sem retorno)', trilha.cards === 5 && !document_has_retorno);
 ok('cabeçalho com a proposta', trilha.cab === 'PRP-0001');
-ok('5 conceitos', trilha.conceitos === 5);
+ok('4 conceitos', trilha.conceitos === 4);
 ok('crm abre expandido com as OVs', trilha.detalheAberto && detalhes.crm?.ovs === 2 && detalhes.crm.tabelas >= 2);
 ok('detalhe etapa1 com campos', detalhes.etapa1?.campos > 3);
 ok('detalhe painel com 2 projetos', detalhes.painel?.ovs === 2 && detalhes.painel.tabelas >= 4);
 ok('detalhe contrato com CNA/CNB', detalhes.contrato?.tabelas === 2 && detalhes.contrato.campos > 3);
-ok('retorno abre', detalhes.retorno?.texto > 50);
+ok('sem card de retorno', !('retorno' in detalhes));
 ok('recolhe', recolhido);
 ok('filtro divergências = 2', soProblemas === 2);
 ok('conceito expande com botão', concAberto.mais && concAberto.botao);
@@ -228,7 +227,7 @@ ok('gravou no radar', gravado && gravado.status === 'aberta' && gravado.processo
 ok('base de testes recarrega', emTeste.itens === 1 && /TESTES/i.test(emTeste.selo) && emTeste.vazio);
 ok('busca filtra e mantém foco', busca.itens === 1 && busca.foco === 'core-busca');
 ok('só problemas = 2', soFalhas === 2);
-ok('erro etapa1 no card', erroE1.badges[1] === 'Divergente' && erroE1.conceitos === 1);
+ok('erro etapa1 no card', erroE1.badges[1] === 'Divergente' && erroE1.conceitos === 0);
 ok('relatório exporta com base', rel && rel.base === 'producao' && rel.tam > 1000);
 ok('sem erro de console', erros.length === 0);
 ok('alert da ocorrência', dialogos.some(d => /INT-001/.test(d)));

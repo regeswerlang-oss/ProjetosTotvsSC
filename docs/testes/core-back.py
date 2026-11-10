@@ -164,12 +164,13 @@ confere('C01 memorial gravado', niv('C01') == 'ok')
 confere('C16 vendedor', niv('C16') == 'ok')
 confere('C14 clientes', niv('C14') == 'ok')
 confere('VALC soma', niv('VALC') == 'ok')
-confere('P11 info (não implementado)', niv('P11') == 'info')
+confere('P11 fora enquanto o retorno não é configurado', 'P11' not in por)
 confere('todo conceito tem estágio', all(c['estagio'] in {'crm', 'etapa1', 'etapa2', 'painel', 'contrato', 'retorno'} for c in C))
 
 E = ns['_core_estagios'](ZA3, res, ords, PRJ, ITENS, CN9, CNA, CNB)
-confere('6 estágios na ordem', [e['id'] for e in E] == ['crm', 'etapa1', 'etapa2', 'painel', 'contrato', 'retorno'])
-confere('estágios ok no sucesso', [e['nivel'] for e in E[:5]] == ['ok'] * 5 and E[5]['nivel'] == 'na')
+confere('5 estágios na ordem (retorno desligado)', [e['id'] for e in E] == ['crm', 'etapa1', 'etapa2', 'painel', 'contrato'])
+confere('estágios ok no sucesso', [e['nivel'] for e in E] == ['ok'] * 5)
+confere('chave do retorno existe e está desligada', ns['CORE_RETORNO_ATIVO'] is False and len(ns['CORE_ESTAGIOS_TODOS']) == 6)
 
 # ── LOCAÇÃO com PRJ na CNB → C19 erro ───────────────────────────────────────
 PRJL = [dict(PRJ[0], ZA0_MODALI='3'), dict(PRJ[1], ZA0_MODALI='3')]
@@ -190,7 +191,7 @@ confere('etapa1 erro', EE[1]['nivel'] == 'erro' and 'JSON inválido' in EE[1]['r
 confere('crm alerta sem JSON', EE[0]['nivel'] == 'alerta')
 confere('painel/contrato n/a', EE[3]['nivel'] == 'na' and EE[4]['nivel'] == 'na')
 CE = ns['_core_conceitos']({}, [], ZA3E, [], [], [], [], [], [], [], [])
-confere('sem JSON só P11', [c['cod'] for c in CE] == ['P11'])
+confere('sem JSON nenhum conceito', CE == [])
 
 # ── FILA (aguardando Sincronizar) ───────────────────────────────────────────
 ZA3A = dict(ZA3, ZA3_STG2='A', ZA3_CONTRA='')
