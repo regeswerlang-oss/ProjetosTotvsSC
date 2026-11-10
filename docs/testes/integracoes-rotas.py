@@ -317,7 +317,7 @@ q_tra = [c for c in CHAMADAS if "/query" in c["url"]]
 confere("transmite: nenhuma consulta de RH", not any(t in c["sql"] for c in q_tra
                                                   for t in ("RJP010", "RUM010", "RU7010", "RJE010")))
 confere("transmite: sem healthcheck da Quírons", not any("healthcheck" in c["url"] for c in CHAMADAS))
-confere("transmite: 17 consultas (15 blocos + 2 variantes da SDS)", len(q_tra) == 17)
+confere("transmite: 19 consultas (17 blocos + 2 variantes da SDS)", len(q_tra) == 19)
 confere("transmite: Postgres lê o memo com CAST", any("CAST(CKO_MSGERR AS VARCHAR)" in c["sql"] for c in q_tra)
         and not any("DBMS_LOB" in c["sql"] for c in q_tra))
 ult = d["ultima"]
@@ -338,7 +338,7 @@ confere("erros: mensagem da base decodificada", ult["blocos"]["tra_erros_msg"]["
 confere("erros: cartão", inds["tra_erros"]["valor"] == 5 and inds["tra_erros"]["nivel"] in ("amarelo", "vermelho"))
 confere("erros: lista com destino", ult["blocos"]["tra_erros_lista"]["linhas"][0]["DESTINO"] == "83286500001211")
 d = cli.get("/api/integracoes/TFDPHR00/scripts?ambiente=producao").get_json()
-confere("transmite: scripts do grupo", d["grupos"] == ["transmite"] and len(d["scripts"]) == 15
+confere("transmite: scripts do grupo", d["grupos"] == ["transmite"] and len(d["scripts"]) == 17
         and all(s["id"].startswith("tra_") for s in d["scripts"]))
 
 # rota /grupos

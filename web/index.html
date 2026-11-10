@@ -94,6 +94,14 @@
   .int-sub[open] > summary { border-bottom:1px solid var(--tsc-line); margin-bottom:6px; }
   .int-sub-n { margin-left:auto; font-weight:600; font-size:11px; padding:1px 8px; border-radius:999px;
                background:var(--tsc-s2, rgba(255,255,255,.06)); color:var(--tsc-t2); letter-spacing:0; }
+  .int-cod { color:var(--tsc-blue); border-bottom:1px dotted currentColor; }
+  .int-cod-linha { cursor:pointer; }
+  .int-ord { font:inherit; color:inherit; display:inline-flex; gap:4px; align-items:center; white-space:nowrap; }
+  .int-ord span { color:var(--tsc-t3); font-size:10px; }
+  .int-ord:hover, .int-ord.on { color:var(--tsc-t1); }
+  .int-ord.on span { color:var(--tsc-blue); }
+  .int-cod-linha:hover td { background:rgba(0,219,255,.06); }
+  .int-pop-chip { font-size:12px; line-height:1.35; border:1px solid var(--tsc-line); border-radius:8px; padding:6px 10px; background:var(--tsc-s1); }
   .int-sub-bt { font-size:11px; padding:3px 10px; border-radius:6px; border:1px solid var(--tsc-line); color:var(--tsc-t2); background:transparent; }
   .int-sub-bt:hover { color:var(--tsc-t1); border-color:var(--tsc-line2); }
   @keyframes intFlash { 0%,35% { box-shadow:0 0 0 2px var(--tsc-blue), 0 0 24px -4px rgba(0,219,255,.45); }
@@ -14057,7 +14065,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
                 abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai']),
-                duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '' }, subAbertas: new Set() };
+                duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '' }, subAbertas: new Set(), ord: {} };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
 // `cor` = faixa à esquerda do cartão (tema escuro: superfície neutra + acento,
@@ -14412,12 +14420,31 @@ function intIrDetalhe(chave, grupo) {
   return true;
 }
 
-function intTabela(cols, linhas, vazio = 'Nada a mostrar.') {
+/** opt.ordId: cabeçalhos com `ord` (campo) viram botões de ordenação (estado em integ.ord);
+ *  opt.linha(l): atributos extras do <tr> (ex.: para abrir um popup ao clicar). */
+function intTabela(cols, linhas, vazio = 'Nada a mostrar.', opt = {}) {
   if (!linhas || !linhas.length) return `<p class="text-xs text-slate-500 py-2">${escapeHtml(vazio)}</p>`;
+  const o = opt.ordId && integ.ord[opt.ordId];
+  if (o) {
+    const num = (v) => (v !== '' && v != null && !isNaN(+v)) ? +v : null;
+    linhas = [...linhas].sort((a, b) => {
+      const x = a[o.k] ?? '', y = b[o.k] ?? '';
+      const nx = num(x), ny = num(y);
+      const r = nx !== null && ny !== null ? nx - ny : String(x).localeCompare(String(y), 'pt-BR', { numeric: true });
+      return r * o.dir;
+    });
+  }
+  const th = (c) => {
+    const al = `text-${c.dir ? 'right' : 'left'}`;
+    if (!(opt.ordId && c.ord)) return `<th class="px-2 py-1.5 ${al} font-semibold">${escapeHtml(c.rot)}</th>`;
+    const at = o && o.k === c.ord;
+    const seta = at ? (o.dir > 0 ? '▲' : '▼') : '↕';
+    return `<th class="px-2 py-1.5 ${al} font-semibold" aria-sort="${at ? (o.dir > 0 ? 'ascending' : 'descending') : 'none'}">
+      <button type="button" class="int-ord${at ? ' on' : ''}" data-int-ord="${opt.ordId}" data-k="${c.ord}" title="Ordenar por ${escapeHtml(c.rot)}">${escapeHtml(c.rot)} <span>${seta}</span></button></th>`;
+  };
   return `<div class="overflow-x-auto"><table class="w-full text-xs border border-slate-200 rounded">
-    <thead class="bg-slate-50 text-slate-600"><tr>${cols.map(c =>
-      `<th class="px-2 py-1.5 text-${c.dir ? 'right' : 'left'} font-semibold">${escapeHtml(c.rot)}</th>`).join('')}</tr></thead>
-    <tbody>${linhas.map(l => `<tr class="border-t border-slate-100">${cols.map(c => {
+    <thead class="bg-slate-50 text-slate-600"><tr>${cols.map(th).join('')}</tr></thead>
+    <tbody>${linhas.map(l => `<tr class="border-t border-slate-100"${opt.linha ? ' ' + opt.linha(l) : ''}>${cols.map(c => {
       const v = c.fmt ? c.fmt(l) : escapeHtml(l[c.k] ?? '');
       return `<td class="px-2 py-1 ${c.dir ? 'text-right tabular-nums' : ''}">${v}</td>`;
     }).join('')}</tr>`).join('')}</tbody></table></div>`;
@@ -14682,7 +14709,7 @@ function intTraErros(b) {
       <p class="text-[11px] text-slate-500 leading-snug mt-0.5">${escapeHtml(k.quem)}</p></div>`;
   }).join('');
   const cols = [
-    { rot: 'Código', fmt: c => `<span class="font-mono text-xs">${escapeHtml(c.codigo)}</span>` },
+    { rot: 'Código', fmt: c => `<button type="button" data-int-tra-cod="${escapeHtml(c.codigo)}" class="int-cod font-mono text-xs" title="Ver as notas deste código">${escapeHtml(c.codigo)} <span aria-hidden="true">↗</span></button>` },
     { rot: 'Motivo', fmt: c => `${escapeHtml(c.texto || '')}${c.fonte === 'base' ? ' <span class="text-[10px] text-slate-400">(texto da base)</span>' : ''}` },
     { rot: 'Quem resolve', fmt: c => intTraQuem(c.quem) },
     { rot: 'Tipo', fmt: c => escapeHtml(Object.entries(c.tipos || {}).map(([t, q]) => `${INT_TRA_TIPO[t] || t} ${q}`).join(' · ')) },
@@ -14698,6 +14725,140 @@ function intTraErros(b) {
 }
 const intEdi = (v) => intNw(v ? `${v}${INT_TRA_EDI[v] ? ' · ' + INT_TRA_EDI[v] : ''}` : '—');
 const intChave = (v) => `<span class="font-mono text-[11px] text-slate-500 select-all">${escapeHtml(v || '')}</span>`;
+
+/** CNPJ do emitente pela chave: 44 dígitos (NF-e/CT-e) → posições 7-20; NFS-e → data|CNPJ|número. */
+function intTraEmitente(chave) {
+  const c = String(chave || '').trim();
+  if (/^\d{44}$/.test(c)) return c.slice(6, 20);
+  const p = c.split('|');
+  return p.length >= 2 ? p[1].trim() : '';
+}
+const intCnpjFmt = (v) => {
+  const d = String(v || '').replace(/\D/g, '');
+  return d.length === 14 ? d.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5') : (v || '—');
+};
+/** CNPJ de destino → empresa/filial da SM0 (exato; senão, mesma raiz = mesmo grupo). */
+function intTraEmpresaDe(B, cnpj) {
+  const ls = B.tra_empresas?.ok ? (B.tra_empresas.linhas || []) : null;
+  if (!ls) return { txt: 'SM0 não lida nesta coleta', ok: null };
+  const d = String(cnpj || '').replace(/\D/g, '');
+  const ex = ls.find(e => String(e.CNPJ || '').replace(/\D/g, '') === d);
+  if (ex) return { txt: `${ex.EMPRESA}/${String(ex.FILIAL || '').trim()} · ${ex.NOME || ex.RAZAO || ''}`.trim(), ok: true };
+  const raiz = ls.find(e => d.length === 14 && String(e.CNPJ || '').replace(/\D/g, '').slice(0, 8) === d.slice(0, 8));
+  if (raiz) return { txt: `Nenhuma filial com este CNPJ (mesma raiz da empresa ${raiz.EMPRESA} · ${raiz.RAZAO || raiz.NOME || ''})`.trim(), ok: false };
+  return { txt: 'Não é empresa/filial desta base', ok: false };
+}
+/** Popup com os XML de um código do CKO_CODERR. */
+function intTraPopupCodigo(B, cod) {
+  const todos = B.tra_erros_lista?.ok ? (B.tra_erros_lista.linhas || []) : [];
+  const ls = todos.filter(l => l.ERRO === cod);
+  const info = (B.tra_erros?.resumo?.codigos || []).find(c => c.codigo === cod) || {};
+  const linhas = ls.map(l => ({ ...l, EMIT: intTraEmitente(l.CHAVE), EMP: intTraEmpresaDe(B, l.DESTINO) }));
+  const porDest = {};
+  linhas.forEach(l => { const k = l.DESTINO || '—'; (porDest[k] = porDest[k] || { n: 0, emp: l.EMP }).n++; });
+  const resumo = Object.entries(porDest).sort((a, b) => b[1].n - a[1].n).map(([d, x]) =>
+    `<div class="int-pop-chip"><b>${escapeHtml(intCnpjFmt(d))}</b> · ${x.n} XML<br><span class="${x.emp.ok === false ? 'text-rose-400' : 'text-slate-500'}">${escapeHtml(x.emp.txt)}</span></div>`).join('');
+  const tabela = intTabela([
+    { rot: 'Importado', fmt: l => intData(l.DT_IMP) },
+    { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) },
+    { k: 'DOC', rot: 'Documento' },
+    { rot: 'CNPJ emitente', fmt: l => intNw(intCnpjFmt(l.EMIT)) },
+    { rot: 'CNPJ destinatário', fmt: l => intNw(intCnpjFmt(l.DESTINO)) },
+    { rot: 'Empresa/Filial', fmt: l => `<span class="${l.EMP.ok === false ? 'text-rose-400' : ''}">${escapeHtml(l.EMP.txt)}</span>` },
+    { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) },
+    { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], linhas, 'Nenhum XML com este código na lista desta coleta.');
+  const corte = B.tra_erros_lista?.truncado ? `<p class="text-xs text-amber-500">A lista da coleta foi cortada em ${B.tra_erros_lista.limite} XML: pode haver mais notas deste código.</p>` : '';
+  intPopup({ id: cod, titulo: `<span class="font-mono">${escapeHtml(cod)}</span> · ${linhas.length} XML`,
+    sub: `${escapeHtml(info.texto || '')} ${info.quem ? '· ' + intTraQuem(info.quem) : ''}`,
+    corpo: `${resumo ? `<div><p class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1">Por CNPJ de destino</p><div class="flex flex-wrap gap-2">${resumo}</div></div>` : ''}${tabela}${corte}`,
+    csv: ['Codigo;Importado;Tipo;Documento;CNPJ emitente;CNPJ destinatario;Empresa/Filial;CKO_STRAN;Chave']
+      .concat(linhas.map(l => [cod, l.DT_IMP, l.CODEDI, l.DOC, l.EMIT, l.DESTINO, l.EMP.txt, l.STRAN, l.CHAVE].join(';'))).join('\n') });
+}
+
+/** Popup largo (somente leitura): título, subtítulo, corpo HTML e "Copiar lista" (CSV com ;). */
+function intPopup({ id, titulo, sub = '', corpo, csv }) {
+  const fundo = document.createElement('div');
+  fundo.className = 'fixed inset-0 z-50 bg-black/60 flex items-start justify-center p-4 overflow-y-auto';
+  fundo.setAttribute('data-int-pop', id);
+  fundo.innerHTML = `<div class="bg-white rounded-lg shadow-xl w-full max-w-7xl mt-10 border border-slate-200" role="dialog" aria-modal="true">
+    <div class="px-5 py-3 border-b border-slate-200 flex items-start gap-3">
+      <div class="min-w-0"><h3 class="font-semibold text-totvs-petroleo">${titulo}</h3>
+        ${sub ? `<p class="text-xs text-slate-500 mt-0.5">${sub}</p>` : ''}</div>
+      ${csv ? '<button type="button" data-int-pop-copiar class="int-sub-bt ml-auto whitespace-nowrap">⧉ Copiar lista</button>' : '<span class="ml-auto"></span>'}
+      <button type="button" data-fechar class="text-slate-400 hover:text-slate-700 text-2xl leading-none" aria-label="Fechar">×</button>
+    </div>
+    <div class="p-5 space-y-3 text-sm">${corpo}</div></div>`;
+  document.body.appendChild(fundo);
+  const fecha = () => { fundo.remove(); document.removeEventListener('keydown', esc); };
+  const esc = (e) => { if (e.key === 'Escape') fecha(); };
+  document.addEventListener('keydown', esc);
+  fundo.querySelectorAll('[data-fechar]').forEach(b => b.addEventListener('click', fecha));
+  fundo.addEventListener('click', e => { if (e.target === fundo) fecha(); });
+  fundo.querySelector('[data-int-pop-copiar]')?.addEventListener('click', async (e) => {
+    try { await navigator.clipboard.writeText(csv); e.target.textContent = '✓ Copiado'; }
+    catch (_) { e.target.textContent = 'Não foi possível copiar'; }
+  });
+  fundo.querySelector('[data-fechar]').focus();
+  return fundo;
+}
+
+const intValor = (v) => (v === '' || v == null || isNaN(+v)) ? '—'
+  : (+v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+const intCfops = (l) => !l.CFOP_MIN ? '—' : (l.CFOP_MIN === l.CFOP_MAX ? l.CFOP_MIN
+  : `${l.CFOP_MIN} … ${l.CFOP_MAX}${+l.N_CFOP > 2 ? ` (${l.N_CFOP})` : ''}`);
+const intTesN = (l) => !l.TES_MIN ? '—' : (l.TES_MIN === l.TES_MAX ? l.TES_MIN : `${l.TES_MIN} … ${l.TES_MAX}`);
+
+/** Popup das notas sem SDS de uma filial + espécie: CFOP × TES, tipos e as notas. */
+function intTraPopupSemMonitor(B, filial, especie) {
+  const ls = (B.tra_sem_monitor_lista?.linhas || []).filter(l => l.FILIAL === filial && (l.ESPECIE || '') === especie);
+  const cf = (B.tra_sem_monitor_cfop?.ok ? B.tra_sem_monitor_cfop.linhas || [] : [])
+    .filter(l => l.FILIAL === filial && (l.ESPECIE || '') === especie)
+    .sort((a, b) => (+b.VALOR || 0) - (+a.VALOR || 0));
+  const temValor = ls.some(l => l.VALOR !== undefined);
+  const total = ls.reduce((t, l) => t + (+l.VALOR || 0), 0);
+  const tipos = {};
+  ls.forEach(l => { const t = l.TIPO_NF || '?'; tipos[t] = (tipos[t] || 0) + 1; });
+  const naoCko = ls.filter(l => !(+l.NA_CKO > 0)).length;
+  const chips = [
+    `<div class="int-pop-chip"><b>${ls.length}</b> nota(s)${temValor ? `<br><span class="text-slate-500">${intValor(total)}</span>` : ''}</div>`,
+    `<div class="int-pop-chip"><b>Tipo NF</b><br><span class="text-slate-500">${escapeHtml(Object.entries(tipos).map(([t, q]) => `${t} · ${INT_TRA_TIPO_NF[t] || '?'}: ${q}`).join(' · '))}</span></div>`,
+    `<div class="int-pop-chip"><b>No Transmite</b><br><span class="${naoCko ? 'text-amber-500' : 'text-slate-500'}">${ls.length - naoCko} com XML na CKOCOL · ${naoCko} não chegaram</span></div>`,
+  ].join('');
+  const tabCfop = cf.length ? `<div><p class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-1">CFOP × TES</p>${intTabela([
+    { k: 'CFOP', rot: 'CFOP' }, { k: 'TES', rot: 'TES' }, { k: 'NOTAS', rot: 'Notas', dir: 1 }, { k: 'ITENS', rot: 'Itens', dir: 1 },
+    { rot: 'Valor dos itens', fmt: l => intNw(intValor(l.VALOR)), dir: 1 }], cf)}</div>`
+    : (B.tra_sem_monitor_cfop && !B.tra_sem_monitor_cfop.ok ? `<p class="text-xs text-slate-500">CFOP/TES não lidos nesta coleta.</p>` : '');
+  const tabNotas = intTabela([
+    { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`), ord: 'DOC' },
+    { rot: 'Fornecedor', fmt: l => `${escapeHtml(`${l.FORNECEDOR}-${l.LOJA}`)}${l.FORN_NOME ? `<br><span class="text-slate-500">${escapeHtml(l.FORN_NOME)}</span>` : ''}`, ord: 'FORNECEDOR' },
+    ...(ls.some(l => l.UF) ? [{ k: 'UF', rot: 'UF', ord: 'UF' }] : []),
+    { rot: 'Emissão', fmt: l => intData(l.EMISSAO), ord: 'EMISSAO' },
+    { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}`, ord: 'DTDIGIT' },
+    { rot: 'Tipo NF', fmt: l => intNw(l.TIPO_NF ? `${l.TIPO_NF} · ${INT_TRA_TIPO_NF[l.TIPO_NF] || '?'}` : '—'), ord: 'TIPO_NF' },
+    ...(temValor ? [
+      { rot: 'CFOP', fmt: l => intNw(intCfops(l)), ord: 'CFOP_MIN' }, { rot: 'TES', fmt: l => intNw(intTesN(l)), ord: 'TES_MIN' },
+      { k: 'ITENS', rot: 'Itens', dir: 1, ord: 'ITENS' }, { rot: 'Valor', fmt: l => intNw(intValor(l.VALOR)), dir: 1, ord: 'VALOR' }] : []),
+    { rot: 'No Transmite', fmt: l => (+l.NA_CKO > 0) ? intStran(l.STRAN) : '<span class="text-slate-500 whitespace-nowrap">não chegou</span>' },
+    { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhuma nota nesta coleta.', { ordId: 'semmon_pop' });
+  const corte = B.tra_sem_monitor_lista?.truncado ? `<p class="text-xs text-amber-500">A lista da coleta foi cortada: pode haver mais notas neste grupo.</p>` : '';
+  const pop = intPopup({ id: `${filial}|${especie}`, titulo: `Filial ${escapeHtml(filial)} · ${escapeHtml(especie || '(sem espécie)')} · lançadas fora do Importador`,
+    sub: 'Notas classificadas de terceiro sem registro no Monitor do Importador (SDS): digitadas direto no Documento de Entrada.',
+    corpo: `<div class="flex flex-wrap gap-2">${chips}</div>${tabCfop}<div data-int-pop-notas>${tabNotas}</div>${corte}`,
+    csv: ['Filial;Especie;Documento;Serie;Fornecedor;Loja;Nome;UF;Emissao;Digitacao;Tipo NF;CFOP;TES;Itens;Valor;CKO_STRAN;Chave']
+      .concat(ls.map(l => [l.FILIAL, l.ESPECIE, l.DOC, l.SERIE, l.FORNECEDOR, l.LOJA, l.FORN_NOME || '', l.UF || '', l.EMISSAO, l.DTDIGIT,
+        l.TIPO_NF, intCfops(l), intTesN(l), l.ITENS ?? '', l.VALOR ?? '', +l.NA_CKO > 0 ? l.STRAN : 'nao chegou', l.CHAVE].join(';'))).join('\n') });
+  // ordenação dentro do popup: re-render só da tabela de notas
+  pop.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-int-ord="semmon_pop"]');
+    if (!b) return;
+    intOrdena('semmon_pop', b.dataset.k);
+    pop.remove(); intTraPopupSemMonitor(B, filial, especie);
+  });
+}
+function intOrdena(id, k) {
+  const o = integ.ord[id];
+  integ.ord[id] = { k, dir: o && o.k === k ? -o.dir : 1 };
+}
 
 /** Quem resolve um XML da lista um a um: pelo resumo da coleta; sem ele, pelo código. */
 const INT_TRA_NAO_ATENDIDO = ['COM003', 'COM004', 'COM047'];   // = TRA_CODERR nao_atendido (api)
@@ -14737,14 +14898,16 @@ function intTraSemMonitorLista(ls) {
       ${sel('filial', 'Filial', fils, f.filial)}${sel('especie', 'Espécie', esps, f.especie)}
       <span class="text-xs text-slate-500">${vis.length} de ${ls.length} nota(s)</span></div>` +
     intTabela([
-      { k: 'FILIAL', rot: 'Filial' }, { k: 'ESPECIE', rot: 'Espécie' },
-      { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`) },
-      { rot: 'Fornecedor', fmt: l => escapeHtml(`${l.FORNECEDOR}-${l.LOJA}`) },
-      { rot: 'Emissão', fmt: l => intData(l.EMISSAO) },
-      { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}` },
-      { rot: 'Tipo NF', fmt: l => intNw(l.TIPO_NF ? `${l.TIPO_NF} · ${INT_TRA_TIPO_NF[l.TIPO_NF] || '?'}` : '—') },
+      { k: 'FILIAL', rot: 'Filial', ord: 'FILIAL' }, { k: 'ESPECIE', rot: 'Espécie', ord: 'ESPECIE' },
+      { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`), ord: 'DOC' },
+      { rot: 'Fornecedor', fmt: l => `${escapeHtml(`${l.FORNECEDOR}-${l.LOJA}`)}${l.FORN_NOME ? ` <span class="text-slate-500">${escapeHtml(l.FORN_NOME)}</span>` : ''}`, ord: 'FORNECEDOR' },
+      { rot: 'Emissão', fmt: l => intData(l.EMISSAO), ord: 'EMISSAO' },
+      { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}`, ord: 'DTDIGIT' },
+      { rot: 'Tipo NF', fmt: l => intNw(l.TIPO_NF ? `${l.TIPO_NF} · ${INT_TRA_TIPO_NF[l.TIPO_NF] || '?'}` : '—'), ord: 'TIPO_NF' },
+      ...(ls.some(l => l.CFOP_MIN !== undefined) ? [{ rot: 'CFOP', fmt: l => intNw(intCfops(l)), ord: 'CFOP_MIN' },
+        { rot: 'Valor', fmt: l => intNw(intValor(l.VALOR)), dir: 1, ord: 'VALOR' }] : []),
       { rot: 'No Transmite (CKO_STRAN)', fmt: naCko },
-      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], vis, 'Nenhuma nota com esse filtro.');
+      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], vis, 'Nenhuma nota com esse filtro.', { ordId: 'semmon_lista' });
 }
 
 /** Colunas da lista de sem retorno — a mesma para as normais e os complementos. */
@@ -14812,9 +14975,13 @@ function intCaixaTransmite(B, hoje, nivel) {
       { rot: 'Na SF1', fmt: l => escapeHtml(l.FILIAL_SF1 ? `filial ${l.FILIAL_SF1}${l.F1_STATUS ? ' · classificada' : ' · pré-nota'}` : 'não lançada') },
       { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhum XML parado.')) +
     intSub('Lançadas fora do Importador (SF1 sem SDS)', B.tra_sem_monitor, (ls) => intTabela([
-      { k: 'FILIAL', rot: 'Filial' }, { k: 'ESPECIE', rot: 'Espécie' }, { k: 'QTD', rot: 'Notas', dir: 1 },
-      { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGO) }, { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }],
-      ls, 'Todas passaram pelo Importador.')) +
+      { k: 'FILIAL', rot: 'Filial', ord: 'FILIAL' }, { k: 'ESPECIE', rot: 'Espécie', ord: 'ESPECIE' },
+      { k: 'QTD', rot: 'Notas', dir: 1, ord: 'QTD' },
+      { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGO), ord: 'MAIS_ANTIGO' },
+      { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE), ord: 'MAIS_RECENTE' },
+      { rot: '', fmt: () => '<span class="int-cod text-[11px]">ver notas ↗</span>' }],
+      ls, 'Todas passaram pelo Importador.',
+      { ordId: 'semmon_grp', linha: l => `data-int-semmon-grp="${escapeHtml(l.FILIAL)}|${escapeHtml(l.ESPECIE || '')}"` })) +
     intSub('Lançadas fora do Importador — notas uma a uma', B.tra_sem_monitor_lista, intTraSemMonitorLista) +
     intSub('Parâmetros do Importador (SX6)', B.tra_config, (ls) => intTabela([
       { k: 'PARAMETRO', rot: 'Parâmetro' }, { rot: 'Filial', fmt: l => escapeHtml(l.FILIAL || '(todas)') },
@@ -15244,6 +15411,21 @@ function ligaIntegracoes() {
     const abrir = b.dataset.intSubTodos === 'abrir';
     b.closest('.rel-bloco').querySelectorAll('details[data-int-sub]').forEach(d => { d.open = abrir; });
   }));
+  $$('#int-conteudo [data-int-ord]').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation(); intOrdena(b.dataset.intOrd, b.dataset.k); renderIntegracoes();
+  }));
+  $$('#int-conteudo [data-int-semmon-grp]').forEach(tr => {
+    tr.classList.add('int-cod-linha');
+    tr.addEventListener('click', () => {
+      const [f, e] = tr.dataset.intSemmonGrp.split('|');
+      intTraPopupSemMonitor(integ.dados?.ultima?.blocos || {}, f, e);
+    });
+  });
+  $$('#int-conteudo [data-int-tra-cod]').forEach(b => {
+    const tr = b.closest('tr');
+    tr.classList.add('int-cod-linha');
+    tr.addEventListener('click', () => intTraPopupCodigo(integ.dados?.ultima?.blocos || {}, b.dataset.intTraCod));
+  });
   $$('#int-conteudo .int-link[data-int-ind]').forEach(c => {
     const ir = () => intIrDetalhe(c.dataset.intInd, c.dataset.intGrupo);
     c.addEventListener('click', (ev) => { if (!ev.target.closest('circle')) ir(); });

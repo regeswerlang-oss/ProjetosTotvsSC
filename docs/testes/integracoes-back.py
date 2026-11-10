@@ -267,7 +267,7 @@ confere('hora limite sem agora', hl(None) is None)
 
 tra = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('transmite',), AGORA)
 tid = [s['id'] for s in tra]
-confere('transmite: 15 blocos', len(tra) == 15)
+confere('transmite: 17 blocos', len(tra) == 17)
 confere('transmite: nenhum bloco de RH', not any(i in tid for i in ('config', 'rjp_fila', 'rum_resumo')))
 confere('transmite: resumos antes dos detalhes',
         max(tid.index(i) for i in tid if not tra[tid.index(i)].get('detalhe'))
@@ -313,7 +313,7 @@ confere('corte encurta a janela', "F1_DTDIGIT >= '20261001'" in cor['tra_sem_ret
 velho = {s['id']: s['sql'] for s in ns['_integ_scripts']('010', HOJE, date(2025, 1, 1), 'oracle', ('transmite',), AGORA)}
 confere('corte mais antigo não alarga a janela', "'20260615'" in velho['tra_fila'])
 ambos = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('rh', 'transmite'), AGORA)
-confere('rh + transmite = 25 blocos', len(ambos) == 25 and ambos[0]['id'] == 'config')
+confere('rh + transmite = 27 blocos', len(ambos) == 27 and ambos[0]['id'] == 'config')
 confere('padrão continua só RH', len(ns['_integ_scripts']('010', HOJE)) == 10)
 
 # ── indicadores Transmite ───────────────────────────────────────────────────
@@ -488,10 +488,15 @@ ina = ind(ti3, 'tra_nao_atendidos')
 confere('não atendidos: 46 informativo com os 3 códigos', ina['valor'] == 46 and ina['nivel'] == 'info'
         and all(c in ina['texto'] for c in ('COM003', 'COM004', 'COM047')))
 confere('sem tra_erros: não atendidos cinza', ind(ns['_integ_indicadores'](tra_ok, {'ok': False}, HOJE, ('transmite',)), 'tra_nao_atendidos')['nivel'] == 'cinza')
-sm = T2['tra_sem_monitor_lista']
+sm = dict(T2['tra_sem_monitor_lista']); sm['sql'] = sm['sqls'][0]
 confere('sem SDS uma a uma: detalhe, mesma regra do resumo', sm.get('detalhe') and 'NOT EXISTS (SELECT 1 FROM SDS010 SDS' in sm['sql']
         and "F1_FORMUL <> 'S'" in sm['sql'] and 'AS FILIAL' in sm['sql'] and 'AS ESPECIE' in sm['sql'])
 confere('sem SDS uma a uma: situação na CKOCOL sem JOIN (não duplica)', 'JOIN' not in sm['sql'] and 'AS NA_CKO' in sm['sql'])
 
+cf = T2['tra_sem_monitor_cfop']['sql']
+confere('sem SDS por CFOP: SD1 pela chave do documento, agrupado', 'INNER JOIN SD1010 SD1 ON SD1.D1_FILIAL = SF1.F1_FILIAL' in cf
+        and 'GROUP BY SF1.F1_FILIAL, SF1.F1_ESPECIE, SD1.D1_CF, SD1.D1_TES' in cf and 'NOT EXISTS (SELECT 1 FROM SDS010' in cf)
+confere('sem SDS uma a uma: CFOP, TES e fornecedor; variante só SF1', 'AS CFOP_MIN' in sm['sql'] and 'AS FORN_NOME' in sm['sql']
+        and 'SD1' not in T2['tra_sem_monitor_lista']['sqls'][1])
 print(f'{ok} asserções OK, {falhou} falha(s)')
 raise SystemExit(1 if falhou else 0)

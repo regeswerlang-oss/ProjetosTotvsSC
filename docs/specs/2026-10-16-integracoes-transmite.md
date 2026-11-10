@@ -253,3 +253,23 @@ Transmite/Importador **não trata** com falhas reais. Separado assim:
 
 Nível `info` (azul, "Informativo"): aparece no cartão mas não pesa na cor do
 grupo nem na situação geral.
+
+## Revisão 09/11/2026 (noite) — popups e ordenação
+
+1. **Popup por código do CKO_CODERR** (clique na linha do quadro "Por que o
+   Importador parou"): os XML daquele código com data de importação, tipo,
+   documento, CNPJ do emitente (da chave: posições 7–20 na NF-e/CT-e;
+   `data|CNPJ|número` na NFS-e), CNPJ de destino, **Empresa/Filial** (SM0 —
+   bloco novo `tra_empresas`, `SYS_COMPANY`; sem CNPJ igual, avisa se é da
+   mesma raiz ou se não é empresa da base), CKO_STRAN e chave. Resumo por
+   CNPJ de destino e "Copiar lista" (CSV com `;`). `tra_erros_lista` passou a
+   600 linhas.
+2. **Lançadas fora do Importador (SF1 sem SDS)**: cabeçalhos ordenáveis
+   (Filial, Espécie, Notas, datas) e clique na linha abre o popup da filial +
+   espécie — notas com fornecedor (nome da SA2), UF, emissão, digitação, Tipo
+   NF, CFOP e TES (faixa mín…máx da SD1), itens, valor (F1_VALBRUT) e situação
+   no Transmite, mais o quadro **CFOP × TES** (bloco novo
+   `tra_sem_monitor_cfop`, SF1 × SD1 agrupado). `tra_sem_monitor_lista` tem 2
+   variantes: com SD1/SA2 e só SF1.
+3. `intTabela(cols, linhas, vazio, {ordId, linha})`: ordenação genérica por
+   coluna (`ord`), estado em `integ.ord`, e atributos por linha.

@@ -258,9 +258,20 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
     tra_revisao: { ok: true, linhas: [{ STATUS: 'B', QTD: '6', MAIS_ANTIGO: '20260920', MAIS_RECENTE: '20261010' }] },
     tra_revisao_lista: { ok: false, erro: 'Não lido: o tempo da coleta acabou antes deste bloco.', linhas: [] },
     tra_fila: { ok: true, linhas: [{ CODEDI: '109', STRAN: '4', QTD: '300', MAIS_ANTIGO: '20260701', MAIS_RECENTE: '20261016' }] },
-    tra_fila_antigos: { ok: true, linhas: [] }, tra_sem_monitor: { ok: true, linhas: [] },
+    tra_fila_antigos: { ok: true, linhas: [] },
+    tra_sem_monitor: { ok: true, linhas: [
+      { FILIAL: '070701', ESPECIE: 'NF3E', QTD: '1', MAIS_ANTIGO: '20261010', MAIS_RECENTE: '20261010' },
+      { FILIAL: '010113', ESPECIE: 'SPED', QTD: '1', MAIS_ANTIGO: '20261109', MAIS_RECENTE: '20261109' },
+      { FILIAL: '010113', ESPECIE: 'NFCOM', QTD: '1', MAIS_ANTIGO: '20261009', MAIS_RECENTE: '20261009' }] },
+    tra_sem_monitor_cfop: { ok: true, linhas: [
+      { FILIAL: '010113', ESPECIE: 'SPED', CFOP: '1101', TES: '001', NOTAS: '1', ITENS: '2', VALOR: '1500.5' },
+      { FILIAL: '010113', ESPECIE: 'SPED', CFOP: '1556', TES: '010', NOTAS: '1', ITENS: '1', VALOR: '99.9' }] },
+    tra_empresas: { ok: true, linhas: [
+      { EMPRESA: '01', FILIAL: '010113', NOME: 'FILIAL CRICIUMA', RAZAO: 'INDUSTRIA CARBONIFERA RIO DESERTO', CNPJ: '83286500001211' },
+      { EMPRESA: '01', FILIAL: '010101', NOME: 'MATRIZ', RAZAO: 'INDUSTRIA CARBONIFERA RIO DESERTO', CNPJ: '83286500000187' }] },
     tra_sem_monitor_lista: { ok: true, linhas: [
-      { FILIAL: '010113', ESPECIE: 'SPED', DOC: '000500001', SERIE: '1', FORNECEDOR: 'F1', LOJA: '01', EMISSAO: '20261109', DTDIGIT: '20261109', HORA: '08:00:00', TIPO_NF: 'N', CHAVE: 'K1', STRAN: '2', NA_CKO: '1' },
+      { FILIAL: '010113', ESPECIE: 'SPED', DOC: '000500001', SERIE: '1', FORNECEDOR: 'F1', LOJA: '01', EMISSAO: '20261109', DTDIGIT: '20261109', HORA: '08:00:00', TIPO_NF: 'N', CHAVE: 'K1', STRAN: '2', NA_CKO: '1',
+        VALOR: '1600.4', UF: 'SC', FORN_NOME: 'FORNECEDOR UM LTDA', CFOP_MIN: '1101', CFOP_MAX: '1556', N_CFOP: '2', TES_MIN: '001', TES_MAX: '010', ITENS: '3' },
       { FILIAL: '010113', ESPECIE: 'NFCOM', DOC: '000500002', SERIE: '1', FORNECEDOR: 'F2', LOJA: '01', EMISSAO: '20261009', DTDIGIT: '20261009', HORA: '09:00:00', TIPO_NF: 'N', CHAVE: 'K2', STRAN: '', NA_CKO: '0' },
       { FILIAL: '070701', ESPECIE: 'NF3E', DOC: '000500003', SERIE: '1', FORNECEDOR: 'F3', LOJA: '01', EMISSAO: '20261009', DTDIGIT: '20261010', HORA: '10:00:00', TIPO_NF: 'N', CHAVE: 'K3', STRAN: '', NA_CKO: '0' }] },
     tra_config: { ok: true, linhas: [{ PARAMETRO: 'MV_APITRAN', FILIAL: '', CONTEUDO: '(preenchido)' }] },
@@ -327,6 +338,14 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('complementos: a lista principal mostra só as normais', await pg.$$eval('#int-conteudo table', ts => {
     const t0 = ts.find(t => /000013687/.test(t.textContent)); return !!t0 && !/000689328|000041132/.test(t0.textContent); }));
   t('erros: quadro do Importador', /Por que o Importador parou/.test(rd));
+  // popup do código: notas com CNPJ, empresa/filial, chave e tipo
+  await pg.click('[data-int-tra-cod="COM007"]');
+  if (process.env.SHOT) await pg.screenshot({ path: process.env.SHOT.replace('.png', '-pop1.png') });
+  const pop = await pg.$eval('[data-int-pop="COM007"]', n => n.textContent.replace(/\s+/g, ' ')).catch(() => '');
+  t('popup do CKO_CODERR com CNPJ de destino, empresa/filial, tipo e chave', /COM007 · 1 XML/.test(pop) && /83\.286\.500\/0012-11/.test(pop)
+    && /01\/010113 · FILIAL CRICIUMA/.test(pop) && /109 · NF-e/.test(pop) && /CNPJ emitente/.test(pop), pop.slice(0, 200));
+  await pg.keyboard.press('Escape');
+  t('popup fecha com Esc', await pg.$('[data-int-pop]') === null);
   // clique no cartão → detalhamento abaixo
   await pg.click('[data-int-ind="tra_sem_monitor"], [data-int-ind="tra_sem_retorno"]');
   await pg.waitForTimeout(400);
@@ -352,6 +371,23 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('erros: texto da base marcado', /não podera ser processado\. \(texto da base\)/.test(rd));
   t('erros: texto escapado', await pg.$('#int-conteudo b:has-text("descrição")') === null && /Código sem <b>descrição<\/b>/.test(rd));
   t('erros: fila sem motivo explicada', /Sem motivo gravado: 614 XML/.test(rd) && /2 · Exportada 614/.test(rd));
+  // ordenação por Filial/Espécie na tabela agrupada
+  const ordem = () => pg.$$eval('[data-int-semmon-grp]', trs => trs.map(t => t.dataset.intSemmonGrp).join(','));
+  await pg.click('[data-int-ord="semmon_grp"][data-k="FILIAL"]');
+  t('ordena por filial (crescente)', (await ordem()).startsWith('010113|'), await ordem());
+  await pg.click('[data-int-ord="semmon_grp"][data-k="ESPECIE"]');
+  t('ordena por espécie', await ordem() === '070701|NF3E,010113|NFCOM,010113|SPED', await ordem());
+  await pg.click('[data-int-ord="semmon_grp"][data-k="ESPECIE"]');
+  t('segundo clique inverte', (await ordem()).startsWith('010113|SPED'), await ordem());
+  // popup por filial + espécie
+  await pg.click('[data-int-semmon-grp="010113|SPED"]');
+  const pg2 = await pg.$eval('[data-int-pop="010113|SPED"]', n => n.textContent.replace(/\s+/g, ' ')).catch(() => '');
+  t('popup filial/espécie: notas, CFOP × TES, tipo, valor, fornecedor', /Filial 010113 · SPED/.test(pg2) && /CFOP × TES/.test(pg2)
+    && /1556/.test(pg2) && /1101 … 1556/.test(pg2) && /FORNECEDOR UM LTDA/.test(pg2) && /N · normal: 1/.test(pg2) && /R\$\s?1\.600,40/.test(pg2), pg2.slice(0, 300));
+  await pg.click('[data-int-pop] [data-int-ord="semmon_pop"][data-k="VALOR"]');
+  t('popup reordena e continua aberto', !!(await pg.$('[data-int-pop="010113|SPED"]')));
+  if (process.env.SHOT) await pg.screenshot({ path: process.env.SHOT.replace('.png', '-pop2.png') });
+  await pg.keyboard.press('Escape');
   t('sem SDS: notas abertas com filtro', /Lançadas fora do Importador — notas uma a uma/.test(rd) && /3 de 3 nota\(s\)/.test(rd)
     && /não chegou ao Transmite/.test(rd) && /000500003/.test(rd));
   await pg.selectOption('[data-int-semmon="filial"]', '010113');

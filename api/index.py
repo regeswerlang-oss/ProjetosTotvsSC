@@ -9914,6 +9914,18 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None, banco=None):
               + (f" OR (SF1.F1_DTDIGIT = '{h}' AND SF1.F1_HORA > '{hl}')" if hl else "") + ")")
     sds_datas = ("DS_DATAIMP", "DS_EMISSA")              # a 1ª que a base tiver
     tipos_fora = ", ".join(f"'{t}'" for t in TRA_TIPOS_FORA)
+    # notas classificadas de terceiro que não passaram pelo Importador (SF1 sem SDS)
+    sm_where = (f"SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} AND SF1.F1_DTDIGIT >= '{j}' "
+                f"AND NOT EXISTS (SELECT 1 FROM SDS{s} SDS WHERE RTRIM(SDS.DS_CHAVENF) = "
+                f"RTRIM(SF1.F1_CHVNFE) AND SDS.D_E_L_E_T_ = ' ')")
+    mesmo_doc = ("SD1.D1_FILIAL = SF1.F1_FILIAL AND SD1.D1_DOC = SF1.F1_DOC AND SD1.D1_SERIE = SF1.F1_SERIE "
+                 "AND SD1.D1_FORNECE = SF1.F1_FORNECE AND SD1.D1_LOJA = SF1.F1_LOJA AND SD1.D_E_L_E_T_ = ' '")
+    sm_cols = (f"SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_ESPECIE) AS ESPECIE, RTRIM(SF1.F1_DOC) AS DOC, "
+               f"RTRIM(SF1.F1_SERIE) AS SERIE, RTRIM(SF1.F1_FORNECE) AS FORNECEDOR, RTRIM(SF1.F1_LOJA) AS LOJA, "
+               f"SF1.F1_EMISSAO AS EMISSAO, SF1.F1_DTDIGIT AS DTDIGIT, RTRIM(SF1.F1_HORA) AS HORA, "
+               f"RTRIM(SF1.F1_TIPO) AS TIPO_NF, RTRIM(SF1.F1_CHVNFE) AS CHAVE, "
+               f"(SELECT MAX(RTRIM(CKO.CKO_STRAN)) FROM {cko} CKO WHERE {mesma_chave}) AS STRAN, "
+               f"(SELECT COUNT(*) FROM {cko} CKO WHERE {mesma_chave}) AS NA_CKO")
     normal = f"SF1.F1_TIPO NOT IN ({tipos_fora})"        # o que o Transmite trata
     compl = f"SF1.F1_TIPO IN ({tipos_fora})"
     return [
@@ -10002,8 +10014,16 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None, banco=None):
                    + f" FROM {cko} WHERE R_E_C_N_O_ IN (SELECT MIN(R_E_C_N_O_) FROM {cko} "
                    f"WHERE D_E_L_E_T_ = ' ' AND CKO_DT_IMP >= '{j}' AND {_integ_preenchido('CKO_CODERR')} "
                    f"GROUP BY CKO_CODERR)") for e in _tra_memo_exprs("CKO_MSGERR", banco)]},
+        # Empresas/filiais (SM0) para dar nome ao CNPJ de destino no popup do
+        # CKO_CODERR (COM052: XML de um CNPJ que não é filial da base).
+        {"id": "tra_empresas", "rotulo": "Transmite — empresas/filiais da base (SM0) por CNPJ",
+         "tabela": "SYS_COMPANY", "limite": 2000, "detalhe": True,
+         "sqls": ["SELECT M0_CODIGO AS EMPRESA, M0_CODFIL AS FILIAL, RTRIM(M0_FILIAL) AS NOME, "
+                  "RTRIM(M0_NOMECOM) AS RAZAO, RTRIM(M0_CGC) AS CNPJ FROM SYS_COMPANY WHERE D_E_L_E_T_ = ' '",
+                  "SELECT M0_CODIGO AS EMPRESA, M0_CODFIL AS FILIAL, RTRIM(M0_FILIAL) AS NOME, "
+                  "RTRIM(M0_CGC) AS CNPJ FROM SYS_COMPANY WHERE D_E_L_E_T_ = ' '"]},
         {"id": "tra_erros_lista", "rotulo": "Transmite — XML parados com motivo do Importador, um a um",
-         "tabela": cko, "limite": 300, "detalhe": True,
+         "tabela": cko, "limite": 600, "detalhe": True,
          "sql": (f"SELECT RTRIM(CKO_CODERR) AS ERRO, RTRIM(CKO_STRAN) AS STRAN, RTRIM(CKO_CODEDI) AS CODEDI, "
                  f"CKO_DT_IMP AS DT_IMP, RTRIM(CKO_DOC) AS DOC, RTRIM(CKO_CNPJIM) AS DESTINO, "
                  f"RTRIM(CKO_CHVDOC) AS CHAVE FROM {cko} WHERE D_E_L_E_T_ = ' ' AND CKO_DT_IMP >= '{j}' "
@@ -10029,16 +10049,27 @@ def _tra_scripts(sufixo, hoje, desde=None, agora=None, banco=None):
         # tem 2 linhas e um JOIN duplicaria a nota.
         {"id": "tra_sem_monitor_lista", "rotulo": "Transmite — notas lançadas fora do Importador, uma a uma",
          "tabela": f"SF1{s}", "limite": 1000, "detalhe": True,
-         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_ESPECIE) AS ESPECIE, RTRIM(SF1.F1_DOC) AS DOC, "
-                 f"RTRIM(SF1.F1_SERIE) AS SERIE, RTRIM(SF1.F1_FORNECE) AS FORNECEDOR, RTRIM(SF1.F1_LOJA) AS LOJA, "
-                 f"SF1.F1_EMISSAO AS EMISSAO, SF1.F1_DTDIGIT AS DTDIGIT, RTRIM(SF1.F1_HORA) AS HORA, "
-                 f"RTRIM(SF1.F1_TIPO) AS TIPO_NF, RTRIM(SF1.F1_CHVNFE) AS CHAVE, "
-                 f"(SELECT MAX(RTRIM(CKO.CKO_STRAN)) FROM {cko} CKO WHERE {mesma_chave}) AS STRAN, "
-                 f"(SELECT COUNT(*) FROM {cko} CKO WHERE {mesma_chave}) AS NA_CKO "
-                 f"FROM SF1{s} SF1 WHERE SF1.D_E_L_E_T_ = ' ' AND {classif} AND {terc} "
-                 f"AND SF1.F1_DTDIGIT >= '{j}' AND NOT EXISTS (SELECT 1 FROM SDS{s} SDS "
-                 f"WHERE RTRIM(SDS.DS_CHAVENF) = RTRIM(SF1.F1_CHVNFE) AND SDS.D_E_L_E_T_ = ' ') "
-                 f"ORDER BY SF1.F1_FILIAL, SF1.F1_ESPECIE, SF1.F1_DTDIGIT, SF1.F1_DOC")},
+         # 1ª: com CFOP/TES/itens (SD1), valor, UF e nome do fornecedor (SA2) para o
+         # popup; 2ª: só a SF1, se alguma dessas leituras falhar na base.
+         "sqls": [(f"SELECT {sm_cols}, SF1.F1_VALBRUT AS VALOR, RTRIM(SF1.F1_EST) AS UF, "
+                   f"(SELECT MIN(RTRIM(SA2.A2_NOME)) FROM SA2{s} SA2 WHERE SA2.A2_COD = SF1.F1_FORNECE "
+                   f"AND SA2.A2_LOJA = SF1.F1_LOJA AND SA2.D_E_L_E_T_ = ' ') AS FORN_NOME, "
+                   f"(SELECT MIN(RTRIM(SD1.D1_CF)) FROM SD1{s} SD1 WHERE {mesmo_doc}) AS CFOP_MIN, "
+                   f"(SELECT MAX(RTRIM(SD1.D1_CF)) FROM SD1{s} SD1 WHERE {mesmo_doc}) AS CFOP_MAX, "
+                   f"(SELECT COUNT(DISTINCT SD1.D1_CF) FROM SD1{s} SD1 WHERE {mesmo_doc}) AS N_CFOP, "
+                   f"(SELECT MIN(RTRIM(SD1.D1_TES)) FROM SD1{s} SD1 WHERE {mesmo_doc}) AS TES_MIN, "
+                   f"(SELECT MAX(RTRIM(SD1.D1_TES)) FROM SD1{s} SD1 WHERE {mesmo_doc}) AS TES_MAX, "
+                   f"(SELECT COUNT(*) FROM SD1{s} SD1 WHERE {mesmo_doc}) AS ITENS "
+                   f"FROM SF1{s} SF1 WHERE {sm_where} ORDER BY SF1.F1_FILIAL, SF1.F1_ESPECIE, SF1.F1_DTDIGIT, SF1.F1_DOC"),
+                  (f"SELECT {sm_cols} FROM SF1{s} SF1 WHERE {sm_where} "
+                   f"ORDER BY SF1.F1_FILIAL, SF1.F1_ESPECIE, SF1.F1_DTDIGIT, SF1.F1_DOC")]},
+        # CFOP × TES das notas sem SDS, por filial e espécie (resumo do popup).
+        {"id": "tra_sem_monitor_cfop", "rotulo": "Transmite — notas lançadas fora do Importador por CFOP e TES",
+         "tabela": f"SD1{s}", "limite": 1000, "detalhe": True,
+         "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_ESPECIE) AS ESPECIE, RTRIM(SD1.D1_CF) AS CFOP, "
+                 f"RTRIM(SD1.D1_TES) AS TES, COUNT(DISTINCT SF1.R_E_C_N_O_) AS NOTAS, COUNT(*) AS ITENS, "
+                 f"SUM(SD1.D1_TOTAL) AS VALOR FROM SF1{s} SF1 INNER JOIN SD1{s} SD1 ON {mesmo_doc} "
+                 f"WHERE {sm_where} GROUP BY SF1.F1_FILIAL, SF1.F1_ESPECIE, SD1.D1_CF, SD1.D1_TES")},
         {"id": "tra_futuras_lista", "rotulo": "Transmite — notas com data/hora no futuro",
          "tabela": f"SF1{s}", "limite": 100, "detalhe": True,
          "sql": (f"SELECT SF1.F1_FILIAL AS FILIAL, RTRIM(SF1.F1_DOC) AS DOC, RTRIM(SF1.F1_SERIE) AS SERIE, "
