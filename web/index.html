@@ -14065,7 +14065,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
                 abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai']),
-                duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '' }, subAbertas: new Set(), ord: {} };
+                duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '', natureza: '' }, subAbertas: new Set(), ord: {} };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
 // `cor` = faixa à esquerda do cartão (tema escuro: superfície neutra + acento,
@@ -14140,7 +14140,14 @@ const INT_TRA_DS = { B: 'revisão cadastral' };
 // 109/214/273/319 são os códigos que o SCHEDUPDTRA trata (Central 23130965724823).
 // 319 = NFS-e pela chave na base (data|CNPJ|número, sem os 44 dígitos); 273 sem descrição oficial.
 const INT_TRA_EDI = { '109': 'NF-e', '214': 'CT-e', '319': 'NFS-e' };
-const INT_TRA_PRAZO = 90, INT_TRA_AMARELO = 60, INT_TRA_VERMELHO = 80;   // = TRA_PRAZO* (api)
+// Prazo do evento da base (api: _tra_prazos): gravado na coleta (_meta.tra_prazo).
+let INT_TRA_PRAZO = 90, INT_TRA_AMARELO = 60, INT_TRA_VERMELHO = 80;
+function intTraPrazoDe(B) {
+  const p = +(B?._meta?.tra_prazo || integ.dados?.ambiente_cfg?.tra_prazo || 90);
+  INT_TRA_PRAZO = p; INT_TRA_AMARELO = p - 30; INT_TRA_VERMELHO = p - 10;
+}
+const INT_TRA_CONSUMO = ['NF3E', 'NFCOM', 'NFAG'];   // = TRA_CONSUMO (api)
+const INT_TRA_NATUREZA = { transf: 'Transferência entre filiais', consumo: 'Conta de consumo', demais: 'Demais' };
 const INT_TIPO_RUM = { '1': 'Funcionário', '2': 'Afastamento' };
 const INT_STATUS_RUM = { '0': 'Não integrado', '3': 'Inconsistência', '4': 'Aguardando retorno', '6': 'Integrado' };
 const INT_OPER = { I: 'Inclusão', A: 'Alteração', D: 'Alteração', E: 'Exclusão' };
@@ -14247,6 +14254,7 @@ async function carregaIntegracoes() {
   integ.carregando = true; integ.erro = null; renderIntegracoes();
   try {
     integ.dados = await api(`/api/integracoes/${encodeURIComponent(integ.customer)}?ambiente=${integ.ambiente}`);
+    if (intGruposCfg().includes('transmite')) await intOcorrCarrega();
   } catch (e) {
     integ.erro = e.message; integ.dados = null;
   } finally {
@@ -14387,7 +14395,9 @@ const INT_DETALHE = {
   tra_hora_futura: 'Data/hora de digitação no futuro',
   tra_revisao: 'Em revisão cadastral (B)',
   tra_fila: 'XML há mais de 30 dias sem "Classificada"',
-  tra_entrada: 'XML importados por situação (CKOCOL)',
+  tra_entrada: 'Última importação por tipo',
+  tra_captura: 'Atraso de captura por espécie (emissão → Monitor)',
+  tra_transf: 'Transferências entre filiais fora do Importador',
   tra_sem_monitor: 'Lançadas fora do Importador — notas uma a uma',
   tra_erros: 'Por que o Importador parou (CKO_CODERR)',
   tra_nao_atendidos: 'Não atendidos pelo Importador, um a um (lançar à mão)',
@@ -14881,11 +14891,14 @@ function intTraColsErros(B) {
 function intTraSemMonitorLista(ls) {
   if (!ls.length) return '<p class="text-xs text-slate-500 py-2">Todas passaram pelo Importador.</p>';
   const f = integ.semMon;
+  const B = integ.dados?.ultima?.blocos || {};
+  ls = ls.map(l => ({ ...l, NATUREZA: intTraNatureza(B, l) }));
   const fils = [...new Set(ls.map(l => l.FILIAL))].sort();
   const esps = [...new Set(ls.map(l => l.ESPECIE || ''))].sort();
   if (f.filial && !fils.includes(f.filial)) f.filial = '';
   if (f.especie && !esps.includes(f.especie)) f.especie = '';
-  const vis = ls.filter(l => (!f.filial || l.FILIAL === f.filial) && (!f.especie || (l.ESPECIE || '') === f.especie));
+  const vis = ls.filter(l => (!f.filial || l.FILIAL === f.filial) && (!f.especie || (l.ESPECIE || '') === f.especie)
+    && (!f.natureza || l.NATUREZA === f.natureza));
   const conta = (campo, v) => ls.filter(l => (l[campo] || '') === v && (campo === 'FILIAL' ? (!f.especie || (l.ESPECIE || '') === f.especie) : (!f.filial || l.FILIAL === f.filial))).length;
   const sel = (campo, nome, vals, atual) => `<label class="text-xs text-slate-600 flex items-center gap-1">${nome}
     <select data-int-semmon="${campo}" class="text-xs border border-slate-300 rounded px-1.5 py-1 bg-white">
@@ -14896,6 +14909,9 @@ function intTraSemMonitorLista(ls) {
     : '<span class="text-slate-500 whitespace-nowrap">não chegou ao Transmite</span>';
   return `<div class="flex flex-wrap items-center gap-3 mb-2" data-int-semmon-filtros>
       ${sel('filial', 'Filial', fils, f.filial)}${sel('especie', 'Espécie', esps, f.especie)}
+      <label class="text-xs text-slate-600 flex items-center gap-1">Natureza
+        <select data-int-semmon="natureza" class="text-xs border border-slate-300 rounded px-1 py-1 bg-white"><option value="">Todas</option>${
+          Object.entries(INT_TRA_NATUREZA).map(([k, v]) => `<option value="${k}" ${f.natureza === k ? 'selected' : ''}>${escapeHtml(v)} (${ls.filter(l => l.NATUREZA === k).length})</option>`).join('')}</select></label>
       <span class="text-xs text-slate-500">${vis.length} de ${ls.length} nota(s)</span></div>` +
     intTabela([
       { k: 'FILIAL', rot: 'Filial', ord: 'FILIAL' }, { k: 'ESPECIE', rot: 'Espécie', ord: 'ESPECIE' },
@@ -14904,10 +14920,171 @@ function intTraSemMonitorLista(ls) {
       { rot: 'Emissão', fmt: l => intData(l.EMISSAO), ord: 'EMISSAO' },
       { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}`, ord: 'DTDIGIT' },
       { rot: 'Tipo NF', fmt: l => intNw(l.TIPO_NF ? `${l.TIPO_NF} · ${INT_TRA_TIPO_NF[l.TIPO_NF] || '?'}` : '—'), ord: 'TIPO_NF' },
+      { rot: 'Natureza', fmt: l => intNw(INT_TRA_NATUREZA[l.NATUREZA]), ord: 'NATUREZA' },
       ...(ls.some(l => l.CFOP_MIN !== undefined) ? [{ rot: 'CFOP', fmt: l => intNw(intCfops(l)), ord: 'CFOP_MIN' },
         { rot: 'Valor', fmt: l => intNw(intValor(l.VALOR)), dir: 1, ord: 'VALOR' }] : []),
       { rot: 'No Transmite (CKO_STRAN)', fmt: naCko },
       { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], vis, 'Nenhuma nota com esse filtro.', { ordId: 'semmon_lista' });
+}
+
+/** M3 · por que o SCHEDUPDTRA não devolveu "Classificada": sem SDS, ou SDS × SF1
+ *  diferentes em número, série, fornecedor ou loja (regra da Central TOTVS). */
+function intTraMotivo(l) {
+  const z = (v) => String(v ?? '').trim().replace(/^0+(?=.)/, '');
+  const t = (v) => String(v ?? '').trim();
+  if (l.TEM_SDS === 'N') return '<span class="text-rose-400">Sem SDS: lançada fora do Importador — o SCHEDUPDTRA não devolve</span>';
+  if (l.DS_DOC === undefined) return '<span class="text-slate-500">—</span>';
+  const dif = [];
+  if (z(l.DS_DOC) !== z(l.DOC) || t(l.DS_DOC) !== t(l.DOC)) dif.push(`número SDS "${t(l.DS_DOC)}" × SF1 "${t(l.DOC)}"`);
+  if (t(l.DS_SERIE) !== t(l.SERIE)) dif.push(`série SDS "${t(l.DS_SERIE)}" × SF1 "${t(l.SERIE)}"`);
+  if (t(l.DS_FORNEC) !== t(l.FORNECEDOR) || t(l.DS_LOJA) !== t(l.LOJA))
+    dif.push(`fornecedor SDS ${t(l.DS_FORNEC)}-${t(l.DS_LOJA)} × SF1 ${t(l.FORNECEDOR)}-${t(l.LOJA)}`);
+  if (dif.length) return `<span class="text-amber-500">Diferente: ${escapeHtml(dif.join('; '))}</span>`;
+  return '<span class="text-slate-500">SDS = SF1: aguardar o SCHEDUPDTRA ou ver o log por chave</span>';
+}
+/** M6 · natureza da nota lançada fora do Importador. */
+function intTraNatureza(B, l) {
+  const cnpjs = new Set((B.tra_empresas?.ok ? B.tra_empresas.linhas || [] : []).map(e => String(e.CNPJ || '').replace(/\D/g, '')));
+  const cg = String(l.FORN_CGC || '').replace(/\D/g, '');
+  if (cg && cnpjs.has(cg)) return 'transf';
+  if (INT_TRA_CONSUMO.includes(String(l.ESPECIE || '').trim())) return 'consumo';
+  return 'demais';
+}
+/** M5 · há quantas horas foi a última importação daquele tipo. */
+function intTraHoras(l) {
+  const d = String(l.ULT_DATA || ''); const h = String(l.ULT_HORA || '00:00');
+  if (d.length !== 8) return '—';
+  const quando = new Date(`${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}T${h.slice(0, 5)}:00-03:00`);
+  const horas = Math.max(0, Math.floor((Date.now() - quando.getTime()) / 3600000));
+  const nv = horas > 24 ? 'text-rose-400' : horas > 12 ? 'text-amber-500' : 'text-emerald-400';
+  return `<span class="${nv} font-semibold">${horas} h</span>`;
+}
+/** M1 · faixas de atraso por espécie, com % tarde (CT-e: > 1 dia; NF-e: 4+ dias). */
+function intTraCaptura(ls) {
+  const linhas = [...ls].sort((a, b) => (+b.QTD || 0) - (+a.QTD || 0));
+  const pct = (v, n) => n ? `${Math.round(100 * v / n)}%` : '—';
+  return intTabela([
+    { k: 'ESPECIE', rot: 'Espécie' }, { k: 'QTD', rot: 'Notas', dir: 1 },
+    { rot: 'Até 1 dia', fmt: l => `${l.ATE1} <span class="text-slate-500">(${pct(+l.ATE1, +l.QTD)})</span>`, dir: 1 },
+    { k: 'D2A3', rot: '2–3 dias', dir: 1 }, { k: 'D4A7', rot: '4–7 dias', dir: 1 }, { k: 'MAIS7', rot: 'Mais de 7', dir: 1 },
+    { rot: 'Maior atraso', fmt: l => `${escapeHtml(String(l.MAXIMO))} d`, dir: 1 },
+    { rot: 'Tarde', fmt: l => {
+        const cte = String(l.ESPECIE || '').startsWith('CTE');
+        const tarde = cte ? (+l.D2A3 + +l.D4A7 + +l.MAIS7) : (+l.D4A7 + +l.MAIS7);
+        return `<b>${pct(tarde, +l.QTD)}</b> <span class="text-slate-500">${cte ? '> 1 dia' : '4+ dias'}</span>`; }, dir: 1 }],
+    linhas, 'Nenhuma nota no Monitor na janela.') +
+    '<p class="text-[11px] text-slate-500 mt-1">Da emissão até o Monitor do Importador (DS_EMISSA → DS_DATAIMP). Inclui o tempo do Transmite e o atraso de quem emite (transportadora que envia tarde).</p>';
+}
+/** M2 · transferências entre filiais lançadas sem Monitor, com as notas abertas. */
+function intTraTransf(B, ls) {
+  const notas = (B.tra_sem_monitor_lista?.linhas || []).filter(l => intTraNatureza(B, l) === 'transf');
+  const resumo = intTabela([
+    { k: 'FILIAL', rot: 'Filial', ord: 'FILIAL' }, { k: 'ESPECIE', rot: 'Espécie', ord: 'ESPECIE' },
+    { rot: 'XML no Transmite', fmt: l => l.CK === 'N' ? '<span class="text-rose-400">não chegou</span>' : 'chegou (CKOCOL)', ord: 'CK' },
+    { k: 'QTD', rot: 'Notas', dir: 1, ord: 'QTD' },
+    { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGA), ord: 'MAIS_ANTIGA' },
+    { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE), ord: 'MAIS_RECENTE' }],
+    ls, 'Nenhuma transferência entre filiais fora do Importador.', { ordId: 'transf' });
+  const lista = notas.length ? `<p class="text-xs font-semibold text-slate-600 uppercase tracking-wide mt-3 mb-1">Notas (${notas.length})</p>` + intTabela([
+    { k: 'FILIAL', rot: 'Filial', ord: 'FILIAL' }, { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`), ord: 'DOC' },
+    { rot: 'Filial emitente', fmt: l => `${escapeHtml(l.FORN_NOME || `${l.FORNECEDOR}-${l.LOJA}`)}<br><span class="text-slate-500">${escapeHtml(intCnpjFmt(l.FORN_CGC))} · ${escapeHtml(intTraEmpresaDe(B, l.FORN_CGC).txt)}</span>` },
+    { rot: 'Emissão', fmt: l => intData(l.EMISSAO), ord: 'EMISSAO' },
+    { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}`, ord: 'DTDIGIT' },
+    { rot: 'Prazo do evento', fmt: l => intPrazo(l.EMISSAO, integ.dados?.hoje) },
+    { rot: 'No Transmite', fmt: l => (+l.NA_CKO > 0) ? intStran(l.STRAN) : '<span class="text-rose-400 whitespace-nowrap">não chegou</span>' },
+    { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], notas, '', { ordId: 'transf_notas' }) : '';
+  return `<p class="text-xs text-slate-600 mb-1">Emitente é empresa/filial do grupo (SM0). Lançada direto no Documento de Entrada — por exemplo, recebida na balança antes do XML chegar — ela não passa pelo Monitor e o SCHEDUPDTRA não devolve "Classificada": a Confirmação da Operação fica à mão.</p>` + resumo + lista;
+}
+/** M8 · ocorrências do portal (PDF, busca, captura por e-mail) registradas à mão. */
+const INT_OCORR_TIPOS = { pdf: 'PDF não abre', busca: 'Busca lenta / nota não aparece', captura_email: 'Captura por e-mail', status: 'Status de classificação', outro: 'Outro' };
+function intTraOcorrencias() {
+  const ls = integ.ocorr || [];
+  const agora = new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 16);
+  const form = `<form data-int-ocorr-form class="grid grid-cols-1 md:grid-cols-6 gap-2 items-end mb-3 text-xs">
+      <label class="flex flex-col gap-1">Quando<input type="datetime-local" name="ocorrido_em" value="${agora}" required class="border border-slate-300 rounded px-2 py-1 bg-white"></label>
+      <label class="flex flex-col gap-1">Tipo<select name="tipo" class="border border-slate-300 rounded px-2 py-1 bg-white">${
+        Object.entries(INT_OCORR_TIPOS).map(([k, v]) => `<option value="${k}">${escapeHtml(v)}</option>`).join('')}</select></label>
+      <label class="flex flex-col gap-1">Usuário<input name="usuario" maxlength="80" placeholder="ex.: Bruna" class="border border-slate-300 rounded px-2 py-1 bg-white"></label>
+      <label class="flex flex-col gap-1 md:col-span-2">O que aconteceu<input name="descricao" maxlength="1000" required placeholder="ex.: PDF da NF 12345 não abre desde 16h, tela em branco" class="border border-slate-300 rounded px-2 py-1 bg-white"></label>
+      <div class="flex gap-2"><label class="flex flex-col gap-1 flex-1">Chamado<input name="chamado" maxlength="60" class="border border-slate-300 rounded px-2 py-1 bg-white"></label>
+        <button type="submit" class="int-sub-bt self-end whitespace-nowrap">+ Registrar</button></div></form>`;
+  const tab = intTabela([
+    { rot: 'Quando', fmt: o => escapeHtml(new Date(o.ocorrido_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' })) },
+    { rot: 'Tipo', fmt: o => escapeHtml(INT_OCORR_TIPOS[o.tipo] || o.tipo) }, { rot: 'Usuário', fmt: o => escapeHtml(o.usuario || '—') },
+    { rot: 'O que aconteceu', fmt: o => escapeHtml(o.descricao) }, { rot: 'Chamado', fmt: o => escapeHtml(o.chamado || '—') },
+    { rot: 'Registrado por', fmt: o => escapeHtml((o.criado_por || '').split('@')[0]) },
+    { rot: '', fmt: o => `<button type="button" data-int-ocorr-apaga="${o.id}" class="text-slate-400 hover:text-rose-400" title="Apagar">×</button>` }],
+    ls, 'Nenhuma ocorrência registrada.');
+  return `<p class="text-xs text-slate-600 mb-2">A base do Protheus não enxerga o portal: registre aqui cada falha (PDF que não abre, busca lenta, CT-e do e-mail que não chegou) para anexar ao chamado do produto.</p>${form}${tab}`;
+}
+async function intOcorrCarrega() {
+  try {
+    const j = await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/ocorrencias?ambiente=${integ.ambiente}`);
+    integ.ocorr = j.ocorrencias || [];
+  } catch (_) { integ.ocorr = integ.ocorr || []; }
+}
+/** M7 · dossiê para o chamado do PO de Produto: um HTML com P1 a P5 e o backlog,
+ *  montado com os dados da última coleta e as ocorrências registradas. */
+function intTraDossie(B) {
+  const d = integ.dados || {};
+  const esc = escapeHtml;
+  const cli = d.projeto?.cliente || d.cliente || integ.customer;
+  const quando = d.ultima?.coletado_em ? new Date(d.ultima.coletado_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
+  const dt = (v) => { const t = String(v || ''); return /^\d{8}$/.test(t) ? `${t.slice(6, 8)}/${t.slice(4, 6)}/${t.slice(0, 4)}` : t; };
+  const tab = (cab, linhas) => linhas.length ? `<table><thead><tr>${cab.map(c => `<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${
+    linhas.map(l => `<tr>${l.map(v => `<td>${esc(String(v ?? ''))}</td>`).join('')}</tr>`).join('')}</tbody></table>` : '<p class="vazio">Nada nesta coleta.</p>';
+  const oc = integ.ocorr || [];
+  const cap = B.tra_captura?.linhas || [];
+  const capL = (B.tra_captura_lista?.linhas || []).slice(0, 100);
+  const sr = (B.tra_sem_retorno_lista?.linhas || []).filter(l => !intTraFora(l));
+  const tf = (B.tra_sem_monitor_lista?.linhas || []).filter(l => intTraNatureza(B, l) === 'transf');
+  const cods = (B.tra_erros?.resumo?.codigos || []);
+  const cod = (c) => cods.find(x => x.codigo === c)?.qtd || 0;
+  const compl = (B.tra_sem_retorno_lista?.linhas || []).filter(intTraFora).length;
+  const consumo = (B.tra_sem_monitor_lista?.linhas || []).filter(l => intTraNatureza(B, l) === 'consumo').length;
+  const motivoTxt = (l) => intTraMotivo(l).replace(/<[^>]+>/g, '');
+  const html = `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dossiê Transmite · ${esc(cli)}</title><style>
+body{font-family:Verdana,Arial,sans-serif;color:#002233;margin:0;background:#fff;font-size:13px;line-height:1.45}
+header{background:#002233;color:#fff;padding:24px 32px}header h1{margin:0 0 4px;font-size:22px}header p{margin:0;color:#9fb3bd}
+main{padding:20px 32px 40px;max-width:1200px}h2{border-bottom:2px solid #002233;padding-bottom:6px;margin:28px 0 10px;font-size:17px}
+h2 span{color:#00a6c2}table{border-collapse:collapse;width:100%;margin:8px 0;font-size:12px}th{background:#002233;color:#fff;text-align:left;padding:6px 8px}
+td{border-top:1px solid #d9dee0;padding:5px 8px;vertical-align:top;word-break:break-all}tr:nth-child(even) td{background:#f4f6f7}
+.vazio{color:#7a8790}.nota{border-left:4px solid #00dbff;background:#f4f6f7;padding:8px 12px;margin:8px 0}footer{color:#7a8790;padding:0 32px 24px;font-size:11px}
+</style></head><body><header><h1>Dossiê TOTVS Transmite · ${esc(cli)}</h1><p>Coleta de ${esc(quando)} · base ${esc(integ.ambiente)} · para o chamado do PO de Produto</p></header><main>
+<h2><span>P1</span> · Ocorrências do portal registradas (${oc.length})</h2>
+${tab(['Quando', 'Tipo', 'Usuário', 'O que aconteceu', 'Chamado'], oc.map(o => [new Date(o.ocorrido_em).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }), INT_OCORR_TIPOS[o.tipo] || o.tipo, o.usuario, o.descricao, o.chamado]))}
+<h2><span>P2 · P3</span> · Atraso de captura (emissão → Monitor do Importador)</h2>
+${tab(['Espécie', 'Notas', 'Até 1 dia', '2–3 dias', '4–7 dias', 'Mais de 7', 'Maior atraso (dias)'], cap.map(l => [l.ESPECIE, l.QTD, l.ATE1, l.D2A3, l.D4A7, l.MAIS7, l.MAXIMO]))}
+<p class="nota">Notas que mais demoraram a chegar (até 100):</p>
+${tab(['Filial', 'Espécie', 'Documento', 'CNPJ emitente', 'Emissão', 'Chegou ao Monitor', 'Dias', 'Chave'], capL.map(l => [l.FILIAL, l.ESPECIE, `${l.DOC}/${l.SERIE}`, l.CNPJ, dt(l.EMISSAO), `${dt(l.DT_IMP)} ${(l.HR_IMP || '').slice(0, 5)}`, l.DIAS, l.CHAVE]))}
+<h2><span>P4</span> · Classificadas no Protheus sem "Classificada" no Transmite (${sr.length})</h2>
+${tab(['Filial', 'Documento', 'Fornecedor', 'Emissão', 'Digitação', 'CKO_STRAN', 'Motivo provável', 'Chave'], sr.map(l => [l.FILIAL, `${l.DOC}/${l.SERIE}`, `${l.FORNECEDOR}-${l.LOJA}`, dt(l.EMISSAO), `${dt(l.DTDIGIT)} ${l.HORA || ''}`, l.STRAN, motivoTxt(l), l.CHAVE]))}
+<h2><span>P5</span> · Transferências entre filiais lançadas fora do Importador (${tf.length})</h2>
+<p class="nota">Sem registro no Monitor (SDS), o SCHEDUPDTRA não devolve "Classificada" e a Confirmação da Operação não sai pelo Transmite.</p>
+${tab(['Filial', 'Documento', 'Filial emitente', 'CNPJ', 'Emissão', 'Digitação', 'XML no Transmite', 'Chave'], tf.map(l => [l.FILIAL, `${l.DOC}/${l.SERIE}`, l.FORN_NOME || `${l.FORNECEDOR}-${l.LOJA}`, l.FORN_CGC, dt(l.EMISSAO), dt(l.DTDIGIT), +l.NA_CKO > 0 ? `sim (CKO_STRAN ${l.STRAN})` : 'não chegou', l.CHAVE]))}
+<h2>Já levantados (mesmo encaminhamento)</h2>
+${tab(['Assunto', 'Nesta coleta'], [
+  ['COM025 — documento já processado (NFS-e com número repetido)', `${cod('COM025')} XML`],
+  ['COM003 / COM004 / COM047 — devolução, ajuste e complemento de imposto não tratados', `${cod('COM003') + cod('COM004') + cod('COM047')} XML`],
+  ['Complementos (Tipo NF C · I · P) sem "Classificada"', `${compl} nota(s)`],
+  ['Contas de consumo (NF3E, NFCOM, NFAG) lançadas fora do Importador', `${consumo} nota(s)`]])}
+</main><footer>Gerado pelo Gestão de Projetos · Consultoria TOTVS SC · ${esc(new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' }))}</footer></body></html>`;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([html], { type: 'text/html;charset=utf-8' }));
+  a.download = `Dossie_Transmite_${String(integ.customer).replace(/\W/g, '')}_${new Date().toISOString().slice(0, 10)}.html`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+/** Barra da caixa: prazo do evento da base (M4) e dossiê para o chamado (M7). */
+function intTraBarra(B) {
+  const p = INT_TRA_PRAZO;
+  return `<div class="flex flex-wrap items-center gap-3 mb-3 text-xs" data-int-tra-barra>
+    <label class="flex items-center gap-1 text-slate-600">Prazo do evento
+      <select data-int-tra-prazo class="border border-slate-300 rounded px-1.5 py-1 bg-white">${[60, 90, 180].map(v =>
+        `<option value="${v}" ${v === p ? 'selected' : ''}>${v} dias</option>`).join('')}</select></label>
+    <span class="text-slate-500" data-int-tra-prazo-msg>alertas em ${INT_TRA_AMARELO} e ${INT_TRA_VERMELHO} dias · vale a partir da próxima coleta</span>
+    <button type="button" data-int-tra-dossie class="int-sub-bt ml-auto">⬇ Dossiê para o chamado</button></div>`;
 }
 
 /** Colunas da lista de sem retorno — a mesma para as normais e os complementos. */
@@ -14918,14 +15095,17 @@ function intTraColsSemRetorno(ls, hoje, compl = false) {
     { rot: 'Emissão', fmt: l => intData(l.EMISSAO) }, { rot: 'Prazo do evento', fmt: l => intPrazo(l.EMISSAO, hoje) },
     { rot: 'Digitação', fmt: l => `${intData(l.DTDIGIT)} ${escapeHtml(l.HORA || '')}` },
     { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) },
-    ...(compl ? [] : [{ rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) }, { rot: 'Importador', fmt: intTraImportador }]),
+    ...(compl ? [] : [{ rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) }, { rot: 'Importador', fmt: intTraImportador },
+      { rot: 'Motivo provável', fmt: intTraMotivo }]),
     ...(compl || ls.some(l => l.TIPO_NF) ? [{ rot: 'Tipo NF', fmt: l => intNw(l.TIPO_NF ? `${l.TIPO_NF} · ${INT_TRA_TIPO_NF[l.TIPO_NF] || '?'}` : '—') }] : []),
     ...(compl ? [{ rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) }] : []),
     { rot: 'Chave', fmt: l => intChave(l.CHAVE) }];
 }
 
 function intCaixaTransmite(B, hoje, nivel) {
+  intTraPrazoDe(B);
   return intCaixa('transmite', 'TOTVS Transmite — classificação e evento na SEFAZ', INT_GRUPOS[3].sub, nivel, () =>
+    intTraBarra(B) +
     intSub('Classificadas no Protheus sem "Classificada" no Transmite', B.tra_sem_retorno_lista, (ls) => intTabela(
       intTraColsSemRetorno(ls, hoje), ls.filter(l => !intTraFora(l)), 'Toda nota classificada já voltou ao Transmite.'), l => !intTraFora(l)) +
     intSub('Complementos fora do Transmite (Tipo NF C · I · P)', B.tra_sem_retorno_lista, (ls) => {
@@ -14969,11 +15149,26 @@ function intCaixaTransmite(B, hoje, nivel) {
       { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) }, { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) },
       { k: 'QTD', rot: 'XML', dir: 1 }, { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) },
       { rot: 'Mais recente', fmt: l => intData(l.MAIS_RECENTE) }], ls, 'Nenhum XML importado na janela.')) +
+    intSub('Última importação por tipo', B.tra_ultima, (ls) => intTabela([
+      { rot: 'Tipo', fmt: l => intEdi(l.EDI) }, { rot: 'Última importação', fmt: l => `${intData(l.ULT_DATA)} ${escapeHtml((l.ULT_HORA || '').slice(0, 5))}` },
+      { rot: 'Há', fmt: l => intTraHoras(l) }, { k: 'QTD', rot: 'XML na janela', dir: 1 }],
+      [...ls].sort((a, b) => String(a.EDI).localeCompare(String(b.EDI))), 'Nenhum XML na janela.')) +
+    intSub('Atraso de captura por espécie (emissão → Monitor)', B.tra_captura, intTraCaptura) +
+    intSub('Notas que mais demoraram a chegar ao Monitor (2 dias ou mais)', B.tra_captura_lista, (ls) => intTabela([
+      { k: 'FILIAL', rot: 'Filial', ord: 'FILIAL' }, { k: 'ESPECIE', rot: 'Espécie', ord: 'ESPECIE' },
+      { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC}/${l.SERIE}`), ord: 'DOC' },
+      { rot: 'Emitente', fmt: l => `${escapeHtml(`${l.FORNECEDOR || ''}-${l.LOJA || ''}`)}<br><span class="text-slate-500">${escapeHtml(intCnpjFmt(l.CNPJ))}</span>`, ord: 'FORNECEDOR' },
+      { rot: 'Emissão', fmt: l => intData(l.EMISSAO), ord: 'EMISSAO' },
+      { rot: 'Chegou ao Monitor', fmt: l => `${intData(l.DT_IMP)} ${escapeHtml((l.HR_IMP || '').slice(0, 5))}`, ord: 'DT_IMP' },
+      { rot: 'Dias', fmt: l => `<b>${escapeHtml(String(l.DIAS))}</b>`, dir: 1, ord: 'DIAS' },
+      { rot: 'Status SDS', fmt: l => escapeHtml(l.DS_STATUS || '—') },
+      { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhuma nota com 2 dias ou mais até o Monitor.', { ordId: 'captura' })) +
     intSub('XML há mais de 30 dias sem "Classificada"', B.tra_fila_antigos, (ls) => intTabela([
       { rot: 'Importado', fmt: l => intData(l.DT_IMP) }, { rot: 'Tipo', fmt: l => intEdi(l.CODEDI) },
       { rot: 'CKO_STRAN', fmt: l => intStran(l.STRAN) }, { k: 'DOC', rot: 'Documento' },
       { rot: 'Na SF1', fmt: l => escapeHtml(l.FILIAL_SF1 ? `filial ${l.FILIAL_SF1}${l.F1_STATUS ? ' · classificada' : ' · pré-nota'}` : 'não lançada') },
       { rot: 'Chave', fmt: l => intChave(l.CHAVE) }], ls, 'Nenhum XML parado.')) +
+    intSub('Transferências entre filiais fora do Importador', B.tra_transf, (ls) => intTraTransf(B, ls)) +
     intSub('Lançadas fora do Importador (SF1 sem SDS)', B.tra_sem_monitor, (ls) => intTabela([
       { k: 'FILIAL', rot: 'Filial', ord: 'FILIAL' }, { k: 'ESPECIE', rot: 'Espécie', ord: 'ESPECIE' },
       { k: 'QTD', rot: 'Notas', dir: 1, ord: 'QTD' },
@@ -14983,6 +15178,7 @@ function intCaixaTransmite(B, hoje, nivel) {
       ls, 'Todas passaram pelo Importador.',
       { ordId: 'semmon_grp', linha: l => `data-int-semmon-grp="${escapeHtml(l.FILIAL)}|${escapeHtml(l.ESPECIE || '')}"` })) +
     intSub('Lançadas fora do Importador — notas uma a uma', B.tra_sem_monitor_lista, intTraSemMonitorLista) +
+    intDobra('Ocorrências do portal do Transmite (registro manual)', (integ.ocorr || []).length || '', intTraOcorrencias()) +
     intSub('Parâmetros do Importador (SX6)', B.tra_config, (ls) => intTabela([
       { k: 'PARAMETRO', rot: 'Parâmetro' }, { rot: 'Filial', fmt: l => escapeHtml(l.FILIAL || '(todas)') },
       { k: 'CONTEUDO', rot: 'Conteúdo' }], ls, 'Nenhum dos parâmetros existe nesta base.')) +
@@ -15410,6 +15606,33 @@ function ligaIntegracoes() {
   $$('#int-conteudo [data-int-sub-todos]').forEach(b => b.addEventListener('click', () => {
     const abrir = b.dataset.intSubTodos === 'abrir';
     b.closest('.rel-bloco').querySelectorAll('details[data-int-sub]').forEach(d => { d.open = abrir; });
+  }));
+  $('#int-conteudo [data-int-tra-prazo]')?.addEventListener('change', async (e) => {
+    try {
+      await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/params?ambiente=${integ.ambiente}`,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ tra_prazo_dias: +e.target.value }) });
+      if (integ.dados?.ambiente_cfg) integ.dados.ambiente_cfg.tra_prazo = +e.target.value;
+      const av = e.target.closest('[data-int-tra-barra]')?.querySelector('[data-int-tra-prazo-msg]');
+      if (av) av.textContent = `✓ ${e.target.value} dias gravado · os cartões mudam na próxima coleta`;
+    } catch (err) { alert('Não consegui gravar o prazo: ' + err.message); }
+  });
+  $('#int-conteudo [data-int-tra-dossie]')?.addEventListener('click', () => intTraDossie(integ.dados?.ultima?.blocos || {}));
+  $('#int-conteudo [data-int-ocorr-form]')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fd = Object.fromEntries(new FormData(e.target).entries());
+    try {
+      await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/ocorrencias?ambiente=${integ.ambiente}`,
+                { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fd) });
+      await intOcorrCarrega(); integ.subAbertas.add('Ocorrências do portal do Transmite (registro manual)'); renderIntegracoes();
+    } catch (err) { alert('Não consegui registrar: ' + err.message); }
+  });
+  $$('#int-conteudo [data-int-ocorr-apaga]').forEach(b => b.addEventListener('click', async () => {
+    if (!confirm('Apagar esta ocorrência?')) return;
+    try {
+      await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/ocorrencias/${b.dataset.intOcorrApaga}?ambiente=${integ.ambiente}`, { method: 'DELETE' });
+      await intOcorrCarrega(); renderIntegracoes();
+    } catch (err) { alert('Não consegui apagar: ' + err.message); }
   }));
   $$('#int-conteudo [data-int-ord]').forEach(b => b.addEventListener('click', (e) => {
     e.stopPropagation(); intOrdena(b.dataset.intOrd, b.dataset.k); renderIntegracoes();

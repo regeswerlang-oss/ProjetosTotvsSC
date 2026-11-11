@@ -6,14 +6,14 @@
 # credencial), parser do CSV do TSCMONITREST, classificação de tabela
 # inexistente, itens do healthcheck e as regras de nível de cada indicador.
 import csv, io, json, pathlib, re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 RAIZ = pathlib.Path(__file__).resolve().parents[2]
 src = (RAIZ / 'api' / 'index.py').read_text(encoding='utf-8')
 ini = src.index('INTEG_PARAMS = (')
 fim = src.index('def _integ_health(cfg')
 import unicodedata
-ns = {'re': re, 'csv': csv, 'io': io, 'json': json, 'date': date, 'timedelta': timedelta,
+ns = {'re': re, 'csv': csv, 'io': io, 'json': json, 'date': date, 'datetime': datetime, 'timedelta': timedelta,
       'unicodedata': unicodedata}
 exec(compile(src[ini:fim], 'integ', 'exec'), ns)
 
@@ -267,7 +267,7 @@ confere('hora limite sem agora', hl(None) is None)
 
 tra = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('transmite',), AGORA)
 tid = [s['id'] for s in tra]
-confere('transmite: 17 blocos', len(tra) == 17)
+confere('transmite: 21 blocos', len(tra) == 21)
 confere('transmite: nenhum bloco de RH', not any(i in tid for i in ('config', 'rjp_fila', 'rum_resumo')))
 confere('transmite: resumos antes dos detalhes',
         max(tid.index(i) for i in tid if not tra[tid.index(i)].get('detalhe'))
@@ -313,7 +313,7 @@ confere('corte encurta a janela', "F1_DTDIGIT >= '20261001'" in cor['tra_sem_ret
 velho = {s['id']: s['sql'] for s in ns['_integ_scripts']('010', HOJE, date(2025, 1, 1), 'oracle', ('transmite',), AGORA)}
 confere('corte mais antigo não alarga a janela', "'20260615'" in velho['tra_fila'])
 ambos = ns['_integ_scripts']('010', HOJE, None, 'oracle', ('rh', 'transmite'), AGORA)
-confere('rh + transmite = 27 blocos', len(ambos) == 27 and ambos[0]['id'] == 'config')
+confere('rh + transmite = 31 blocos', len(ambos) == 31 and ambos[0]['id'] == 'config')
 confere('padrão continua só RH', len(ns['_integ_scripts']('010', HOJE)) == 10)
 
 # ── indicadores Transmite ───────────────────────────────────────────────────
@@ -330,7 +330,7 @@ tra_ok = {
     'tra_sem_monitor': bloco(),
 }
 ti = ns['_integ_indicadores'](tra_ok, {'ok': False}, HOJE, ('transmite',))
-confere('transmite: 11 indicadores, nenhum de RH', len(ti) == 11 and all(i['grupo'] == 'transmite' for i in ti))
+confere('transmite: 13 indicadores, nenhum de RH', len(ti) == 13 and all(i['grupo'] == 'transmite' for i in ti))
 confere('transmite saudável = verde', ns['_integ_pior'](i['nivel'] for i in ti) == 'verde')
 confere('classificada (4) não conta como parada', ind(ti, 'tra_fila')['valor'] == 0)
 confere('última importação hoje = 0 dias', ind(ti, 'tra_entrada')['valor'] == 0)
@@ -385,7 +385,7 @@ sem_data = dict(tra_ok, tra_revisao=dict(bloco({'STATUS': 'B', 'QTD': '2'}), var
 rv = ind(ns['_integ_indicadores'](sem_data, {'ok': False}, HOJE, ('transmite',)), 'tra_revisao')
 confere('revisão sem campo de data = amarelo e avisa', rv['nivel'] == 'amarelo' and 'sem janela' in rv['texto'])
 ambos_i = ns['_integ_indicadores'](dict(saudavel, **tra_ok), health_ok, HOJE, ('rh', 'transmite'))
-confere('rh + transmite = 19 indicadores', len(ambos_i) == 19)
+confere('rh + transmite = 21 indicadores', len(ambos_i) == 21)
 
 # ══ Transmite: motivo do Importador (CKO_CODERR) — 30/10/2026 ═══════════════
 por_banco = {b: {x['id']: x for x in ns['_integ_scripts']('010', HOJE, None, b, ('transmite',), AGORA)}
@@ -498,5 +498,54 @@ confere('sem SDS por CFOP: SD1 pela chave do documento, agrupado', 'INNER JOIN S
         and 'GROUP BY SF1.F1_FILIAL, SF1.F1_ESPECIE, SD1.D1_CF, SD1.D1_TES' in cf and 'NOT EXISTS (SELECT 1 FROM SDS010' in cf)
 confere('sem SDS uma a uma: CFOP, TES e fornecedor; variante só SF1', 'AS CFOP_MIN' in sm['sql'] and 'AS FORN_NOME' in sm['sql']
         and 'SD1' not in T2['tra_sem_monitor_lista']['sqls'][1])
+
+# ── 10/11/2026: reunião com a usuária-chave (M1, M2, M3, M4, M5) ─────────
+from datetime import datetime as _dt
+T3 = {x['id']: x for x in ns['_tra_scripts']('010', HOJE, None, None, 'postgres')}
+confere('M1 captura: diferença de datas no Postgres e faixas', '(CAST(DS_DATAIMP AS DATE) - CAST(DS_EMISSA AS DATE))' in T3['tra_captura']['sql']
+        and 'AS D2A3' in T3['tra_captura']['sql'] and 'GROUP BY X.ESPECIE' in T3['tra_captura']['sql'])
+To = {x['id']: x for x in ns['_tra_scripts']('010', HOJE, None, None, 'oracle')}
+confere('M1 captura: TO_DATE no Oracle', "TO_DATE(DS_DATAIMP, 'YYYYMMDD')" in To['tra_captura']['sql'])
+Tm = {x['id']: x for x in ns['_tra_scripts']('010', HOJE, None, None, 'mssql')}
+confere('M1 captura: DATEDIFF no SQL Server', 'DATEDIFF(day, CAST(DS_EMISSA AS DATE), CAST(DS_DATAIMP AS DATE))' in Tm['tra_captura']['sql'])
+confere('M1 lista: só 2 dias ou mais, mais atrasadas primeiro', T3['tra_captura_lista'].get('detalhe')
+        and 'X.DIAS >= 2 ORDER BY X.DIAS DESC' in T3['tra_captura_lista']['sql'])
+confere('M5 última importação com hora', 'CKO_HR_IMP' in T3['tra_ultima']['sql'] and 'GROUP BY CKO_CODEDI' in T3['tra_ultima']['sql'])
+confere('M2 transferências: SM0, sem SDS, situação na CKOCOL', 'FROM SYS_COMPANY' in T3['tra_transf']['sql']
+        and 'D.K IS NULL' in T3['tra_transf']['sql'] and "AS CK" in T3['tra_transf']['sql'])
+confere('M3 sem retorno traz a SDS para comparar', all(c in T3['tra_sem_retorno_lista']['sql'] for c in ('AS DS_DOC', 'AS DS_SERIE', 'AS DS_FORNEC', 'AS DS_LOJA')))
+confere('M6 lista sem SDS traz o CNPJ do fornecedor', 'AS FORN_CGC' in T3['tra_sem_monitor_lista']['sqls'][0])
+# M4 prazo por base
+confere('M4 prazo padrão 90 → 60/80', ns['_tra_prazos'](None) == (90, 60, 80) and ns['_tra_prazos']({'tra_prazo_dias': 999}) == (90, 60, 80))
+confere('M4 prazo 60 → 30/50', ns['_tra_prazos']({'tra_prazo_dias': 60}) == (60, 30, 50))
+T60 = {x['id']: x for x in ns['_tra_scripts']('010', HOJE, None, None, 'postgres', {'tra_prazo_dias': 60})}
+d60 = (HOJE - __import__('datetime').timedelta(days=60)).strftime('%Y%m%d')
+confere('M4 prazo 60 entra no SQL do sem retorno', d60 in T60['tra_sem_retorno']['sql'])
+sr = dict(tra_ok)
+sr['tra_sem_retorno'] = bloco({'FILIAL': '010101', 'QTD': '1', 'DIGIT_MAIS_ANTIGA': '20261001', 'VENCIDAS': '0', 'CRITICAS': '1', 'ATENCAO': '0'})
+ip = ind(ns['_integ_indicadores'](sr, {'ok': False}, HOJE, ('transmite',), None, {'tra_prazo_dias': 60}), 'tra_prazo')
+confere('M4 cartão mostra o prazo da base', ip['rotulo'] == 'Prazo do evento (60 dias)' and 'entre 50 e 60 dias' in ip['texto'])
+# M1 indicador
+cp = dict(tra_ok)
+cp['tra_captura'] = bloco({'ESPECIE': 'SPED', 'QTD': '4728', 'ATE1': '4472', 'D2A3': '61', 'D4A7': '114', 'MAIS7': '81', 'MAXIMO': '71'},
+                          {'ESPECIE': 'CTE', 'QTD': '969', 'ATE1': '707', 'D2A3': '131', 'D4A7': '99', 'MAIS7': '32', 'MAXIMO': '62'})
+ic = ind(ns['_integ_indicadores'](cp, {'ok': False}, HOJE, ('transmite',)), 'tra_captura')
+confere('M1 cartão: CT-e 27% tarde = vermelho; NF-e 195 com 4+ dias', ic['nivel'] == 'vermelho' and 'CTE: 262 de 969 (27%)' in ic['texto']
+        and 'SPED: 195 de 4728 (4%)' in ic['texto'])
+# M2 indicador
+tf = dict(tra_ok)
+tf['tra_transf'] = bloco({'FILIAL': '010113', 'ESPECIE': 'SPED', 'CK': 'N', 'QTD': '20', 'MAIS_ANTIGA': '20261005', 'MAIS_RECENTE': '20261109'},
+                         {'FILIAL': '010101', 'ESPECIE': 'SPED', 'CK': 'S', 'QTD': '7', 'MAIS_ANTIGA': '20261010', 'MAIS_RECENTE': '20261108'})
+it = ind(ns['_integ_indicadores'](tf, {'ok': False}, HOJE, ('transmite',)), 'tra_transf')
+confere('M2 cartão: 27 transferências, 20 sem XML', it['valor'] == 27 and it['nivel'] == 'amarelo' and '20 sem XML' in it['texto'])
+# M5 captura parada em horas
+up = dict(tra_ok)
+up['tra_ultima'] = bloco({'EDI': '109', 'ULT_DATA': HOJE.strftime('%Y%m%d'), 'ULT_HORA': '09:00:00', 'QTD': '10'},
+                         {'EDI': '214', 'ULT_DATA': (HOJE - __import__('datetime').timedelta(days=2)).strftime('%Y%m%d'), 'ULT_HORA': '15:00:00', 'QTD': '3'})
+ag = _dt(HOJE.year, HOJE.month, HOJE.day, 10, 30, tzinfo=__import__('datetime').timezone(__import__('datetime').timedelta(hours=-3)))
+ie = ind(ns['_integ_indicadores'](up, {'ok': False}, HOJE, ('transmite',), ag), 'tra_entrada')
+confere('M5 captura parada: CT-e há 43 h = vermelho, NF-e há 1 h', ie['nivel'] == 'vermelho' and 'CT-e há 43 h' in ie['texto']
+        and 'NF-e há 1 h' in ie['texto'] and ie['rotulo'] == 'Captura parada (horas)')
+
 print(f'{ok} asserções OK, {falhou} falha(s)')
 raise SystemExit(1 if falhou else 0)

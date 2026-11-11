@@ -72,6 +72,15 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   await pg.route('**/api/me', r => r.fulfill({ json: { ok: true, email: 'reges.werlang@totvs.com.br', nome: 'Reges', perfil: 'admin', is_admin: true, interno: true } }));
   await pg.route('**/api/projetos*', r => r.fulfill({ json: { ok: true, total: 0, projetos: [] } }));
   await pg.route('**/api/integracoes/TFEHM600?*', r => r.fulfill({ json: modo.leitura }));
+  const OCORR = [{ id: 7, ocorrido_em: '2026-11-10T19:20:00Z', tipo: 'pdf', usuario: 'Bruna', descricao: 'PDF não abre desde 16h', chamado: '998877', criado_por: 'reges.werlang@totvs.com.br' }];
+  const postsOcorr = [];
+  await pg.route('**/api/integracoes/*/ocorrencias*', r => {
+    if (r.request().method() === 'POST') { postsOcorr.push(r.request().postDataJSON()); return r.fulfill({ json: { ok: true, id: 8 } }); }
+    return r.fulfill({ json: { ok: true, ocorrencias: OCORR } });
+  });
+  const postsParams = [];
+  await pg.route('**/api/integracoes/*/params*', r => { postsParams.push(r.request().postDataJSON()); return r.fulfill({ json: { ok: true } }); });
+  globalThis.__postsOcorr = postsOcorr; globalThis.__postsParams = postsParams;
   await pg.route('**/api/integracoes/TFEHM600/coletar*', async r => {
     await new Promise(res => setTimeout(res, 300));
     r.fulfill({ status: modo.coleta.status, json: modo.coleta.json });
@@ -230,14 +239,24 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
     IND('tra_erros', 'transmite', 'XML parados por erro do Importador', 37, 'vermelho', 'Por motivo: COM007 Fornecedor inexistente na base (35).'),
   ];
   const TBLOCOS = {
-    _meta: { desde: null, grupos: ['transmite'] },
+    _meta: { desde: null, grupos: ['transmite'], tra_prazo: 90 },
+    tra_captura: { ok: true, linhas: [
+      { ESPECIE: 'SPED', QTD: '4728', ATE1: '4472', D2A3: '61', D4A7: '114', MAIS7: '81', MAXIMO: '71' },
+      { ESPECIE: 'CTE', QTD: '969', ATE1: '707', D2A3: '131', D4A7: '99', MAIS7: '32', MAXIMO: '62' }] },
+    tra_captura_lista: { ok: true, linhas: [
+      { FILIAL: '010110', ESPECIE: 'CTE', DOC: '000000777', SERIE: '1', FORNECEDOR: 'T001', LOJA: '01', CNPJ: '12345678000199', EMISSAO: '20261030', DT_IMP: '20261101', HR_IMP: '08:10:00', DS_STATUS: '', CHAVE: 'KCTE777', DIAS: '2' }] },
+    tra_ultima: { ok: true, linhas: [
+      { EDI: '214', ULT_DATA: '20261108', ULT_HORA: '15:00:00', QTD: '30' }, { EDI: '109', ULT_DATA: '20261110', ULT_HORA: '09:00:00', QTD: '200' }] },
+    tra_transf: { ok: true, linhas: [
+      { FILIAL: '010113', ESPECIE: 'SPED', CK: 'N', QTD: '1', MAIS_ANTIGA: '20261109', MAIS_RECENTE: '20261109' }] },
     tra_sem_retorno_lista: { ok: true, linhas: [
       { FILIAL: '0101', DOC: '000013687', SERIE: '1', FORNECEDOR: 'F00001', LOJA: '01', EMISSAO: '20260804', DTDIGIT: '20261001',
         HORA: '10:00:00', STRAN: '2', CODEDI: '109', DT_IMP: '20260805', DS_STATUS: 'B', CHAVE: '42261027968581000106550010000136871530601731' },
       { FILIAL: '0102', DOC: '000000001', SERIE: '1', FORNECEDOR: 'F00002', LOJA: '01', EMISSAO: '20260701', DTDIGIT: '20261002',
         HORA: '11:00:00', STRAN: '', CODEDI: '214', DT_IMP: '20260702', DS_STATUS: '', CHAVE: '4226<i>zz</i>' },
       { FILIAL: '010113', DOC: '000121659', SERIE: '2', FORNECEDOR: '83286500', LOJA: '0012', EMISSAO: '20261020', DTDIGIT: '20261020',
-        HORA: '11:16:00', STRAN: '2', CODEDI: '109', DT_IMP: '20261020', DS_STATUS: '', TEM_SDS: 'S', TIPO_NF: 'N', CHAVE: '42261083286500001211550020001216591539161896' },
+        HORA: '11:16:00', STRAN: '2', CODEDI: '109', DT_IMP: '20261020', DS_STATUS: '', TEM_SDS: 'S', TIPO_NF: 'N', CHAVE: '42261083286500001211550020001216591539161896',
+        DS_DOC: '000121659', DS_SERIE: '002', DS_FORNEC: '83286500', DS_LOJA: '0012' },
       { FILIAL: '010112', DOC: '000689328', SERIE: '2', FORNECEDOR: '04195643', LOJA: '0006', EMISSAO: '20261015', DTDIGIT: '20261020',
         HORA: '13:57:24', STRAN: '2', CODEDI: '214', DT_IMP: '20261015', DS_STATUS: '', TEM_SDS: 'S', TIPO_NF: 'C', CHAVE: '35261004195643000601570020006893281066893285' },
       { FILIAL: '010112', DOC: '000041132', SERIE: '1', FORNECEDOR: '08432868', LOJA: '0001', EMISSAO: '20261028', DTDIGIT: '20261028',
@@ -271,7 +290,7 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
       { EMPRESA: '01', FILIAL: '010101', NOME: 'MATRIZ', RAZAO: 'INDUSTRIA CARBONIFERA RIO DESERTO', CNPJ: '83286500000187' }] },
     tra_sem_monitor_lista: { ok: true, linhas: [
       { FILIAL: '010113', ESPECIE: 'SPED', DOC: '000500001', SERIE: '1', FORNECEDOR: 'F1', LOJA: '01', EMISSAO: '20261109', DTDIGIT: '20261109', HORA: '08:00:00', TIPO_NF: 'N', CHAVE: 'K1', STRAN: '2', NA_CKO: '1',
-        VALOR: '1600.4', UF: 'SC', FORN_NOME: 'FORNECEDOR UM LTDA', CFOP_MIN: '1101', CFOP_MAX: '1556', N_CFOP: '2', TES_MIN: '001', TES_MAX: '010', ITENS: '3' },
+        VALOR: '1600.4', UF: 'SC', FORN_NOME: 'FILIAL MATRIZ', FORN_CGC: '83286500000187', CFOP_MIN: '1101', CFOP_MAX: '1556', N_CFOP: '2', TES_MIN: '001', TES_MAX: '010', ITENS: '3' },
       { FILIAL: '010113', ESPECIE: 'NFCOM', DOC: '000500002', SERIE: '1', FORNECEDOR: 'F2', LOJA: '01', EMISSAO: '20261009', DTDIGIT: '20261009', HORA: '09:00:00', TIPO_NF: 'N', CHAVE: 'K2', STRAN: '', NA_CKO: '0' },
       { FILIAL: '070701', ESPECIE: 'NF3E', DOC: '000500003', SERIE: '1', FORNECEDOR: 'F3', LOJA: '01', EMISSAO: '20261009', DTDIGIT: '20261010', HORA: '10:00:00', TIPO_NF: 'N', CHAVE: 'K3', STRAN: '', NA_CKO: '0' }] },
     tra_config: { ok: true, linhas: [{ PARAMETRO: 'MV_APITRAN', FILIAL: '', CONTEUDO: '(preenchido)' }] },
@@ -338,6 +357,36 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('complementos: a lista principal mostra só as normais', await pg.$$eval('#int-conteudo table', ts => {
     const t0 = ts.find(t => /000013687/.test(t.textContent)); return !!t0 && !/000689328|000041132/.test(t0.textContent); }));
   t('erros: quadro do Importador', /Por que o Importador parou/.test(rd));
+  // ── 10/11/2026: melhorias M1–M8 ──
+  t('M1/M5/M2/M8 seções novas', /Última importação por tipo/.test(rd) && /Atraso de captura por espécie/.test(rd)
+    && /Notas que mais demoraram a chegar ao Monitor/.test(rd) && /Transferências entre filiais fora do Importador/.test(rd)
+    && /Ocorrências do portal do Transmite/.test(rd));
+  t('M1 captura: CT-e 27% tarde, NF-e 4% com 4+ dias', /27%\s*> 1 dia/.test(rd) && /4%\s*4\+ dias/.test(rd) && /KCTE777/.test(rd));
+  t('M3 motivo provável: série diferente', /série SDS "002" × SF1 "2"/.test(rd));
+  t('M4 prazo da base no seletor (90)', await pg.$eval('[data-int-tra-prazo]', s => s.value) === '90' && /alertas em 60 e 80 dias/.test(rd));
+  await pg.selectOption('[data-int-tra-prazo]', '60');
+  await pg.waitForTimeout(300);
+  t('M4 grava o prazo', JSON.stringify(globalThis.__postsParams.at(-1)) === '{"tra_prazo_dias":60}');
+  t('M2 transferência aberta com a filial emitente', /FILIAL MATRIZ/.test(rd) && /01\/010101 · MATRIZ/.test(rd));
+  t('M8 ocorrência listada', /PDF não abre desde 16h/.test(rd) && /998877/.test(rd));
+  await pg.click('[data-int-sub-barra="transmite"] [data-int-sub-todos="abrir"]');
+  await pg.fill('[data-int-ocorr-form] [name="descricao"]', 'Busca sem a nota 123');
+  await pg.selectOption('[data-int-ocorr-form] [name="tipo"]', 'busca');
+  await pg.click('[data-int-ocorr-form] button[type="submit"]');
+  await pg.waitForTimeout(300);
+  t('M8 registra ocorrência', globalThis.__postsOcorr.length === 1 && globalThis.__postsOcorr[0].tipo === 'busca' && /Busca sem a nota 123/.test(globalThis.__postsOcorr[0].descricao));
+  if (process.env.SHOT) {
+    for (const [tit, nome] of [['Atraso de captura por espécie (emissão → Monitor)', 'cap'], ['Transferências entre filiais fora do Importador', 'tf'],
+                               ['Ocorrências do portal do Transmite (registro manual)', 'oc'], ['Classificadas no Protheus sem "Classificada" no Transmite', 'sr']]) {
+      const el = await pg.$(`details[data-int-sub="${tit.replace(/"/g, '\\"')}"]`);
+      if (el) await el.screenshot({ path: process.env.SHOT.replace('.png', `-${nome}.png`) });
+    }
+    const bar = await pg.$('[data-int-tra-barra]'); if (bar) await bar.screenshot({ path: process.env.SHOT.replace('.png', '-barra.png') });
+  }
+  const [dl] = await Promise.all([pg.waitForEvent('download'), pg.click('[data-int-tra-dossie]')]);
+  const dossie = require('fs').readFileSync(await dl.path(), 'utf8');
+  t('M7 dossiê com P1 a P5 e backlog', /Dossiê TOTVS Transmite/.test(dossie) && /PDF não abre desde 16h/.test(dossie) && /KCTE777/.test(dossie)
+    && /série SDS/.test(dossie) && /FILIAL MATRIZ/.test(dossie) && /Já levantados/.test(dossie), dl.suggestedFilename());
   // popup do código: notas com CNPJ, empresa/filial, chave e tipo
   await pg.click('[data-int-tra-cod="COM007"]');
   if (process.env.SHOT) await pg.screenshot({ path: process.env.SHOT.replace('.png', '-pop1.png') });
@@ -383,7 +432,7 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   await pg.click('[data-int-semmon-grp="010113|SPED"]');
   const pg2 = await pg.$eval('[data-int-pop="010113|SPED"]', n => n.textContent.replace(/\s+/g, ' ')).catch(() => '');
   t('popup filial/espécie: notas, CFOP × TES, tipo, valor, fornecedor', /Filial 010113 · SPED/.test(pg2) && /CFOP × TES/.test(pg2)
-    && /1556/.test(pg2) && /1101 … 1556/.test(pg2) && /FORNECEDOR UM LTDA/.test(pg2) && /N · normal: 1/.test(pg2) && /R\$\s?1\.600,40/.test(pg2), pg2.slice(0, 300));
+    && /1556/.test(pg2) && /1101 … 1556/.test(pg2) && /FILIAL MATRIZ/.test(pg2) && /N · normal: 1/.test(pg2) && /R\$\s?1\.600,40/.test(pg2), pg2.slice(0, 300));
   await pg.click('[data-int-pop] [data-int-ord="semmon_pop"][data-k="VALOR"]');
   t('popup reordena e continua aberto', !!(await pg.$('[data-int-pop="010113|SPED"]')));
   if (process.env.SHOT) await pg.screenshot({ path: process.env.SHOT.replace('.png', '-pop2.png') });
@@ -395,8 +444,14 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFEHM600', ambi
   t('sem SDS: filtro por filial', /2 de 3 nota\(s\)/.test(rdF) && /000500001/.test(rdF) && !/000500003/.test(rdF));
   await pg.selectOption('[data-int-semmon="especie"]', 'NFCOM');
   const rdE = await txt('#int-conteudo');
-  t('sem SDS: filial + espécie', /1 de 3 nota\(s\)/.test(rdE) && /000500002/.test(rdE) && !/000500001/.test(rdE));
+  const rdE1 = rdE.split('notas uma a uma')[1] || '';
+  t('sem SDS: filial + espécie', /1 de 3 nota\(s\)/.test(rdE1) && /000500002/.test(rdE1) && !/000500001/.test(rdE1));
   await pg.selectOption('[data-int-semmon="filial"]', ''); await pg.selectOption('[data-int-semmon="especie"]', '');
+  await pg.selectOption('[data-int-semmon="natureza"]', 'consumo');
+  const rdN = await txt('#int-conteudo');
+  const rdN1 = rdN.split('notas uma a uma')[1] || '';
+  t('M6 filtro por natureza (contas de consumo: NF3E e NFCOM)', /2 de 3 nota\(s\)/.test(rdN1) && /000500003/.test(rdN1) && /000500002/.test(rdN1) && !/000500001/.test(rdN1));
+  await pg.selectOption('[data-int-semmon="natureza"]', '');
   const ll = tl.find(l => /83286500001211/.test(l) && /COM007/.test(l)) || '';
   t('erros: lista um a um com destino e quem resolve', /Cadastro/.test(ll) && /123/.test(ll), ll);
   t('transmite: chave escapada', await pg.$('#int-conteudo i:has-text("zz")') === null && /4226<i>zz<\/i>/.test(rd));

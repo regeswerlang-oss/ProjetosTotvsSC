@@ -273,3 +273,21 @@ grupo nem na situação geral.
    variantes: com SD1/SA2 e só SF1.
 3. `intTabela(cols, linhas, vazio, {ordId, linha})`: ordenação genérica por
    coluna (`ord`), estado em `integ.ord`, e atributos por linha.
+
+## Revisão 10/11/2026 — reunião com a usuária-chave (M1 a M8)
+
+Origem: reunião Murilo × Kelen (10/11) e o documento de encaminhamento
+`RioDeserto_Transmite_Encaminhamento_Kelen_Protheus.html`.
+
+| # | Melhoria | Blocos / rotas | Cartão |
+|---|---|---|---|
+| M1 | Atraso de captura (emissão → Monitor) por espécie, em faixas, e as notas mais atrasadas | `tra_captura`, `tra_captura_lista` (SDS: `DS_DATAIMP − DS_EMISSA`, dialeto em `_tra_dias_sql`) | `tra_captura`: CT-e tarde = mais de 1 dia (10%/20%); NF-e tarde = 4+ dias (2%/5%) |
+| M2 | Transferências entre filiais lançadas sem Monitor (emitente ∈ SM0) e se o XML chegou à CKOCOL | `tra_transf` | `tra_transf` (amarelo) |
+| M3 | Motivo provável do sem retorno: sem SDS, ou SDS × SF1 diferentes em número, série, fornecedor ou loja | `tra_sem_retorno_lista` + `DS_DOC/DS_SERIE/DS_FORNEC/DS_LOJA` | coluna na lista |
+| M4 | Prazo do evento por base (60, 90 ou 180) | `protheus_ambientes.integ_params.tra_prazo_dias`, `POST /api/integracoes/<cli>/params`; `_tra_prazos` (alertas = prazo − 30 e − 10) | `tra_prazo` |
+| M5 | Captura parada em horas por tipo (NF-e, CT-e), inclusive fim de semana | `tra_ultima` (`CKO_DT_IMP` + `CKO_HR_IMP`) | `tra_entrada` → "Captura parada (horas)": > 12 h amarelo, > 24 h vermelho |
+| M6 | Natureza das lançadas fora: transferência (CNPJ do fornecedor na SM0), conta de consumo (NF3E/NFCOM/NFAG), demais | `tra_sem_monitor_lista` + `FORN_CGC` | filtro e coluna |
+| M7 | Dossiê para o chamado (HTML com P1 a P5 e backlog) | só tela | botão na caixa |
+| M8 | Ocorrências do portal registradas à mão | tabela `cockpit.integ_ocorrencias`, `GET/POST /api/integracoes/<cli>/ocorrencias`, `DELETE …/ocorrencias/<id>` | seção na caixa |
+
+SQL: `docs/sql/2026-11-10-integracoes-transmite-kelen.sql`.
