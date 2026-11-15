@@ -11814,6 +11814,169 @@ def _com_scripts(sufixo, hoje, desde=None, banco=None, customer=None, params=Non
     ]
 
 
+# ── Script único + importação manual (15/11/2026) ─────────────────────────
+# Para quando a REST da base ainda não está cadastrada: os 9 blocos viram UMA
+# consulta (UNION ALL) com a coluna BLOCO e as colunas genéricas C01..C17, todas
+# texto. O consultor roda no console TCloud, exporta CSV/XLSX e importa na aba;
+# a importação devolve cada bloco às colunas originais e grava a medição como
+# se fosse a coleta da REST. A 1ª linha (com_meta) diz cliente, filiais e o dia
+# em que o script foi gerado (as datas de vencido/parado estão no SQL).
+COM_COLUNAS = {
+    "com_pc_resumo": ("APROVACAO", "ITENS", "PEDIDOS", "SALDO", "MAIS_ANTIGO", "PEDIDOS_ANTIGOS",
+                      "ENTREGA_VENCIDA", "PARCIAIS", "EM_PRENOTA", "ANTES_INICIO"),
+    "com_doc_resumo": ("ORIGEM", "TIPO", "PC", "STATUS", "QTD", "VALOR", "MAIS_ANTIGA", "SEM_TITULO"),
+    "com_mon_resumo": ("STATUS", "QTD", "JA_SF1"),
+    "com_cp_resumo": ("CLASSE", "ORIGEM", "QTD", "VALOR", "SALDO", "VENCIDOS", "SALDO_VENCIDO"),
+    "com_pc_lista": ("FILIAL", "PEDIDO", "ITEM", "EMISSAO", "ENTREGA", "FORNECEDOR", "LOJA", "NOME",
+                     "PRODUTO", "DESCRICAO", "QUANT", "QUJE", "EM_PRENOTA", "SALDO", "APROVACAO", "SC", "CC"),
+    "com_pc_aprov": ("FILIAL", "PEDIDO", "TIPO", "NIVEL", "APROVADOR", "NOME", "EMISSAO", "VALOR"),
+    "com_doc_lista": ("FILIAL", "DOC", "SERIE", "FORNECEDOR", "LOJA", "NOME", "ESPECIE", "TIPO", "EMISSAO",
+                      "DIGIT", "VALOR", "ORIGEM", "PC", "STATUS", "SEM_TITULO", "PEDIDO"),
+    "com_mon_lista": ("FILIAL", "DOC", "SERIE", "FORNECEDOR", "LOJA", "TIPO", "STATUS", "EMISSAO", "JA_SF1", "NOME"),
+    "com_cp_lista": ("FILIAL", "PREFIXO", "NUMERO", "PARCELA", "TIPO", "FORNECEDOR", "LOJA", "NOME", "CONTABIL",
+                     "VENCIMENTO", "VALOR", "SALDO", "ORIGEM", "NATUREZA", "CLASSE", "VENCIDO"),
+}
+COM_META_COLS = ("CLIENTE", "FILIAIS", "GERADO_EM", "INICIO_JANELA")
+# Colunas numéricas: o CAST do Oracle segue o NLS da sessão do console e pode
+# devolver "1234,5" — a importação volta para ponto decimal.
+COM_NUMERICAS = {"ITENS", "PEDIDOS", "SALDO", "PEDIDOS_ANTIGOS", "ENTREGA_VENCIDA", "PARCIAIS",
+                 "EM_PRENOTA", "ANTES_INICIO", "QTD", "VALOR", "SEM_TITULO", "JA_SF1", "VENCIDOS",
+                 "SALDO_VENCIDO", "QUANT", "QUJE", "VENCIDO"}
+
+
+def _com_numero_txt(v):
+    t = (v or "").strip()
+    if re.fullmatch(r"-?\d{1,3}(\.\d{3})+,\d+", t):        # 1.234,56
+        return t.replace(".", "").replace(",", ".")
+    if re.fullmatch(r"-?\d*,\d+", t):                      # 1234,5  ,5
+        return t.replace(",", ".")
+    return t
+
+
+COM_NCOL = max(len(v) for v in COM_COLUNAS.values())
+# A união perde o ORDER BY de cada bloco: a importação reordena.
+COM_ORDEM = {"com_pc_lista": (("EMISSAO", "PEDIDO", "ITEM"), False),
+             "com_pc_aprov": (("EMISSAO", "PEDIDO", "NIVEL"), False),
+             "com_doc_lista": (("DIGIT", "DOC"), True),
+             "com_mon_lista": (("FILIAL", "DOC"), False),
+             "com_cp_lista": (("VENCIMENTO", "NUMERO", "PARCELA"), False)}
+
+
+def _com_script_unico(sufixo, hoje, desde=None, banco=None, customer=None, params=None):
+    """Os blocos do grupo Compras numa consulta só. Usa a 1ª variante de cada
+    bloco (dicionário padrão da release 12: C7_QTDACLA, E2_FILORIG, DS_EMISSA,
+    SAK). CAST para VARCHAR roda igual em Oracle, SQL Server e Postgres; o
+    ORDER BY de cada bloco sai (SQL Server não aceita em tabela derivada)."""
+    blocos = _com_scripts(sufixo, hoje, desde, banco, customer, params)
+    cfg = _com_cfg(customer, params)
+    ini = hoje - timedelta(days=COM_JANELA)
+    for d in (cfg["inicio"], desde):
+        if d and d > ini:
+            ini = d
+    txt = lambda v: "CAST(" + ("NULL" if v is None else v) + f" AS VARCHAR(250))"
+    lit = lambda v: "'" + re.sub(r"[^0-9A-Za-z ,._-]", "", str(v or "")) + "'"
+    meta = [lit((customer or "").upper()), lit(",".join(cfg["filiais"])), lit(hoje.strftime("%Y%m%d")),
+            lit(ini.strftime("%Y%m%d"))]
+    # Linha única de identificação: agregado sem GROUP BY sobre um conjunto
+    # vazio devolve sempre UMA linha, nos três bancos (o Oracle não tem SELECT
+    # sem FROM). SX6 existe em toda base; o 1 = 0 nem lê a tabela.
+    s = (sufixo or "010").strip()
+    meta.append("COUNT(*)")
+    partes = ["SELECT 'com_meta' AS BLOCO, " + ", ".join(
+        f"{txt(meta[i]) if i < len(meta) else txt(None)} AS C{i + 1:02d}" for i in range(COM_NCOL))
+        + f" FROM SX6{s} WHERE D_E_L_E_T_ = ' ' AND 1 = 0"]
+    for b in blocos:
+        cols = COM_COLUNAS[b["id"]]
+        sql = re.sub(r"\s+ORDER BY [^()]*$", "", (b.get("sqls") or [b["sql"]])[0])
+        sel = ", ".join(f"{txt('X.' + cols[i]) if i < len(cols) else txt(None)} AS C{i + 1:02d}"
+                        for i in range(COM_NCOL))
+        partes.append(f"SELECT '{b['id']}' AS BLOCO, {sel} FROM ({sql}) X")
+    return "\nUNION ALL\n".join(partes)
+
+
+def _com_linhas_arquivo(nome, bruto):
+    """Arquivo exportado do console (CSV com ; , ou TAB, ou XLSX) → linhas
+    (listas de texto). O delimitador sai do cabeçalho (BLOCO;C01;…), que não
+    tem vírgula nem ponto e vírgula dentro — o conteúdo pode ter."""
+    if (nome or "").lower().endswith((".xlsx", ".xlsm")) or bruto[:2] == b"PK":
+        return [["" if v is None else str(v).strip() for v in r] for r in _proto_linhas_xlsx(bruto)]
+    texto = None
+    for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+        try:
+            texto = bruto.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    texto = texto if texto is not None else bruto.decode("utf-8", errors="replace")
+    cab = next((ln for ln in texto.splitlines() if ln.strip()), "")
+    delim = max((";", ",", "\t", "|"), key=cab.count)
+    return [[(v or "").strip() for v in r] for r in csv.reader(io.StringIO(texto), delimiter=delim) if any(r)]
+
+
+def _com_importar_linhas(linhas, customer, hoje, params=None):
+    """Linhas do script único → (blocos no formato da coleta, meta, avisos).
+    Levanta ValueError com a mensagem para a tela."""
+    if not linhas:
+        raise ValueError("Arquivo vazio.")
+    cab = [re.sub(r"[^A-Z0-9_]", "", c.upper()) for c in linhas[0]]
+    if "BLOCO" not in cab:
+        raise ValueError("Cabeçalho sem a coluna BLOCO — exporte o resultado do script único "
+                         "(🗄 Scripts SQL › Compras × CP) com o cabeçalho.")
+    ib = cab.index("BLOCO")
+    ic = {int(c[1:]): i for i, c in enumerate(cab) if re.fullmatch(r"C\d{2}", c)}
+    defs = {b["id"]: b for b in _com_scripts("010", hoje, None, None, customer, params)}
+    brutos, meta, avisos, desconhecidos = {}, None, [], set()
+    for ln in linhas[1:]:
+        bloco = (ln[ib] if ib < len(ln) else "").strip().lower()
+        if not bloco:
+            continue
+        val = lambda n: (ln[ic[n]] if n in ic and ic[n] < len(ln) else "").strip()
+        if bloco == "com_meta":
+            meta = {k: val(i + 1) for i, k in enumerate(COM_META_COLS)}
+            continue
+        cols = COM_COLUNAS.get(bloco)
+        if not cols:
+            desconhecidos.add(bloco)
+            continue
+        brutos.setdefault(bloco, []).append(
+            {c: (_com_numero_txt(val(i + 1)) if c in COM_NUMERICAS else val(i + 1)) for i, c in enumerate(cols)})
+    if desconhecidos:
+        avisos.append("Blocos ignorados: " + ", ".join(sorted(desconhecidos))[:300] + ".")
+    if not brutos and not meta:
+        raise ValueError("Nenhum bloco do Compras × CP no arquivo. Confira se é o resultado do script único.")
+    if meta:
+        cli = (meta.get("CLIENTE") or "").strip().upper()
+        if cli and cli != (customer or "").upper():
+            raise ValueError(f"O arquivo é do cliente {cli}, não de {customer}.")
+        fil_arq = {f for f in (meta.get("FILIAIS") or "").split(",") if f}
+        fil_cfg = set(_com_cfg(customer, params)["filiais"])
+        if fil_arq and fil_arq != fil_cfg:
+            avisos.append(f"Script gerado para a(s) filial(is) {', '.join(sorted(fil_arq))}; "
+                          f"a unidade hoje é {', '.join(sorted(fil_cfg)) or '—'}.")
+    else:
+        avisos.append("Sem a linha com_meta: não deu para conferir cliente e data do script.")
+    blocos = {}
+    for bid, d in defs.items():
+        base = {"rotulo": d["rotulo"], "tabela": d["tabela"]}
+        ls = brutos.get(bid)
+        if ls is None:
+            # Resumo sem linha é legítimo (nenhum pedido aberto, nenhum XML parado):
+            # com o com_meta presente o script rodou inteiro.
+            if meta:
+                blocos[bid] = {**base, "ok": True, "linhas": [], "ms": 0, "truncado": False,
+                               "limite": d["limite"], "variante": 0, "origem": "arquivo"}
+            else:
+                blocos[bid] = {**base, "ok": False, "linhas": [], "erro": "Não veio no arquivo."}
+            continue
+        if bid in COM_ORDEM:
+            chaves, desc = COM_ORDEM[bid]
+            ls.sort(key=lambda r: tuple(r.get(k, "") for k in chaves), reverse=desc)
+        trunc = len(ls) > d["limite"]
+        blocos[bid] = {**base, "ok": True, "linhas": ls[:d["limite"]], "ms": 0, "truncado": trunc,
+                       "limite": d["limite"], "variante": 0, "origem": "arquivo"}
+    return blocos, meta, avisos
+
+
 def _com_indicadores(blocos, hoje, customer=None, params=None):
     """Indicadores do grupo Compras. Cinza = bloco não lido (não piora)."""
     out, G = [], "compras"
@@ -12229,7 +12392,12 @@ def api_integracoes_scripts(customer):
     banco = (request.args.get("banco") or cfg.get("banco") or "oracle").strip().lower()
     if banco not in ("oracle", "mssql", "postgres"):
         return _err(400, "Banco inválido — use oracle, mssql ou postgres.")
+    unico = None
+    if "compras" in grupos:
+        unico = _com_script_unico(suf or "010", _cp_hoje(), _integ_desde(cfg.get("integ_desde")),
+                                  banco, customer, cfg.get("integ_params") or {})
     return _json({"ok": True, "customer": customer, "ambiente": amb, "cadastrado": bool(cfg),
+                  "script_unico": unico,
                   "sufixo": suf or None, "sufixo_usado": suf or "010", "banco": banco,
                   "desde": cfg.get("integ_desde"), "grupos": list(grupos),
                   "grupos_base": list(_integ_grupos(cfg.get("integ_grupos"))) if cfg else None,
@@ -12240,6 +12408,64 @@ def api_integracoes_scripts(customer):
                                                       datetime.now(TZ_SP),
                                                       cfg.get("integ_params") or {},
                                                       customer)]})
+
+
+@app.post("/api/integracoes/<customer>/importar")
+def api_integracoes_importar(customer):
+    """Importa o resultado do script único do Compras × CP (CSV ou XLSX
+    exportado do console TCloud) e grava a medição como uma coleta.
+
+        POST /api/integracoes/TFCTQI00/importar?ambiente=producao   (multipart: arquivo)
+
+    Não precisa do ⚙ Ambiente cadastrado: é o caminho de quando a REST da base
+    ainda não está no painel."""
+    erro, amb = _guarda_ambiente(customer, request.args.get("ambiente") or "producao", escrita=True)
+    if erro:
+        return erro
+    if (d := deny_aba(customer, "integracoes")):
+        return d
+    f = request.files.get("arquivo")
+    bruto, nome = (f.read(), f.filename or "") if f else (request.get_data(), "")
+    if not bruto:
+        return _err(400, "Arquivo vazio.")
+    if len(bruto) > 20 * 1024 * 1024:
+        return _err(413, "Arquivo maior que 20 MB — gere o script com um corte de data mais recente.")
+    ini = time.time()
+    cfg = _cfg_ambiente(customer, amb) or {}
+    params = cfg.get("integ_params") or {}
+    if not _com_cfg(customer, params)["filiais"]:
+        return _err(409, f"{customer} não tem unidade implantada definida para o Compras × CP.")
+    hoje = _cp_hoje()
+    try:
+        linhas = _com_linhas_arquivo(nome, bruto)
+        blocos, meta, avisos = _com_importar_linhas(linhas, customer, hoje, params)
+    except ValueError as e:
+        _log_coleta(customer, amb, "integracoes", ini, False, bytes=len(bruto), erro=f"Importação: {e}")
+        return _err(400, str(e))
+    grupos = ("compras",)
+    health = {"ok": False, "mensagem": "Importado de arquivo — sem healthcheck."}
+    inds = _integ_indicadores(blocos, health, hoje, grupos, datetime.now(TZ_SP), params, customer)
+    nivel = _integ_pior(i["nivel"] for i in inds)
+    cc = _com_cfg(customer, params)
+    blocos["_meta"] = {"desde": None, "grupos": list(grupos), "origem": "arquivo",
+                       "arquivo": nome[:120] or None, "avisos": avisos,
+                       "script_gerado_em": (meta or {}).get("GERADO_EM"),
+                       "com_filiais": list(cc["filiais"]),
+                       "com_inicio": cc["inicio"].isoformat() if cc["inicio"] else None}
+    n_linhas = sum(len(b.get("linhas") or []) for k, b in blocos.items() if not k.startswith("_"))
+    q("""insert into cockpit.integ_medicoes
+           (customer, ambiente, duracao_ms, nivel, indicadores, blocos, health,
+            environment, disparado_por)
+         values (%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s) returning id""",
+      (customer, amb, int((time.time() - ini) * 1000), nivel,
+       json.dumps(inds, ensure_ascii=False, default=str),
+       json.dumps(blocos, ensure_ascii=False, default=str),
+       json.dumps(health, ensure_ascii=False, default=str), "arquivo", current_user()),
+      one=True)
+    _log_coleta(customer, amb, "integracoes", ini, True, linhas=n_linhas, itens=len(inds),
+                bytes=len(bruto), erro=("; ".join(["Importado de arquivo"] + avisos))[:1800])
+    return _json({**_integ_payload(customer, amb), "importacao": {"linhas": n_linhas, "avisos": avisos,
+                                                                   "arquivo": nome}})
 
 
 @app.post("/api/integracoes/<customer>/coletar")

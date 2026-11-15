@@ -179,5 +179,75 @@ confere('doc não lido: 4 cinzas com motivo', all(I[k]['nivel'] == 'cinza' and '
 confere('cliente sem unidade: um cartão cinza', [i['chave'] for i in ns['_integ_indicadores']({}, {}, HOJE, ['compras'], AGORA, {}, 'X')]
         == ['com_unidade'])
 
+# ── script único (UNION ALL) ────────────────────────────────────────────────
+U = ns['_com_script_unico']('010', HOJE, None, 'oracle', CRESOL, {})
+confere('único: 1 consulta com meta + 9 blocos', U.count('UNION ALL') == 9 and U.startswith("SELECT 'com_meta' AS BLOCO"))
+confere('único: sem ; no fim e sem ORDER BY', not U.rstrip().endswith(';') and 'ORDER BY' not in U)
+confere('único: sem relógio do banco nem concatenação', not re.search(r'SYSDATE|GETDATE|CURRENT_DATE', U) and '||' not in U)
+confere('único: colunas C01..C17 em todas as partes',
+        all(len(re.findall(r' AS C\d{2}\b', p)) == ns['COM_NCOL'] for p in U.split('UNION ALL')))
+confere('único: meta com cliente, filial, dia e início', "'TFCTQI00'" in U and "'010000'" in U
+        and "'20261115'" in U and "'20261026'" in U)
+confere('único: meta em uma linha (agregado com 1 = 0)', 'COUNT(*)' in U.split('UNION ALL')[0] and '1 = 0' in U.split('UNION ALL')[0])
+confere('único: blocos com as mesmas regras (filial, janela)', U.count("LIKE '010000%'") >= 9 and "'20261026'" in U)
+confere('único: COM_COLUNAS cobre os blocos', set(ns['COM_COLUNAS']) == set(ESPERADOS))
+
+# ── importação do arquivo exportado ─────────────────────────────────────────
+NC = ns['COM_NCOL']
+def linha(bloco, *vals):
+    return [bloco] + [str(v) for v in vals] + [''] * (NC - len(vals))
+CAB = ['BLOCO'] + [f'C{i:02d}' for i in range(1, NC + 1)]
+ARQ = [CAB,
+       linha('com_meta', CRESOL, '010000', '20261115', '20261026', '0'),
+       linha('com_pc_resumo', 'B', '9', '4', '18500,40', '20261103', '2', '3', '0', '0', '0'),
+       linha('com_doc_resumo', 'T', 'N', 'SEM', 'A', '3', '1.234,56', '20261030', '0'),
+       linha('com_cp_lista', '010000', 'FIN', '000000900', '', 'DP', '000214', '01', 'TI; LTDA', '20261101', '20261201',
+             '300', '300', 'FINA050', '20199', 'FINANCEIRO', '0'),
+       linha('com_cp_lista', '010000', '1', '000000001', '', 'NF', '000101', '01', 'PAPELARIA', '20261028', '20261110',
+             '250', '250', 'MATA100', '20101', 'DOC_TRANSMITE', '1'),
+       linha('xyz', 'a')]
+buf = io.StringIO(); csv.writer(buf, delimiter=';').writerows(ARQ)
+lin = ns['_com_linhas_arquivo']('resultado.csv', buf.getvalue().encode('cp1252'))
+confere('arquivo: lê CSV ; com campo entre aspas', len(lin) == len(ARQ) and lin[4][8] == 'TI; LTDA', lin[4][:9])
+bl, meta, av = ns['_com_importar_linhas'](lin, CRESOL, HOJE, {})
+confere('importa: meta lido', meta['CLIENTE'] == CRESOL and meta['GERADO_EM'] == '20261115')
+confere('importa: bloco desconhecido avisado', any('xyz' in a for a in av), av)
+confere('importa: decimal com vírgula vira ponto', bl['com_pc_resumo']['linhas'][0]['SALDO'] == '18500.40'
+        and bl['com_doc_resumo']['linhas'][0]['VALOR'] == '1234.56')
+confere('importa: texto não é mexido', bl['com_cp_lista']['linhas'][0]['NOME'] in ('TI; LTDA', 'PAPELARIA'))
+confere('importa: lista reordenada por vencimento', [r['NUMERO'] for r in bl['com_cp_lista']['linhas']] == ['000000001', '000000900'])
+confere('importa: bloco sem linha com meta = ok vazio', bl['com_mon_resumo']['ok'] and bl['com_mon_resumo']['linhas'] == [])
+confere('importa: todos os blocos presentes', set(bl) == set(ESPERADOS))
+I = {i['chave']: i for i in ns['_integ_indicadores'](bl, {}, HOJE, ['compras'], AGORA, {}, CRESOL)}
+confere('importa: indicadores calculados', I['com_pc_aprovacao']['valor'] == 4 and I['com_monitor']['nivel'] == 'verde'
+        and I['com_cp_vencidos']['valor'] == 0)
+# separador vírgula e TAB, cabeçalho minúsculo
+for d in (',', '\t'):
+    b2 = io.StringIO(); w = csv.writer(b2, delimiter=d); w.writerow([c.lower() for c in CAB]); w.writerows(ARQ[1:3])
+    l2 = ns['_com_linhas_arquivo']('r.txt', b2.getvalue().encode('utf-8'))
+    b_, m_, _ = ns['_com_importar_linhas'](l2, CRESOL, HOJE, {})
+    confere(f'importa: separador {d!r}', m_['CLIENTE'] == CRESOL and b_['com_pc_resumo']['linhas'][0]['PEDIDOS'] == '4')
+# outro cliente = erro
+try:
+    ns['_com_importar_linhas']([CAB, linha('com_meta', 'TFDPHR00', '010101', '20261115', '20261026')], CRESOL, HOJE, {})
+    confere('importa: arquivo de outro cliente recusado', False)
+except ValueError as e:
+    confere('importa: arquivo de outro cliente recusado', 'TFDPHR00' in str(e))
+# sem coluna BLOCO = erro
+try:
+    ns['_com_importar_linhas']([['A', 'B'], ['1', '2']], CRESOL, HOJE, {})
+    confere('importa: sem BLOCO recusado', False)
+except ValueError as e:
+    confere('importa: sem BLOCO recusado', 'BLOCO' in str(e))
+# sem meta: bloco ausente vira "não veio"
+bl3, m3, av3 = ns['_com_importar_linhas']([CAB, linha('com_pc_resumo', 'L', '1', '1', '10', '20261101', '0', '0', '0', '0', '0')],
+                                          CRESOL, HOJE, {})
+confere('importa: sem meta, ausente = não veio', not bl3['com_doc_resumo']['ok'] and m3 is None and av3)
+# lista acima do limite = truncada
+muitas = [CAB, linha('com_meta', CRESOL, '010000', '20261115', '20261026')] + \
+         [linha('com_pc_aprov', '010000', f'{i:06d}', 'PC', '01', '000010', 'X', '20261101', '1') for i in range(320)]
+bl4, _, _ = ns['_com_importar_linhas'](muitas, CRESOL, HOJE, {})
+confere('importa: lista truncada no limite do bloco', len(bl4['com_pc_aprov']['linhas']) == 300 and bl4['com_pc_aprov']['truncado'])
+
 print(f'{ok} asserções OK, {falhou} falha(s)')
 raise SystemExit(1 if falhou else 0)

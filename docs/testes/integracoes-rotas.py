@@ -276,6 +276,41 @@ r = cli.get("/api/integracoes/TFCTQI00/scripts?ambiente=producao&banco=db2")
 confere("compras: banco inválido = 400", r.status_code == 400)
 d = cli.get("/api/integracoes/TFEHM600/scripts?ambiente=producao&grupos=compras").get_json()
 confere("compras: cliente sem unidade = 1 = 0", all("1 = 0" in s["sql"] for s in d["scripts"]))
+d = cli.get("/api/integracoes/TFCTQI00/scripts?ambiente=producao&grupos=compras").get_json()
+confere("compras: script único no /scripts", d["script_unico"] and d["script_unico"].count("UNION ALL") == 9)
+d = cli.get("/api/integracoes/TFCTQI00/scripts?ambiente=producao&grupos=transmite").get_json()
+confere("compras: sem o grupo, sem script único", d["script_unico"] is None)
+# importação manual do resultado do script único
+import io as _io
+NC = m.COM_NCOL
+lin = lambda b, *v: ";".join([b] + list(v) + [""] * (NC - len(v)))
+CSV_ARQ = "\n".join([";".join(["BLOCO"] + [f"C{i:02d}" for i in range(1, NC + 1)]),
+                      lin("com_meta", "TFCTQI00", "010000", "20261115", "20261026", "0"),
+                      lin("com_pc_resumo", "B", "2", "1", "100,5", "20261101", "1", "0", "0", "0", "0"),
+                      lin("com_mon_resumo", "E", "1", "0")])
+n_med, n_col = len(DB["medicoes"]), len(DB["coletas"])
+r = cli.post("/api/integracoes/TFCTQI00/importar?ambiente=producao",
+             data={"arquivo": (_io.BytesIO(CSV_ARQ.encode("cp1252")), "resultado.csv")},
+             content_type="multipart/form-data")
+j = r.get_json()
+confere("importar: 200 e payload", r.status_code == 200 and j["importacao"]["linhas"] == 2 and j["ultima"] is not None)
+med = DB["medicoes"][-1] if len(DB["medicoes"]) > n_med else {}
+confere("importar: medição gravada como arquivo", med.get("environment") == "arquivo"
+        and med["blocos"]["_meta"]["origem"] == "arquivo" and med["blocos"]["_meta"]["grupos"] == ["compras"]
+        and med["blocos"]["_meta"]["com_filiais"] == ["010000"])
+confere("importar: indicadores do grupo", any(i["chave"] == "com_pc_aprovacao" and i["valor"] == 1 for i in med.get("indicadores", []))
+        and med.get("nivel") == "vermelho")
+confere("importar: log da coleta", len(DB["coletas"]) == n_col + 1 and DB["coletas"][-1]["ok"])
+r = cli.post("/api/integracoes/TFCTQI00/importar?ambiente=producao",
+             data={"arquivo": (_io.BytesIO(CSV_ARQ.replace("TFCTQI00", "TFDPHR00").encode()), "r.csv")},
+             content_type="multipart/form-data")
+confere("importar: arquivo de outro cliente = 400", r.status_code == 400 and "TFDPHR00" in r.get_json().get("error", ""))
+r = cli.post("/api/integracoes/TFEHM600/importar?ambiente=producao",
+             data={"arquivo": (_io.BytesIO(CSV_ARQ.encode()), "r.csv")}, content_type="multipart/form-data")
+confere("importar: cliente sem unidade = 409", r.status_code == 409)
+r = cli.post("/api/integracoes/TFCTQI00/importar?ambiente=producao",
+             data={"arquivo": (_io.BytesIO(b""), "r.csv")}, content_type="multipart/form-data")
+confere("importar: vazio = 400", r.status_code == 400)
 
 # ── 8. grupo TOTVS Transmite (16/10/2026) ───────────────────────────────────
 # Base de Compras (Rio Deserto): só o grupo transmite. A SDS fingida não tem

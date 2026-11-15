@@ -137,12 +137,15 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFCTQI00', ambi
     const g = (u.searchParams.get('grupos') || 'transmite,compras').split(',');
     const banco = u.searchParams.get('banco') || 'oracle';
     r.fulfill({ json: { ok: true, cadastrado: false, sufixo: null, sufixo_usado: '010', banco, desde: null, grupos: g, grupos_base: null,
+      script_unico: g.includes('compras') ? "SELECT 'com_meta' AS BLOCO FROM SX6010\nUNION ALL\nSELECT 'com_pc_resumo' AS BLOCO" : null,
       scripts: g.map(x => ({ id: x + '_1', rotulo: `Script ${x} ${banco}`, tabela: 'X', sql: `SELECT 1 FROM ${x} WHERE F1_FILIAL LIKE '010000%'` })) } });
   });
   await pg.evaluate(() => abreScriptsIntegracoes()); await pg.waitForTimeout(300);
   t('modal abre com Transmite + Compras marcados', await pg.$eval('[data-int-sql-grupo="compras"]', n => n.checked)
     && await pg.$eval('[data-int-sql-grupo="transmite"]', n => n.checked) && !(await pg.$eval('[data-int-sql-grupo="rh"]', n => n.checked)));
   t('modal avisa base não cadastrada', /Base ainda não cadastrada/.test(await txt('[data-int-sql-corpo]')));
+  t('script único em destaque', /Script único — Compras × CP/.test(await txt('[data-int-sql-unico]'))
+    && /UNION ALL/.test(await pg.$eval('[data-int-sql-unico-txt]', n => n.value)));
   await pg.click('[data-int-sql-grupo="transmite"]'); await pg.waitForTimeout(300);
   t('desmarcar Transmite pede só compras', /grupos=compras/.test(pedSql[pedSql.length - 1] || ''), pedSql.join(' | '));
   t('lista só o script de compras', (await pg.$$eval('[data-int-sql-lista] summary', ns => ns.map(n => n.textContent.trim()))).join('|') === 'Script compras oracle');
@@ -150,10 +153,34 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFCTQI00', ambi
   t('troca o banco', /banco=mssql/.test(pedSql[pedSql.length - 1] || '') && /Script compras mssql/.test(await txt('[data-int-sql-lista]')));
   await pg.click('[data-int-sql-grupo="compras"]'); await pg.waitForTimeout(200);
   t('nenhum grupo: aviso', /Marque ao menos um grupo/.test(await txt('[data-int-sql-lista]')));
+  t('sem compras, sem script único', (await pg.$$('[data-int-sql-unico]')).length === 0);
   await pg.click('[data-int-sql-grupo="compras"]'); await pg.waitForTimeout(300);
   t('volta o script de compras', /Script compras mssql/.test(await txt('[data-int-sql-lista]')));
   if (process.env.SHOT) await pg.screenshot({ path: process.env.SHOT.replace('.png', '-scripts.png') });
   await pg.$$eval('.fixed.inset-0 [data-fechar]', bs => bs[0] && bs[0].click());
+
+  // ── ⬆ Importar arquivo ─────────────────────────────────────────────────────
+  let corpoImp = '';
+  const ULT_ARQ = Object.assign({}, ULTIMA, { environment: 'arquivo', duracao_ms: 40,
+    blocos: Object.assign({}, ULTIMA.blocos, { _meta: { grupos: ['compras'], origem: 'arquivo', arquivo: 'resultado.csv',
+      script_gerado_em: '20261115', avisos: ['Blocos ignorados: xyz.'], com_filiais: ['010000'], com_inicio: '2026-10-26' } }) });
+  await pg.route('**/api/integracoes/TFCTQI00/importar*', async r => {
+    corpoImp = r.request().postData() || '';
+    r.fulfill({ json: PAYLOAD({ ultima: ULT_ARQ, importacao: { linhas: 20, avisos: [], arquivo: 'resultado.csv' } }) });
+  });
+  t('botão Importar arquivo no menu', await pg.$('#int-importar') !== null);
+  await pg.evaluate(() => abreImportarIntegracoes()); await pg.waitForTimeout(200);
+  await pg.click('.fixed.inset-0 [data-ok]'); await pg.waitForTimeout(100);
+  t('sem arquivo: pede o arquivo', /Escolha o arquivo/.test(await txt('.fixed.inset-0 [data-erro]')));
+  await pg.setInputFiles('#int-imp-arq', { name: 'resultado.csv', mimeType: 'text/csv', buffer: Buffer.from('BLOCO;C01\ncom_meta;TFCTQI00\n') });
+  await pg.click('.fixed.inset-0 [data-ok]'); await pg.waitForTimeout(400);
+  t('importar envia o arquivo', /resultado\.csv/.test(corpoImp) && /com_meta;TFCTQI00/.test(corpoImp));
+  t('modal fecha', (await pg.$$('#int-imp-arq')).length === 0);
+  const est = await txt('#int-conteudo');
+  t('barra diz importado de arquivo', /Importado de arquivo \(resultado\.csv\)/.test(est) && /script gerado em 15\/11\/2026/.test(est)
+    && /Blocos ignorados: xyz/.test(est), est.slice(0, 300));
+  t('sem aviso falso de grupos alterados', !/Grupos alterados/.test(est));
+  t('caixa de compras continua', /Compras × Transmite × Contas a Pagar — o fluxo da unidade/.test(est));
 
   if (process.env.SHOT) {
     await pg.$$eval('#int-conteudo details.int-sub', ds => ds.forEach(d => { d.open = true; }));

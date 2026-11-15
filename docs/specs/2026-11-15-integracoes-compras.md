@@ -130,3 +130,32 @@ grava nada no ⚙ Ambiente. Sem o ⚙ Ambiente cadastrado, cliente com unidade e
 como antes). Rota: `GET /api/integracoes/<customer>/scripts?grupos=compras&banco=mssql`
 (grupo ou banco desconhecido = 400). Serve para rodar no console TCloud
 enquanto a REST da Cresol não está cadastrada no painel.
+
+## Script único e importação manual (15/11/2026)
+
+**Script único.** Com o grupo Compras marcado, o modal 🗄 Scripts SQL mostra no
+topo o **script único**: os 9 blocos numa consulta só (`UNION ALL`), com a
+coluna `BLOCO` e as colunas genéricas `C01…C17`, todas texto
+(`CAST(… AS VARCHAR(250))`, igual em Oracle, SQL Server e Postgres). A 1ª linha,
+`com_meta`, traz cliente, filiais, o dia em que o script foi gerado e o início
+da janela — um agregado sem `GROUP BY` sobre `SX6 … WHERE 1 = 0`, que devolve
+sempre uma linha nos três bancos. Cada bloco usa a 1ª variante (dicionário
+padrão da 12) e perde o `ORDER BY` (o SQL Server não aceita em tabela
+derivada); a importação reordena (`COM_ORDEM`). As datas de "vencido" e
+"parado" vão como literal: gerar no dia em que for rodar.
+
+**Importação.** `POST /api/integracoes/<customer>/importar?ambiente=` (multipart
+`arquivo`), botão **⬆ Importar arquivo** no menu da aba. Aceita CSV (separador
+`;`, `,`, TAB ou `|`, tirado do cabeçalho) e XLSX, até 20 MB, em cp1252 ou UTF-8.
+O arquivo volta às colunas de cada bloco (`COM_COLUNAS`), decimal com vírgula
+(NLS do Oracle) vira ponto nas colunas numéricas (`COM_NUMERICAS`), listas acima
+do limite do bloco ficam truncadas e marcadas. Grava em `cockpit.integ_medicoes`
+como uma coleta (`environment = 'arquivo'`, `_meta.origem = 'arquivo'`,
+`_meta.arquivo`, `_meta.script_gerado_em`, `_meta.avisos`) e no log de coletas.
+Não precisa do ⚙ Ambiente. Recusa: arquivo de outro cliente (pelo `com_meta`),
+arquivo sem a coluna `BLOCO`, cliente sem unidade em `COM_IMPLANTACAO` (409).
+Sem a linha `com_meta`, bloco ausente vira "Não veio no arquivo" (cinza); com
+ela, bloco sem linha é resultado vazio legítimo.
+
+A barra de estado mostra "Importado de arquivo (nome) · script gerado em …" e
+os avisos, e não acusa "Grupos alterados" em medição importada.
