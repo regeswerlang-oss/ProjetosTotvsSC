@@ -182,6 +182,27 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFCTQI00', ambi
   t('sem aviso falso de grupos alterados', !/Grupos alterados/.test(est));
   t('caixa de compras continua', /Compras × Transmite × Contas a Pagar — o fluxo da unidade/.test(est));
 
+  // ── base sem ⚙ Ambiente: grupos marcáveis, guardados no navegador ─────────
+  const postGrupos = [];
+  await pg.route('**/api/integracoes/TFCTQI00/grupos*', r => { postGrupos.push(r.request().url()); r.fulfill({ json: { ok: true } }); });
+  await pg.route('**/api/integracoes/TFCTQI00?*', r => r.fulfill({ json: PAYLOAD({ ambiente_cfg: null, ultima: ULT_ARQ }) }));
+  await pg.evaluate(() => localStorage.removeItem('tsc.integ.grupos'));
+  await pg.click('#int-reload'); await pg.waitForTimeout(300);
+  const cb = (g) => pg.$eval(`[data-int-grupo="${g}"]`, n => ({ c: n.checked, d: n.disabled }));
+  t('sem cadastro: checkboxes liberados', !(await cb('compras')).d && !(await cb('transmite')).d);
+  t('sem cadastro: marca os grupos da medição importada', (await cb('compras')).c && !(await cb('rh')).c);
+  await pg.click('[data-int-grupo="transmite"]'); await pg.waitForTimeout(200);
+  t('sem cadastro: marcar não chama o servidor', postGrupos.length === 0);
+  t('sem cadastro: Transmite fica marcado', (await cb('transmite')).c && (await cb('compras')).c);
+  t('guardado no navegador', await pg.evaluate(() => JSON.parse(localStorage.getItem('tsc.integ.grupos'))['TFCTQI00|producao'].join(',')) === 'transmite,compras');
+  t('barra explica onde ficam os grupos', /ficam guardados neste navegador/.test(await txt('#int-conteudo')));
+  await pg.click('#int-reload'); await pg.waitForTimeout(300);
+  t('continua marcado depois de atualizar', (await cb('transmite')).c);
+  pedSql.length = 0;
+  await pg.evaluate(() => abreScriptsIntegracoes()); await pg.waitForTimeout(300);
+  t('Scripts SQL abre com a escolha do navegador', /grupos=transmite%2Ccompras|grupos=transmite,compras/.test(pedSql[0] || ''), pedSql.join(' | '));
+  await pg.$$eval('.fixed.inset-0 [data-fechar]', bs => bs[0] && bs[0].click());
+
   if (process.env.SHOT) {
     await pg.$$eval('#int-conteudo details.int-sub', ds => ds.forEach(d => { d.open = true; }));
     await pg.$eval('#int-conteudo', n => n.scrollIntoView());

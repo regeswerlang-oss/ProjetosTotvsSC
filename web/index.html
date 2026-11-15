@@ -14118,7 +14118,23 @@ const INT_CRM_CAUSA = {
   outros:        { rot: 'Outros', ico: '❔', quem: 'não reconhecido — ver a mensagem' },
   sem_texto:     { rot: 'Sem texto', ico: '–', quem: 'ZA3_ERRO vazio ou não lido' },
 };
-const intGruposCfg = () => integ.dados?.ambiente_cfg?.integ_grupos || ['rh'];
+// Base ainda sem ⚙ Ambiente: não há onde gravar os grupos no servidor. A
+// escolha fica no navegador (por cliente × base) e vale para os Scripts SQL e
+// para a leitura da tela; sem escolha, valem os grupos da última medição
+// (ex.: a importada do arquivo). Ao cadastrar a base, o servidor manda.
+const INT_GRUPOS_LS = 'tsc.integ.grupos';
+const intGruposLocais = () => { try { return JSON.parse(localStorage.getItem(INT_GRUPOS_LS) || '{}'); } catch { return {}; } };
+const intGruposChave = () => `${integ.customer}|${integ.ambiente}`;
+function intGruposLocalGrava(grupos) {
+  try { const o = intGruposLocais(); o[intGruposChave()] = grupos; localStorage.setItem(INT_GRUPOS_LS, JSON.stringify(o)); } catch { /* sem storage */ }
+}
+const intGruposCfg = () => {
+  const cfg = integ.dados?.ambiente_cfg;
+  if (cfg) return cfg.integ_grupos || ['rh'];
+  const loc = intGruposLocais()[intGruposChave()];
+  if (Array.isArray(loc) && loc.length) return loc;
+  return integ.dados?.ultima?.blocos?._meta?.grupos || ['rh'];
+};
 // Transmite: CKO_STRAN = último status aceito pelo Transmite (Central TOTVS
 // 19877027865495 e 23130965724823; o 0 visto na base em XML que o Importador
 // não processa, ex.: COM052).
@@ -14313,7 +14329,8 @@ function intEstado(d) {
     partes.push(barra('border-amber-200 bg-amber-50 text-amber-900',
       `<b>${base} ainda não cadastrada.</b> Informe a URL do TSCMONITREST, token, usuário/senha e o
        sufixo das tabelas.${btnAmb}<br><span class="text-xs">Enquanto a REST não está no painel: rode o script único
-       (<b>🗄 Scripts SQL</b> › Compras × CP) no console TCloud e suba o resultado em <b>⬆ Importar arquivo</b>.</span>`));
+       (<b>🗄 Scripts SQL</b> › Compras × CP) no console TCloud e suba o resultado em <b>⬆ Importar arquivo</b>.
+       Os grupos marcados em “Monitorar” ficam guardados neste navegador até a base ser cadastrada.</span>`));
   } else if (!cfg.sufixo) {
     partes.push(barra('border-amber-200 bg-amber-50 text-amber-900',
       `<b>Falta o sufixo das tabelas</b> (ex.: 010) no cadastro da ${base}.${btnAmb}`));
@@ -14535,7 +14552,8 @@ function renderIntegracoes() {
   const gCfg = intGruposCfg();
   $$('#int-grupos [data-int-grupo]').forEach(cb => {
     cb.checked = gCfg.includes(cb.dataset.intGrupo);
-    cb.disabled = !integ.dados?.ambiente_cfg || integ.coletando;
+    cb.disabled = !integ.dados || integ.coletando;
+    cb.title = integ.dados?.ambiente_cfg ? '' : 'Base sem ⚙ Ambiente: a escolha fica neste navegador (Scripts SQL e tela) até a base ser cadastrada.';
   });
   if (!integ.customer) { box.innerHTML = blocoVazioCad('Abra um projeto para ver as integrações do cliente.'); return; }
   if (integ.carregando && !integ.dados) {
@@ -15816,7 +15834,7 @@ async function abreScriptsIntegracoes() {
   if (!cli) { alert('Abra um projeto antes.'); return; }
   // Grupos e banco escolhidos no próprio modal (não mexe no ⚙ Ambiente): dá
   // para tirar o script de um grupo antes de a base estar cadastrada.
-  const sel = { grupos: null, banco: null };
+  const sel = { grupos: integ.dados && !integ.dados.ambiente_cfg ? intGruposCfg() : null, banco: null };
   const carrega = async () => {
     const q = new URLSearchParams({ ambiente: integ.ambiente });
     if (sel.grupos) q.set('grupos', sel.grupos.join(','));
@@ -16410,6 +16428,7 @@ $('#int-desde').addEventListener('change', async () => {
 $$('#int-grupos [data-int-grupo]').forEach(cb => cb.addEventListener('change', async () => {
   const grupos = $$('#int-grupos [data-int-grupo]').filter(x => x.checked).map(x => x.dataset.intGrupo);
   if (!grupos.length) { cb.checked = true; alert('Deixe ao menos um grupo ligado.'); return; }
+  if (!integ.dados?.ambiente_cfg) { intGruposLocalGrava(grupos); renderIntegracoes(); return; }
   try {
     await api(`/api/integracoes/${encodeURIComponent(integ.customer)}/grupos?ambiente=${integ.ambiente}`,
               { method: 'POST', headers: { 'Content-Type': 'application/json' },

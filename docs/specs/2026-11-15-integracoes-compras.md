@@ -159,3 +159,13 @@ ela, bloco sem linha é resultado vazio legítimo.
 
 A barra de estado mostra "Importado de arquivo (nome) · script gerado em …" e
 os avisos, e não acusa "Grupos alterados" em medição importada.
+
+## Grupos marcáveis antes de cadastrar a base (15/11/2026)
+
+Sem o ⚙ Ambiente não há linha em `protheus_ambientes` para gravar os grupos,
+e as caixas de "Monitorar" ficavam travadas. Agora ficam liberadas: sem
+cadastro, a escolha é guardada no navegador (`localStorage tsc.integ.grupos`,
+por cliente × base), não chama o servidor e vale para a tela e para o modal
+🗄 Scripts SQL. Sem escolha, valem os grupos da última medição (ex.: a
+importada do arquivo). Com a base cadastrada, volta a gravar no servidor
+(`POST /grupos`) como antes.
