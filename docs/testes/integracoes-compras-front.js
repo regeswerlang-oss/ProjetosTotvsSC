@@ -130,6 +130,31 @@ const PAYLOAD = (o = {}) => Object.assign({ ok: true, customer: 'TFCTQI00', ambi
   await pg.click('[data-int-ind="com_doc_sem_titulo"]'); await pg.waitForTimeout(200);
   t('cartão abre "Documentos fora do fluxo"', await pg.$eval('details[data-int-sub="Documentos fora do fluxo"]', n => n.open).catch(() => false));
 
+  // ── modal Scripts SQL: grupos e banco escolhidos no modal ─────────────────
+  const pedSql = [];
+  await pg.route('**/api/integracoes/TFCTQI00/scripts*', r => {
+    const u = new URL(r.request().url()); pedSql.push(u.search);
+    const g = (u.searchParams.get('grupos') || 'transmite,compras').split(',');
+    const banco = u.searchParams.get('banco') || 'oracle';
+    r.fulfill({ json: { ok: true, cadastrado: false, sufixo: null, sufixo_usado: '010', banco, desde: null, grupos: g, grupos_base: null,
+      scripts: g.map(x => ({ id: x + '_1', rotulo: `Script ${x} ${banco}`, tabela: 'X', sql: `SELECT 1 FROM ${x} WHERE F1_FILIAL LIKE '010000%'` })) } });
+  });
+  await pg.evaluate(() => abreScriptsIntegracoes()); await pg.waitForTimeout(300);
+  t('modal abre com Transmite + Compras marcados', await pg.$eval('[data-int-sql-grupo="compras"]', n => n.checked)
+    && await pg.$eval('[data-int-sql-grupo="transmite"]', n => n.checked) && !(await pg.$eval('[data-int-sql-grupo="rh"]', n => n.checked)));
+  t('modal avisa base não cadastrada', /Base ainda não cadastrada/.test(await txt('[data-int-sql-corpo]')));
+  await pg.click('[data-int-sql-grupo="transmite"]'); await pg.waitForTimeout(300);
+  t('desmarcar Transmite pede só compras', /grupos=compras/.test(pedSql[pedSql.length - 1] || ''), pedSql.join(' | '));
+  t('lista só o script de compras', (await pg.$$eval('[data-int-sql-lista] summary', ns => ns.map(n => n.textContent.trim()))).join('|') === 'Script compras oracle');
+  await pg.selectOption('[data-int-sql-banco]', 'mssql'); await pg.waitForTimeout(300);
+  t('troca o banco', /banco=mssql/.test(pedSql[pedSql.length - 1] || '') && /Script compras mssql/.test(await txt('[data-int-sql-lista]')));
+  await pg.click('[data-int-sql-grupo="compras"]'); await pg.waitForTimeout(200);
+  t('nenhum grupo: aviso', /Marque ao menos um grupo/.test(await txt('[data-int-sql-lista]')));
+  await pg.click('[data-int-sql-grupo="compras"]'); await pg.waitForTimeout(300);
+  t('volta o script de compras', /Script compras mssql/.test(await txt('[data-int-sql-lista]')));
+  if (process.env.SHOT) await pg.screenshot({ path: process.env.SHOT.replace('.png', '-scripts.png') });
+  await pg.$$eval('.fixed.inset-0 [data-fechar]', bs => bs[0] && bs[0].click());
+
   if (process.env.SHOT) {
     await pg.$$eval('#int-conteudo details.int-sub', ds => ds.forEach(d => { d.open = true; }));
     await pg.$eval('#int-conteudo', n => n.scrollIntoView());

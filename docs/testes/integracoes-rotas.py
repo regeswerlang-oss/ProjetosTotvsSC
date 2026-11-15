@@ -261,6 +261,21 @@ CFG["cfg"] = None
 d = cli.get("/api/integracoes/TFEHM600/scripts?ambiente=producao").get_json()
 confere("scripts sem cadastro usam 010", d["sufixo_usado"] == "010" and len(d["scripts"]) == 10)
 confere("scripts sem ;", all(not s["sql"].rstrip().endswith(";") for s in d["scripts"]))
+# Compras (15/11/2026): grupos e banco escolhidos no modal, sem cadastro.
+d = cli.get("/api/integracoes/TFCTQI00/scripts?ambiente=producao").get_json()
+confere("compras: Cresol sem cadastro abre com Transmite + Compras",
+        d["grupos"] == ["transmite", "compras"] and not d["cadastrado"] and d["grupos_base"] is None
+        and any(s["id"] == "com_pc_resumo" for s in d["scripts"]))
+d = cli.get("/api/integracoes/TFCTQI00/scripts?ambiente=producao&grupos=compras&banco=mssql").get_json()
+confere("compras: ?grupos=compras só o grupo", d["grupos"] == ["compras"] and d["banco"] == "mssql"
+        and len(d["scripts"]) == 9 and all(s["id"].startswith("com_") for s in d["scripts"])
+        and all("LIKE '010000%'" in s["sql"] for s in d["scripts"]))
+r = cli.get("/api/integracoes/TFCTQI00/scripts?ambiente=producao&grupos=xyz")
+confere("compras: grupo desconhecido = 400", r.status_code == 400)
+r = cli.get("/api/integracoes/TFCTQI00/scripts?ambiente=producao&banco=db2")
+confere("compras: banco inválido = 400", r.status_code == 400)
+d = cli.get("/api/integracoes/TFEHM600/scripts?ambiente=producao&grupos=compras").get_json()
+confere("compras: cliente sem unidade = 1 = 0", all("1 = 0" in s["sql"] for s in d["scripts"]))
 
 # ── 8. grupo TOTVS Transmite (16/10/2026) ───────────────────────────────────
 # Base de Compras (Rio Deserto): só o grupo transmite. A SDS fingida não tem

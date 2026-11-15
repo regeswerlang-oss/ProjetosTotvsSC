@@ -120,3 +120,13 @@ cartão abre o detalhe correspondente.
   motivos e clique no cartão.
 - Os SQL também foram executados num Postgres local com tabelas no formato do
   Protheus (campos preenchidos com espaço), cobrindo as variantes.
+
+## Scripts SQL sem a base cadastrada (15/11/2026)
+
+O modal **🗄 Scripts SQL** passou a ter, no topo, os grupos e o banco
+(Oracle, SQL Server, Postgres). Marcar ali só muda os scripts mostrados — não
+grava nada no ⚙ Ambiente. Sem o ⚙ Ambiente cadastrado, cliente com unidade em
+`COM_IMPLANTACAO` abre com Transmite + Compras marcados (os outros, com RH,
+como antes). Rota: `GET /api/integracoes/<customer>/scripts?grupos=compras&banco=mssql`
+(grupo ou banco desconhecido = 400). Serve para rodar no console TCloud
+enquanto a REST da Cresol não está cadastrada no painel.

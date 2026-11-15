@@ -12213,14 +12213,30 @@ def api_integracoes_scripts(customer):
         return _err(400, "Ambiente inválido — use 'producao' ou 'teste'.")
     cfg = _cfg_ambiente(customer, amb) or {}
     suf = (cfg.get("sufixo") or "").strip()
-    grupos = _integ_grupos(cfg.get("integ_grupos"))
-    return _json({"ok": True, "customer": customer, "ambiente": amb,
-                  "sufixo": suf or None, "sufixo_usado": suf or "010",
+    # ?grupos=compras,transmite escolhe os grupos sem mexer no ⚙ Ambiente (o
+    # modal deixa marcar). Sem o parâmetro: os grupos da base; base ainda não
+    # cadastrada de cliente com unidade implantada = Transmite + Compras.
+    pedido = [x for x in re.split(r"[\s,;]+", request.args.get("grupos") or "") if x]
+    if pedido:
+        desconhecidos = {x.lower() for x in pedido} - set(INTEG_GRUPOS_BASE)
+        if desconhecidos:
+            return _err(400, "Grupo desconhecido: " + ", ".join(sorted(desconhecidos)) + ".")
+        grupos = _integ_grupos(pedido)
+    elif not cfg and _com_cfg(customer)["filiais"]:
+        grupos = ("transmite", "compras")
+    else:
+        grupos = _integ_grupos(cfg.get("integ_grupos"))
+    banco = (request.args.get("banco") or cfg.get("banco") or "oracle").strip().lower()
+    if banco not in ("oracle", "mssql", "postgres"):
+        return _err(400, "Banco inválido — use oracle, mssql ou postgres.")
+    return _json({"ok": True, "customer": customer, "ambiente": amb, "cadastrado": bool(cfg),
+                  "sufixo": suf or None, "sufixo_usado": suf or "010", "banco": banco,
                   "desde": cfg.get("integ_desde"), "grupos": list(grupos),
+                  "grupos_base": list(_integ_grupos(cfg.get("integ_grupos"))) if cfg else None,
                   "scripts": [{k: s[k] for k in ("id", "rotulo", "tabela", "sql")}
                               for s in _integ_scripts(suf or "010", _cp_hoje(),
                                                       _integ_desde(cfg.get("integ_desde")),
-                                                      cfg.get("banco"), grupos,
+                                                      banco, grupos,
                                                       datetime.now(TZ_SP),
                                                       cfg.get("integ_params") or {},
                                                       customer)]})
