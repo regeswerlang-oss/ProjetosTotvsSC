@@ -9190,7 +9190,7 @@ INTEG_TEMPO_MIN = 4                # s mínimos para valer a pena abrir mais um 
 # Grupos que uma base pode monitorar (protheus_ambientes.integ_grupos). Nulo =
 # só RH, que é como a aba nasceu: base de RH não paga consulta de Compras e
 # base de Compras (Rio Deserto) não vê 8 cartões cinza de Quírons/Ahgora.
-INTEG_GRUPOS_BASE = ("rh", "transmite", "crm", "eai")
+INTEG_GRUPOS_BASE = ("rh", "transmite", "crm", "eai", "compras")
 INTEG_GRUPOS_PADRAO = ("rh",)
 
 # ── TOTVS Transmite (16/10/2026) ──────────────────────────────────────────
@@ -9312,7 +9312,8 @@ def _integ_memo_exprs(col, banco, n=400):
             f"DBMS_LOB.SUBSTR({col}, {n}, 1)", None]
 
 
-def _integ_scripts(sufixo, hoje, desde=None, banco=None, grupos=None, agora=None, params=None):
+def _integ_scripts(sufixo, hoje, desde=None, banco=None, grupos=None, agora=None, params=None,
+                   customer=None):
     """Blocos dos grupos ligados na base. `grupos` nulo = só RH (como antes).
     Ordem dentro de cada grupo = resumos antes dos detalhes; a coleta ainda
     reordena tudo (resumos de todos os grupos primeiro)."""
@@ -9326,6 +9327,8 @@ def _integ_scripts(sufixo, hoje, desde=None, banco=None, grupos=None, agora=None
         lista += _crm_scripts(sufixo, hoje, desde, banco)
     if "eai" in grupos:
         lista += _eai_scripts(sufixo, hoje, desde, banco)
+    if "compras" in grupos:
+        lista += _com_scripts(sufixo, hoje, desde, banco, customer, params)
     for b in lista:
         if "sqls" in b:
             b["sql"] = b["sqls"][0]
@@ -9662,7 +9665,7 @@ def _integ_bloco_falhou(b, chave, grupo, rotulo):
     return _integ_ind(chave, grupo, rotulo, None, "cinza", b.get("erro") or "Não lido.")
 
 
-def _integ_indicadores(blocos, health, hoje, grupos=None, agora=None, params=None):
+def _integ_indicadores(blocos, health, hoje, grupos=None, agora=None, params=None, customer=None):
     """Indicadores dos grupos ligados na base. `grupos` nulo = só RH."""
     grupos = _integ_grupos(grupos)
     out = []
@@ -9674,6 +9677,8 @@ def _integ_indicadores(blocos, health, hoje, grupos=None, agora=None, params=Non
         out += _crm_indicadores(blocos, hoje, agora)
     if "eai" in grupos:
         out += _eai_indicadores(blocos, hoje, agora)
+    if "compras" in grupos:
+        out += _com_indicadores(blocos, hoje, customer, params)
     return out
 
 
@@ -11595,6 +11600,362 @@ def _eai_indicadores(blocos, hoje, agora=None):
     return out
 
 
+# ── Compras × Transmite × Contas a Pagar (15/11/2026) ─────────────────────
+# Monitor pós-implantação de UMA unidade: o fluxo esperado é pedido liberado
+# (SC7 + alçada SCR) → XML no Transmite → Monitor do Importador (SDS) →
+# documento de entrada com pedido (SF1/SD1) → título no contas a pagar (SE2).
+# Tudo que sai desse caminho vira cartão: pedido parado na aprovação, nota
+# lançada fora do Importador, nota sem pedido, pré-nota esquecida, nota sem
+# título, XML parado no Monitor e título lançado direto no Financeiro.
+# Spec: docs/specs/2026-11-15-integracoes-compras.md
+#
+# A filial NÃO é parâmetro de tela: é a unidade que entrou em produção, fixada
+# por cliente (Cresol: virada da 010000 em 26/10/2026 — Wizard do COMXCOL
+# configurado para a empresa 010000, OS de 26/10 do Murilo; ordem das ondas
+# definida pela Débora em 22/10). Próxima onda = trocar aqui.
+# Filtro por prefixo (LIKE '010000%'): casa com o campo filial de qualquer
+# tamanho, sem RTRIM na coluna (o índice continua valendo).
+COM_IMPLANTACAO = {
+    "TFCTQI00": {"filiais": ("010000",), "inicio": "2026-10-26"},
+}
+COM_JANELA = 120                   # dias de SF1/SE2 lidos (limitado pelo início da unidade)
+COM_APROV_DIAS = 5                 # pedido aguardando aprovação há mais de N dias = crítico
+COM_PRENOTA_DIAS = 3               # pré-nota sem classificar há mais de N dias = atenção
+COM_SCR_PENDENTE = "02"            # CR_STATUS: aguardando liberação do aprovador
+COM_ORIGEM_DOC = "MATA10"          # E2_ORIGEM dos títulos do Documento de Entrada (MATA100/103)
+COM_CLASSES = {"DOC_TRANSMITE": "Documento · Transmite", "DOC_MANUAL": "Documento · manual",
+               "DOC_IMPOSTOS": "Impostos do documento", "FINANCEIRO": "Lançado no Financeiro"}
+COM_APROVACAO = {"B": "Aguardando aprovação", "R": "Rejeitado", "L": "Liberado"}
+
+
+def _com_cfg(customer, params=None):
+    """Filiais e início da unidade implantada. integ_params.com_filiais /
+    com_inicio sobrepõem a tabela (uso interno, sem tela)."""
+    base = dict(COM_IMPLANTACAO.get((customer or "").strip().upper(), {}))
+    p = params or {}
+    fil = p.get("com_filiais") or base.get("filiais") or ()
+    if isinstance(fil, str):
+        fil = [x for x in re.split(r"[\s,;]+", fil) if x]
+    fil = tuple(f for f in (str(x).strip() for x in fil) if re.fullmatch(r"[0-9A-Za-z]{1,12}", f))
+    ini = _integ_desde(p.get("com_inicio") or base.get("inicio"))
+    return {"filiais": fil, "inicio": ini}
+
+
+def _com_fil(col, filiais):
+    """Condição de filial por prefixo. Sem filial definida = nada (1 = 0):
+    o grupo nunca lê a base inteira por engano."""
+    if not filiais:
+        return "1 = 0"
+    return "(" + " OR ".join(f"{col} LIKE '{f}%'" for f in filiais) + ")"
+
+
+def _com_num(v):
+    try:
+        return float(str(v).replace(",", "."))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _com_brl(v):
+    s = f"{_com_num(v):,.2f}"
+    return "R$ " + s.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _com_scripts(sufixo, hoje, desde=None, banco=None, customer=None, params=None):
+    """Blocos do grupo Compras. Só SELECT, sem ';', datas como literal, vazio
+    robusto, sem concatenação. Variantes: campo que não existir na release
+    (C7_QTDACLA, E2_FILORIG, DS_EMISSA, SAK) cai para a próxima forma."""
+    s = (sufixo or "010").strip()
+    cfg = _com_cfg(customer, params)
+    fil = cfg["filiais"]
+    ini = hoje - timedelta(days=COM_JANELA)
+    for d in (cfg["inicio"], desde):
+        if d and d > ini:
+            ini = d
+    d_ini, d_hoje = ini.strftime("%Y%m%d"), hoje.strftime("%Y%m%d")
+    d_aprov = (hoje - timedelta(days=COM_APROV_DIAS)).strftime("%Y%m%d")
+    d_inicio = (cfg["inicio"] or ini).strftime("%Y%m%d")
+    vz, pr = _integ_vazio, _integ_preenchido
+    rot_fil = ", ".join(fil) or "(sem filial definida)"
+
+    # Pedidos de compra em aberto: saldo, não eliminado por resíduo, não encerrado.
+    pc_onde = (f"FROM SC7{s} C7 WHERE C7.D_E_L_E_T_ = ' ' "
+               f"AND ({_com_fil('C7.C7_FILIAL', fil)} OR {_com_fil('C7.C7_FILENT', fil)}) "
+               f"AND {vz('C7.C7_RESIDUO')} AND {vz('C7.C7_ENCER')} AND C7.C7_QUJE < C7.C7_QUANT")
+    pc_res = lambda acla: (
+        "SELECT C7.C7_CONAPRO AS APROVACAO, COUNT(*) AS ITENS, COUNT(DISTINCT C7.C7_NUM) AS PEDIDOS, "
+        "SUM((C7.C7_QUANT - C7.C7_QUJE) * C7.C7_PRECO) AS SALDO, MIN(C7.C7_EMISSAO) AS MAIS_ANTIGO, "
+        f"COUNT(DISTINCT CASE WHEN C7.C7_EMISSAO <= '{d_aprov}' THEN C7.C7_NUM END) AS PEDIDOS_ANTIGOS, "
+        f"SUM(CASE WHEN C7.C7_DATPRF < '{d_hoje}' THEN 1 ELSE 0 END) AS ENTREGA_VENCIDA, "
+        "SUM(CASE WHEN C7.C7_QUJE > 0 THEN 1 ELSE 0 END) AS PARCIAIS, "
+        + (f"SUM(CASE WHEN C7.C7_QTDACLA > 0 THEN 1 ELSE 0 END) AS EM_PRENOTA, " if acla else "0 AS EM_PRENOTA, ")
+        + f"SUM(CASE WHEN C7.C7_EMISSAO < '{d_inicio}' THEN 1 ELSE 0 END) AS ANTES_INICIO "
+        + pc_onde + " GROUP BY C7.C7_CONAPRO")
+    fornec = lambda cod, loja: (f"(SELECT MAX(A2.A2_NOME) FROM SA2{s} A2 WHERE A2.D_E_L_E_T_ = ' ' "
+                                f"AND A2.A2_COD = {cod} AND A2.A2_LOJA = {loja})")
+    pc_lista = lambda acla: (
+        "SELECT C7.C7_FILIAL AS FILIAL, C7.C7_NUM AS PEDIDO, C7.C7_ITEM AS ITEM, C7.C7_EMISSAO AS EMISSAO, "
+        "C7.C7_DATPRF AS ENTREGA, C7.C7_FORNECE AS FORNECEDOR, C7.C7_LOJA AS LOJA, "
+        f"{fornec('C7.C7_FORNECE', 'C7.C7_LOJA')} AS NOME, RTRIM(C7.C7_PRODUTO) AS PRODUTO, "
+        "RTRIM(C7.C7_DESCRI) AS DESCRICAO, C7.C7_QUANT AS QUANT, C7.C7_QUJE AS QUJE, "
+        + ("C7.C7_QTDACLA AS EM_PRENOTA, " if acla else "0 AS EM_PRENOTA, ")
+        + "(C7.C7_QUANT - C7.C7_QUJE) * C7.C7_PRECO AS SALDO, C7.C7_CONAPRO AS APROVACAO, "
+        "RTRIM(C7.C7_NUMSC) AS SC, RTRIM(C7.C7_CC) AS CC "
+        + pc_onde + " ORDER BY C7.C7_EMISSAO, C7.C7_NUM, C7.C7_ITEM")
+    aprov = lambda sak: (
+        "SELECT CR.CR_FILIAL AS FILIAL, RTRIM(CR.CR_NUM) AS PEDIDO, CR.CR_TIPO AS TIPO, CR.CR_NIVEL AS NIVEL, "
+        "CR.CR_APROV AS APROVADOR, "
+        + (f"(SELECT MAX(AK.AK_NOME) FROM SAK{s} AK WHERE AK.D_E_L_E_T_ = ' ' AND AK.AK_COD = CR.CR_APROV) AS NOME, "
+           if sak else "")
+        + f"CR.CR_EMISSAO AS EMISSAO, CR.CR_TOTAL AS VALOR FROM SCR{s} CR WHERE CR.D_E_L_E_T_ = ' ' "
+        f"AND {_com_fil('CR.CR_FILIAL', fil)} AND CR.CR_TIPO IN ('PC','IP') "
+        f"AND CR.CR_STATUS = '{COM_SCR_PENDENTE}' ORDER BY CR.CR_EMISSAO, CR.CR_NUM, CR.CR_NIVEL")
+
+    # Documentos de entrada: origem (SDS = veio pelo Importador/Transmite),
+    # pedido (SD1.D1_PEDIDO), status (pré-nota) e título (SE2).
+    chave_d1 = ("D.D1_FILIAL = F.F1_FILIAL AND D.D1_DOC = F.F1_DOC AND D.D1_SERIE = F.F1_SERIE "
+                "AND D.D1_FORNECE = F.F1_FORNECE AND D.D1_LOJA = F.F1_LOJA")
+    tem_sds = (f"EXISTS (SELECT 1 FROM SDS{s} DS WHERE DS.D_E_L_E_T_ = ' ' AND DS.DS_FILIAL = F.F1_FILIAL "
+               "AND DS.DS_DOC = F.F1_DOC AND DS.DS_SERIE = F.F1_SERIE AND DS.DS_FORNEC = F.F1_FORNECE "
+               "AND DS.DS_LOJA = F.F1_LOJA)")
+    doc_sub = lambda fo: (
+        f"SELECT F.F1_FILIAL AS FILIAL, F.F1_DOC AS DOC, F.F1_SERIE AS SERIE, F.F1_FORNECE AS FORNECEDOR, "
+        f"F.F1_LOJA AS LOJA, F.F1_ESPECIE AS ESPECIE, F.F1_EMISSAO AS EMISSAO, F.F1_DTDIGIT AS DIGIT, "
+        f"F.F1_TIPO AS TIPO, F.F1_VALBRUT AS VALOR, F.F1_PREFIXO AS PREFIXO, F.F1_DUPL AS DUPL, "
+        f"CASE WHEN {tem_sds} THEN 'T' ELSE 'M' END AS ORIGEM, "
+        f"CASE WHEN NOT EXISTS (SELECT 1 FROM SD1{s} D WHERE D.D_E_L_E_T_ = ' ' AND {chave_d1} "
+        f"AND {pr('D.D1_PEDIDO')}) THEN 'SEM' "
+        f"WHEN EXISTS (SELECT 1 FROM SD1{s} D WHERE D.D_E_L_E_T_ = ' ' AND {chave_d1} "
+        f"AND {vz('D.D1_PEDIDO')}) THEN 'PARCIAL' ELSE 'COM' END AS PC, "
+        f"CASE WHEN {vz('F.F1_STATUS')} THEN 'P' ELSE F.F1_STATUS END AS STATUS, "
+        f"CASE WHEN {pr('F.F1_STATUS')} AND {pr('F.F1_DUPL')} AND NOT EXISTS (SELECT 1 FROM SE2{s} E "
+        f"WHERE E.D_E_L_E_T_ = ' ' AND E.{fo} = F.F1_FILIAL AND E.E2_PREFIXO = F.F1_PREFIXO "
+        f"AND E.E2_NUM = F.F1_DUPL AND E.E2_FORNECE = F.F1_FORNECE AND E.E2_LOJA = F.F1_LOJA) "
+        f"THEN 1 ELSE 0 END AS SEM_TITULO "
+        f"FROM SF1{s} F WHERE F.D_E_L_E_T_ = ' ' AND {_com_fil('F.F1_FILIAL', fil)} "
+        f"AND F.F1_DTDIGIT >= '{d_ini}'")
+    doc_res = lambda fo: (
+        "SELECT T.ORIGEM, T.TIPO, T.PC, T.STATUS, COUNT(*) AS QTD, SUM(T.VALOR) AS VALOR, "
+        "MIN(T.DIGIT) AS MAIS_ANTIGA, SUM(T.SEM_TITULO) AS SEM_TITULO "
+        f"FROM ({doc_sub(fo)}) T GROUP BY T.ORIGEM, T.TIPO, T.PC, T.STATUS")
+    doc_lista = lambda fo: (
+        "SELECT T.FILIAL, T.DOC, T.SERIE, T.FORNECEDOR, T.LOJA, "
+        f"{fornec('T.FORNECEDOR', 'T.LOJA')} AS NOME, T.ESPECIE, T.TIPO, T.EMISSAO, T.DIGIT, T.VALOR, "
+        "T.ORIGEM, T.PC, T.STATUS, T.SEM_TITULO, "
+        f"(SELECT MIN(D.D1_PEDIDO) FROM SD1{s} D WHERE D.D_E_L_E_T_ = ' ' AND D.D1_FILIAL = T.FILIAL "
+        "AND D.D1_DOC = T.DOC AND D.D1_SERIE = T.SERIE AND D.D1_FORNECE = T.FORNECEDOR "
+        f"AND D.D1_LOJA = T.LOJA AND {pr('D.D1_PEDIDO')}) AS PEDIDO "
+        f"FROM ({doc_sub(fo)}) T WHERE T.ORIGEM = 'M' OR T.PC <> 'COM' OR T.STATUS = 'P' OR T.SEM_TITULO = 1 "
+        "ORDER BY T.DIGIT DESC, T.DOC")
+
+    # XML no Monitor do Importador que ainda não virou documento.
+    mon_sub = lambda emis: (
+        "SELECT DS.DS_FILIAL AS FILIAL, DS.DS_DOC AS DOC, DS.DS_SERIE AS SERIE, DS.DS_FORNEC AS FORNECEDOR, "
+        f"DS.DS_LOJA AS LOJA, DS.DS_TIPO AS TIPO, CASE WHEN {vz('DS.DS_STATUS')} THEN '-' ELSE DS.DS_STATUS END AS STATUS, "
+        + ("DS.DS_EMISSA AS EMISSAO, " if emis else "")
+        + f"CASE WHEN EXISTS (SELECT 1 FROM SF1{s} F WHERE F.D_E_L_E_T_ = ' ' AND F.F1_FILIAL = DS.DS_FILIAL "
+        "AND F.F1_DOC = DS.DS_DOC AND F.F1_SERIE = DS.DS_SERIE AND F.F1_FORNECE = DS.DS_FORNEC "
+        "AND F.F1_LOJA = DS.DS_LOJA) THEN 1 ELSE 0 END AS JA_SF1 "
+        f"FROM SDS{s} DS WHERE DS.D_E_L_E_T_ = ' ' AND {_com_fil('DS.DS_FILIAL', fil)} "
+        f"AND (DS.DS_STATUS <> 'P' OR {vz('DS.DS_STATUS')})")
+    mon_res = ("SELECT T.STATUS, COUNT(*) AS QTD, SUM(T.JA_SF1) AS JA_SF1 "
+               f"FROM ({mon_sub(False)}) T GROUP BY T.STATUS")
+    mon_lista = lambda emis: (
+        f"SELECT T.*, {fornec('T.FORNECEDOR', 'T.LOJA')} AS NOME FROM ({mon_sub(emis)}) T "
+        "ORDER BY T.FILIAL, T.DOC")
+
+    # Contas a pagar: classe do título pela origem e pelo documento de entrada.
+    cp_sub = lambda fo: (
+        f"SELECT E.{fo} AS FILIAL, E.E2_PREFIXO AS PREFIXO, E.E2_NUM AS NUMERO, E.E2_PARCELA AS PARCELA, "
+        "E.E2_TIPO AS TIPO, E.E2_FORNECE AS FORNECEDOR, E.E2_LOJA AS LOJA, E.E2_NOMFOR AS NOME, "
+        "E.E2_EMIS1 AS CONTABIL, E.E2_VENCREA AS VENCIMENTO, E.E2_VALOR AS VALOR, E.E2_SALDO AS SALDO, "
+        "E.E2_ORIGEM AS ORIGEM, E.E2_NATUREZ AS NATUREZA, "
+        f"CASE WHEN E.E2_ORIGEM LIKE '{COM_ORIGEM_DOC}%' AND EXISTS (SELECT 1 FROM SF1{s} F "
+        f"WHERE F.D_E_L_E_T_ = ' ' AND F.F1_FILIAL = E.{fo} AND F.F1_PREFIXO = E.E2_PREFIXO "
+        "AND F.F1_DUPL = E.E2_NUM AND F.F1_FORNECE = E.E2_FORNECE AND F.F1_LOJA = E.E2_LOJA "
+        f"AND {tem_sds}) THEN 'DOC_TRANSMITE' "
+        f"WHEN E.E2_ORIGEM LIKE '{COM_ORIGEM_DOC}%' AND EXISTS (SELECT 1 FROM SF1{s} F "
+        f"WHERE F.D_E_L_E_T_ = ' ' AND F.F1_FILIAL = E.{fo} AND F.F1_PREFIXO = E.E2_PREFIXO "
+        "AND F.F1_DUPL = E.E2_NUM AND F.F1_FORNECE = E.E2_FORNECE AND F.F1_LOJA = E.E2_LOJA) "
+        "THEN 'DOC_MANUAL' "
+        f"WHEN E.E2_ORIGEM LIKE '{COM_ORIGEM_DOC}%' THEN 'DOC_IMPOSTOS' ELSE 'FINANCEIRO' END AS CLASSE, "
+        f"CASE WHEN E.E2_SALDO > 0 AND E.E2_VENCREA < '{d_hoje}' THEN 1 ELSE 0 END AS VENCIDO "
+        f"FROM SE2{s} E WHERE E.D_E_L_E_T_ = ' ' AND {_com_fil('E.' + fo, fil)} "
+        f"AND E.E2_EMIS1 >= '{d_ini}' AND E.E2_TIPO NOT LIKE '%-'")
+    cp_res = lambda fo: (
+        "SELECT T.CLASSE, T.ORIGEM, COUNT(*) AS QTD, SUM(T.VALOR) AS VALOR, SUM(T.SALDO) AS SALDO, "
+        "SUM(T.VENCIDO) AS VENCIDOS, SUM(CASE WHEN T.VENCIDO = 1 THEN T.SALDO ELSE 0 END) AS SALDO_VENCIDO "
+        f"FROM ({cp_sub(fo)}) T GROUP BY T.CLASSE, T.ORIGEM")
+    cp_lista = lambda fo: (
+        f"SELECT T.* FROM ({cp_sub(fo)}) T WHERE T.CLASSE = 'FINANCEIRO' OR T.VENCIDO = 1 "
+        "ORDER BY T.VENCIMENTO, T.NUMERO, T.PARCELA")
+    fos = ("E2_FILORIG", "E2_FILIAL")
+    jan = f"desde {ini.strftime('%d/%m/%Y')}"
+    return [
+        {"id": "com_pc_resumo", "rotulo": f"Compras — pedidos em aberto por aprovação ({rot_fil})",
+         "tabela": f"SC7{s}", "limite": 20, "sqls": [pc_res(True), pc_res(False)]},
+        {"id": "com_doc_resumo", "rotulo": f"Compras — documentos de entrada por origem e pedido ({rot_fil}, {jan})",
+         "tabela": f"SF1{s}", "limite": 200, "sqls": [doc_res(fo) for fo in fos]},
+        {"id": "com_mon_resumo", "rotulo": f"Compras — XML no Monitor sem documento ({rot_fil})",
+         "tabela": f"SDS{s}", "limite": 20, "sql": mon_res},
+        {"id": "com_cp_resumo", "rotulo": f"Compras — contas a pagar por origem do título ({rot_fil}, {jan})",
+         "tabela": f"SE2{s}", "limite": 200, "sqls": [cp_res(fo) for fo in fos]},
+        # ── detalhe ────────────────────────────────────────────────────────
+        {"id": "com_pc_lista", "rotulo": f"Compras — itens de pedido em aberto, dos mais antigos ({rot_fil})",
+         "tabela": f"SC7{s}", "limite": 500, "detalhe": True, "sqls": [pc_lista(True), pc_lista(False)]},
+        {"id": "com_pc_aprov", "rotulo": f"Compras — alçadas aguardando o aprovador (SCR {COM_SCR_PENDENTE})",
+         "tabela": f"SCR{s}", "limite": 300, "detalhe": True, "sqls": [aprov(True), aprov(False)]},
+        {"id": "com_doc_lista", "rotulo": f"Compras — documentos fora do fluxo ({rot_fil}, {jan})",
+         "tabela": f"SF1{s}", "limite": 600, "detalhe": True, "sqls": [doc_lista(fo) for fo in fos]},
+        {"id": "com_mon_lista", "rotulo": f"Compras — XML no Monitor sem documento, um a um ({rot_fil})",
+         "tabela": f"SDS{s}", "limite": 300, "detalhe": True, "sqls": [mon_lista(True), mon_lista(False)]},
+        {"id": "com_cp_lista", "rotulo": f"Compras — títulos do Financeiro e vencidos em aberto ({rot_fil}, {jan})",
+         "tabela": f"SE2{s}", "limite": 600, "detalhe": True, "sqls": [cp_lista(fo) for fo in fos]},
+    ]
+
+
+def _com_indicadores(blocos, hoje, customer=None, params=None):
+    """Indicadores do grupo Compras. Cinza = bloco não lido (não piora)."""
+    out, G = [], "compras"
+    cfg = _com_cfg(customer, params)
+    if not cfg["filiais"]:
+        return [_integ_ind("com_unidade", G, "Unidade implantada", None, "cinza",
+                           "Cliente sem unidade definida em COM_IMPLANTACAO: o grupo não lê a base.")]
+    lin = lambda k: (blocos.get(k) or {}).get("linhas") if (blocos.get(k) or {}).get("ok") else None
+
+    # 1. Pedidos aguardando aprovação (workflow de alçadas)
+    pc = lin("com_pc_resumo")
+    rot = "Pedidos aguardando aprovação"
+    if pc is None:
+        out.append(_integ_bloco_falhou(blocos.get("com_pc_resumo"), "com_pc_aprovacao", G, rot))
+    else:
+        bl = [x for x in pc if (x.get("APROVACAO") or "").strip() == "B"]
+        n = sum(_integ_int(x.get("PEDIDOS")) for x in bl)
+        velhos = sum(_integ_int(x.get("PEDIDOS_ANTIGOS")) for x in bl)
+        saldo = sum(_com_num(x.get("SALDO")) for x in bl)
+        if not n:
+            nivel, txt = "verde", "Nenhum pedido em aberto parado na alçada."
+        else:
+            dias = [d for d in (_integ_data(x.get("MAIS_ANTIGO")) for x in bl) if d]
+            nivel = "vermelho" if velhos else "amarelo"
+            txt = (f"{_com_brl(saldo)} em aprovação. {velhos} pedido(s) emitido(s) há mais de "
+                   f"{COM_APROV_DIAS} dias; o mais antigo é de {_integ_ddmm(min(dias) if dias else None)}. "
+                   f"Aprovadores pendentes na lista abaixo.")
+        out.append(_integ_ind("com_pc_aprovacao", G, rot, n, nivel, txt))
+
+        # 2. Pedidos em aberto (retrato)
+        rot = "Pedidos em aberto"
+        n = sum(_integ_int(x.get("PEDIDOS")) for x in pc)
+        saldo = sum(_com_num(x.get("SALDO")) for x in pc)
+        rej = sum(_integ_int(x.get("PEDIDOS")) for x in pc if (x.get("APROVACAO") or "").strip() == "R")
+        parc = sum(_integ_int(x.get("PARCIAIS")) for x in pc)
+        pre = sum(_integ_int(x.get("EM_PRENOTA")) for x in pc)
+        antes = sum(_integ_int(x.get("ANTES_INICIO")) for x in pc)
+        txt = (f"{_com_brl(saldo)} a receber. {parc} item(ns) atendido(s) em parte, {pre} em pré-nota"
+               + (f", {rej} pedido(s) rejeitado(s)" if rej else "")
+               + (f". {antes} item(ns) emitido(s) antes da virada da unidade" if antes else "") + ".")
+        out.append(_integ_ind("com_pc_abertos", G, rot, n, "info", txt))
+
+        # 3. Entrega vencida (pedido liberado, data de entrega passada, saldo)
+        rot = "Itens com entrega vencida"
+        lib = [x for x in pc if (x.get("APROVACAO") or "").strip() not in ("B", "R")]
+        n = sum(_integ_int(x.get("ENTREGA_VENCIDA")) for x in lib)
+        out.append(_integ_ind("com_pc_entrega", G, rot, n, "amarelo" if n else "verde",
+                              "Itens de pedido liberado com a data de entrega (C7_DATPRF) vencida e saldo a receber: "
+                              "nota que não chegou ou pedido a eliminar por resíduo." if n else
+                              "Nenhum item liberado com entrega vencida."))
+
+    # 4–7. Documentos de entrada
+    dc = lin("com_doc_resumo")
+    if dc is None:
+        b = blocos.get("com_doc_resumo")
+        for ch, rot in (("com_doc_transmite", "Entradas pelo Transmite"), ("com_doc_sem_pc", "Notas sem pedido de compra"),
+                        ("com_doc_prenota", "Pré-notas sem classificar"), ("com_doc_sem_titulo", "Classificadas sem título")):
+            out.append(_integ_bloco_falhou(b, ch, G, rot))
+    else:
+        normal = [x for x in dc if (x.get("TIPO") or "").strip() in ("N", "")]
+        tot = sum(_integ_int(x.get("QTD")) for x in normal)
+        tra = sum(_integ_int(x.get("QTD")) for x in normal if x.get("ORIGEM") == "T")
+        man = tot - tra
+        v_man = sum(_com_num(x.get("VALOR")) for x in normal if x.get("ORIGEM") != "T")
+        if not tot:
+            nivel, txt = "cinza", "Nenhuma nota normal digitada na janela."
+        elif man:
+            nivel = "amarelo"
+            txt = (f"{man} nota(s) normal(is) lançada(s) sem passar pelo Monitor do Importador "
+                   f"({_com_brl(v_man)}). Confirmar se é exceção aceita (nota sem XML).")
+        else:
+            nivel, txt = "verde", "Todas as notas normais vieram pelo Importador XML (Transmite)."
+        out.append(_integ_ind("com_doc_transmite", G, "Entradas pelo Transmite", f"{tra}/{tot}", nivel, txt))
+
+        sem = [x for x in normal if x.get("PC") in ("SEM", "PARCIAL")]
+        n = sum(_integ_int(x.get("QTD")) for x in sem)
+        n_t = sum(_integ_int(x.get("QTD")) for x in sem if x.get("ORIGEM") == "T")
+        n_p = sum(_integ_int(x.get("QTD")) for x in sem if x.get("PC") == "PARCIAL")
+        out.append(_integ_ind("com_doc_sem_pc", G, "Notas sem pedido de compra", n, "amarelo" if n else "verde",
+                              (f"{n_t} veio(ram) pelo Transmite sem amarração (A140IVPED não achou pedido: saldo, "
+                               f"fornecedor × produto) e {n - n_t} lançada(s) à mão. {n_p} com pedido só em parte "
+                               f"dos itens.") if n else "Todas as notas normais têm pedido em todos os itens."))
+
+        pre = [x for x in dc if x.get("STATUS") == "P"]
+        n = sum(_integ_int(x.get("QTD")) for x in pre)
+        dias = [d for d in (_integ_data(x.get("MAIS_ANTIGA")) for x in pre) if d]
+        antiga = min(dias) if dias else None
+        idade = (hoje - antiga).days if antiga else 0
+        out.append(_integ_ind("com_doc_prenota", G, "Pré-notas sem classificar", n,
+                              "amarelo" if n and idade > COM_PRENOTA_DIAS else "verde",
+                              f"A mais antiga foi digitada em {_integ_ddmm(antiga)} ({idade} dia(s))."
+                              if n else "Nenhuma pré-nota pendente na janela."))
+
+        n = sum(_integ_int(x.get("SEM_TITULO")) for x in dc)
+        out.append(_integ_ind("com_doc_sem_titulo", G, "Classificadas sem título", n, "vermelho" if n else "verde",
+                              "Nota classificada com duplicata (F1_DUPL) e nenhum título na SE2: conferir TES, "
+                              "condição de pagamento e o contas a pagar." if n else
+                              "Toda nota classificada com duplicata tem título no contas a pagar."))
+
+    # 8. XML no Monitor sem documento
+    mn = lin("com_mon_resumo")
+    rot = "XML no Monitor sem documento"
+    if mn is None:
+        out.append(_integ_bloco_falhou(blocos.get("com_mon_resumo"), "com_monitor", G, rot))
+    else:
+        q = {(x.get("STATUS") or "-").strip(): _integ_int(x.get("QTD")) for x in mn}
+        n = sum(q.values())
+        ja = sum(_integ_int(x.get("JA_SF1")) for x in mn)
+        oco, rev = q.get("E", 0), q.get("B", 0)
+        nivel = "vermelho" if oco else "amarelo" if n else "verde"
+        txt = (f"{oco} com ocorrência (E), {rev} em revisão cadastral (B), {n - oco - rev} pendente(s)"
+               + (f"; {ja} já lançado(s) na SF1 por fora do Monitor" if ja else "") + ".") if n else \
+            "Todo XML do Monitor virou documento."
+        out.append(_integ_ind("com_monitor", G, rot, n, nivel, txt))
+
+    # 9–10. Contas a pagar
+    cp = lin("com_cp_resumo")
+    if cp is None:
+        b = blocos.get("com_cp_resumo")
+        out.append(_integ_bloco_falhou(b, "com_cp_origem", G, "Títulos por origem"))
+        out.append(_integ_bloco_falhou(b, "com_cp_vencidos", G, "Vencidos em aberto"))
+    else:
+        por = {}
+        for x in cp:
+            c = por.setdefault(x.get("CLASSE") or "FINANCEIRO", [0, 0.0])
+            c[0] += _integ_int(x.get("QTD"))
+            c[1] += _com_num(x.get("VALOR"))
+        n = sum(v[0] for v in por.values())
+        txt = " · ".join(f"{COM_CLASSES[k]} {por[k][0]} ({_com_brl(por[k][1])})" for k in COM_CLASSES if k in por)
+        fin = por.get("FINANCEIRO", [0, 0])[0]
+        out.append(_integ_ind("com_cp_origem", G, "Títulos por origem", n, "info",
+                              (txt or "Nenhum título na janela.")
+                              + (f". {fin} lançado(s) direto no Financeiro: confirmar que são despesas fora "
+                                 f"do fluxo de compras." if fin else "")))
+        nv = sum(_integ_int(x.get("VENCIDOS")) for x in cp)
+        sv = sum(_com_num(x.get("SALDO_VENCIDO")) for x in cp)
+        out.append(_integ_ind("com_cp_vencidos", G, "Vencidos em aberto", nv, "amarelo" if nv else "verde",
+                              f"{_com_brl(sv)} vencido(s) e não baixado(s)." if nv else
+                              "Nenhum título da janela vencido em aberto."))
+    return out
+
+
 def _integ_health(cfg, customer, amb, timeout):
     """GET <raiz REST>/api/rh/v1/integrationcheck/healthcheck com o Basic do
     ⚙ Ambiente. A raiz sai da URL do TSCMONITREST (…/rest/tscmonit → …/rest).
@@ -11861,7 +12222,8 @@ def api_integracoes_scripts(customer):
                                                       _integ_desde(cfg.get("integ_desde")),
                                                       cfg.get("banco"), grupos,
                                                       datetime.now(TZ_SP),
-                                                      cfg.get("integ_params") or {})]})
+                                                      cfg.get("integ_params") or {},
+                                                      customer)]})
 
 
 @app.post("/api/integracoes/<customer>/coletar")
@@ -11902,7 +12264,8 @@ def api_integracoes_coletar(customer):
     desde = _integ_desde(cfg.get("integ_desde"))
     grupos = _integ_grupos(cfg.get("integ_grupos"))
     params = cfg.get("integ_params") or {}
-    scripts = _integ_scripts(suf, hoje, desde, cfg.get("banco"), grupos, datetime.now(TZ_SP), params)
+    scripts = _integ_scripts(suf, hoje, desde, cfg.get("banco"), grupos, datetime.now(TZ_SP), params,
+                             customer)
     # Ordem: resumos → healthcheck → detalhes. Se o tempo acabar, falta a
     # lista, não o número.
     resumos = [s for s in scripts if not s.get("detalhe")]
@@ -12002,12 +12365,16 @@ def api_integracoes_coletar(customer):
         bt["resumo"] = _tra_erros_resumo(blocos)
     _crm_anota_causas(blocos.get("crm_pendentes_lista"))
     _eai_anota_tipos(blocos, hoje, datetime.now(TZ_SP))
-    inds = _integ_indicadores(blocos, health, hoje, grupos, datetime.now(TZ_SP), params)
+    inds = _integ_indicadores(blocos, health, hoje, grupos, datetime.now(TZ_SP), params, customer)
     nivel = _integ_pior(i["nivel"] for i in inds)
     # O corte usado fica GRAVADO com a coleta: trocar o corte depois não pode
     # fazer um número antigo parecer medido com a regra nova.
     blocos["_meta"] = {"desde": desde.isoformat() if desde else None, "grupos": list(grupos),
                        "tra_prazo": _tra_prazos(params)[0]}
+    if "compras" in grupos:
+        cc = _com_cfg(customer, params)
+        blocos["_meta"]["com_filiais"] = list(cc["filiais"])
+        blocos["_meta"]["com_inicio"] = cc["inicio"].isoformat() if cc["inicio"] else None
     duracao = int((time.time() - ini) * 1000)
     q("""insert into cockpit.integ_medicoes
            (customer, ambiente, duracao_ms, nivel, indicadores, blocos, health,

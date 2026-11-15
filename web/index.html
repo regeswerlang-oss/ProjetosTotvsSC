@@ -1242,6 +1242,7 @@
               <label class="flex items-center gap-1 text-slate-700"><input type="checkbox" data-int-grupo="transmite"> TOTVS Transmite</label>
               <label class="flex items-center gap-1 text-slate-700" title="Propostas do TOTVS CRM via iPaaS → Painel de Projetos → contrato → medição, e os cadastros que sobem ao CRM"><input type="checkbox" data-int-grupo="crm"> CRM × iPaaS</label>
               <label class="flex items-center gap-1 text-slate-700" title="Mensagem Única do EAI (adapters XX4, fila XX3, de-para XXF) e os agendamentos do Schedule (XX1, SCHDTSK)"><input type="checkbox" data-int-grupo="eai"> EAI × Schedule</label>
+              <label class="flex items-center gap-1 text-slate-700" title="Unidade implantada: pedidos em aberto e alçadas (SC7/SCR), notas pelo Transmite ou à mão, com ou sem pedido (SF1/SD1/SDS) e o contas a pagar (SE2)"><input type="checkbox" data-int-grupo="compras"> Compras × CP</label>
             </span>
             <button id="int-coletar-topo" class="px-3 py-1.5 rounded-md bg-totvs-blue text-totvs-petroleo font-semibold hover:bg-totvs-verde disabled:opacity-50">⚡ Coletar agora</button>
             <button id="int-coletar-duas" class="hidden px-3 py-1.5 rounded-md border border-totvs-blue text-totvs-petroleo font-semibold hover:bg-sky-50 disabled:opacity-50" title="Coleta na Base Produção e na Base de Testes, uma depois da outra">⚡ Produção + Teste</button>
@@ -14064,7 +14065,7 @@ $('#btn-acessos').addEventListener('click', abreAcessos);
 // ============================================================================
 const integ = { customer: null, ambiente: 'producao', dados: null, carregando: false,
                 coletando: false, erro: null, erroColeta: null,
-                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai']),
+                abertas: new Set(['quirons', 'ahgora', 'esocial', 'transmite', 'crm', 'eai', 'compras']),
                 duas: null, eaiTipos: new Set(), semMon: { filial: '', especie: '', natureza: '' }, subAbertas: new Set(), ord: {} };
 
 // Cor de STATUS sempre com ícone + rótulo: nunca só a cor.
@@ -14084,10 +14085,11 @@ const INT_GRUPOS = [
   { id: 'transmite', rot: 'TOTVS Transmite', sub: 'XML de entrada · Importador (COMXCOL / IMPTRATOOL) · CKOCOL, SDS e SF1' },
   { id: 'crm', rot: 'CRM × iPaaS · Painel de Projetos', sub: 'propostas do CRM (ZA3) → projetos (ZA0) → contrato (CN9) → medição (CND) · produtos e tabelas de preço para o CRM' },
   { id: 'eai', rot: 'EAI Protheus × Schedule', sub: 'Mensagem Única · adapters (XX4) → fila (XX3) → retorno e de-para (XXF) · agendamentos (XX1, SCHDTSK)' },
+  { id: 'compras', rot: 'Compras × Transmite × Contas a Pagar', sub: 'unidade implantada · pedido e alçada (SC7, SCR) → Monitor (SDS) → documento (SF1, SD1) → título (SE2)' },
 ];
 const INT_GRUPO = (id) => INT_GRUPOS.find(g => g.id === id);
 // Grupos da base (⚙ protheus_ambientes.integ_grupos). Nulo = só RH.
-const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'], crm: ['crm'], eai: ['eai'] };
+const INT_GRUPOS_BASE = { rh: ['quirons', 'ahgora', 'esocial'], transmite: ['transmite'], crm: ['crm'], eai: ['eai'], compras: ['compras'] };
 // Grupos que comparam Produção × Teste e ganham o botão "⚡ Produção + Teste".
 const INT_GRUPOS_DUAS = ['crm', 'eai'];
 // CRM × iPaaS (Dígitro): domínios da especificação do Painel (§10.4, §4.2) e do SIGAGCT.
@@ -14224,6 +14226,9 @@ const INT_HIST = [
   ['crm_contratos', 'CRM contratos'], ['crm_medicoes', 'CRM medidos'], ['crm_cad_produtos', 'Prod. c/ preço'],
   ['eai_sem_retorno', 'EAI sem retorno'], ['eai_falhas', 'EAI falhas'], ['eai_depara', 'EAI de-para'],
   ['eai_agendamentos', 'Agend. parados'],
+  ['com_pc_aprovacao', 'PC em aprovação'], ['com_pc_entrega', 'PC entrega venc.'], ['com_doc_sem_pc', 'NF sem PC'],
+  ['com_doc_prenota', 'Pré-notas'], ['com_doc_sem_titulo', 'NF sem título'], ['com_monitor', 'XML s/ documento'],
+  ['com_cp_vencidos', 'CP vencidos'],
 ];
 
 const intData = (s) => {
@@ -14270,7 +14275,8 @@ async function coletaIntegracoes() {
   const oque = [g.includes('rh') ? 'filas de RH + healthcheck da Quírons' : '',
                 g.includes('transmite') ? 'TOTVS Transmite (CKOCOL, SDS, SF1)' : '',
                 g.includes('crm') ? 'CRM × iPaaS (ZA3, ZA0, CN9, CND, SB1, DA0/DA1)' : '',
-                g.includes('eai') ? 'EAI × Schedule (XX3, XX4, XXF, XX1, SCHDTSK)' : ''].filter(Boolean).join(' e ');
+                g.includes('eai') ? 'EAI × Schedule (XX3, XX4, XXF, XX1, SCHDTSK)' : '',
+                g.includes('compras') ? 'Compras × Contas a Pagar da unidade implantada (SC7, SCR, SF1, SD1, SDS, SE2)' : ''].filter(Boolean).join(' e ');
   if (!confirm(`Coletar agora na ${base}?\n\nConsultas só de leitura pela REST da base ` +
                `(TSCMONITREST): ${oque}. Cada chamada usa licença no REST.`)) return;
   integ.coletando = true; integ.erroColeta = null; renderIntegracoes();
@@ -14413,6 +14419,11 @@ const INT_DETALHE = {
   eai_canal: 'Fila por mensagem, status e canal (XX3)', eai_cobertura: 'Por tipo de informação',
   eai_depara: 'De-para gravado (XXF)', eai_agendamentos: 'Agendamentos (XX1 · XX2 · SCHDTSK)',
   eai_jobs: 'Agendamentos (XX1 · XX2 · SCHDTSK)', eai_params: 'Parâmetros do EAI (SX6)',
+  com_pc_aprovacao: 'Alçadas aguardando o aprovador (SCR)', com_pc_abertos: 'Pedidos em aberto por aprovação',
+  com_pc_entrega: 'Itens de pedido em aberto, dos mais antigos', com_doc_transmite: 'Documentos fora do fluxo',
+  com_doc_sem_pc: 'Documentos fora do fluxo', com_doc_prenota: 'Documentos fora do fluxo',
+  com_doc_sem_titulo: 'Documentos fora do fluxo', com_monitor: 'XML no Monitor sem documento',
+  com_cp_origem: 'Contas a pagar por origem do título', com_cp_vencidos: 'Títulos do Financeiro e vencidos em aberto',
 };
 function intIrDetalhe(chave, grupo) {
   const caixa = grupo === 'quirons' && chave === 'quirons_laudo' ? 'config' : grupo;
@@ -14611,6 +14622,7 @@ function renderIntegracoes() {
     if (gU.includes('transmite')) html += intCaixaTransmite(B, d.hoje, nivelGrupo('transmite'));
     if (gU.includes('crm')) html += intCaixaCrm(B, d, nivelGrupo('crm'));
     if (gU.includes('eai')) html += intCaixaEai(B, d, nivelGrupo('eai'));
+    if (gU.includes('compras')) html += intCaixaCompras(B, d, nivelGrupo('compras'));
   }
   const serie = (d.serie || []).slice().reverse();
   if (serie.length || (d.coletas || []).length) {
@@ -15549,6 +15561,117 @@ function intCaixaEai(B, d, nivel) {
        <b>XXF</b> e finaliza. Falha com 4 tentativas só volta pelo “tentar novamente” (SIGACFG › Schedule › EAI). O
        <b>FWEAICLEAR</b> apaga as finalizadas, por isso o painel mede o que ficou aberto e o de-para. A URL do iPaaS (com a
        api-key) e o conteúdo da mensagem não são lidos.</p>`);
+}
+
+// ── Compras × Transmite × Contas a Pagar (15/11/2026) ──────────────────────
+// Unidade implantada (fixa por cliente no back: COM_IMPLANTACAO). Fluxo
+// esperado: pedido liberado → XML pelo Transmite → documento com pedido →
+// título. Mesmas classes de COM_CLASSES (api).
+const INT_COM_CLASSE = { DOC_TRANSMITE: 'Documento · Transmite', DOC_MANUAL: 'Documento · manual',
+                         DOC_IMPOSTOS: 'Impostos do documento', FINANCEIRO: 'Lançado no Financeiro' };
+const INT_COM_APROV = { B: 'Aguardando aprovação', R: 'Rejeitado', L: 'Liberado' };
+const INT_COM_ORIGEM = { T: 'Transmite (Monitor)', M: 'Manual (fora do Monitor)' };
+const INT_COM_PC = { COM: 'Com pedido', PARCIAL: 'Pedido em parte', SEM: 'Sem pedido' };
+const INT_COM_ST_F1 = { P: 'Pré-nota', A: 'Classificada', B: 'Bloqueada' };
+const INT_COM_ST_DS = { E: 'Ocorrência (E)', B: 'Revisão cadastral (B)', '-': 'Pendente' };
+const intComTag = (txt, tom) => `<span class="inline-block px-1.5 py-0.5 rounded text-[11px] font-semibold ${
+  tom === 'err' ? 'bg-rose-100 text-rose-800' : tom === 'warn' ? 'bg-amber-100 text-amber-900'
+  : tom === 'ok' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'}">${escapeHtml(txt)}</span>`;
+const intComAprov = (v) => { const k = String(v || '').trim();
+  return intComTag(INT_COM_APROV[k] || (k ? k : 'Liberado'), k === 'B' ? 'warn' : k === 'R' ? 'err' : 'ok'); };
+function intComMotivos(l) {
+  const m = [];
+  if (l.ORIGEM === 'M') m.push(intComTag('Fora do Monitor', 'warn'));
+  if (l.PC === 'SEM') m.push(intComTag('Sem pedido', 'warn'));
+  if (l.PC === 'PARCIAL') m.push(intComTag('Pedido em parte', 'warn'));
+  if (l.STATUS === 'P') m.push(intComTag('Pré-nota', 'warn'));
+  if (String(l.SEM_TITULO) === '1') m.push(intComTag('Sem título', 'err'));
+  return m.join(' ') || '—';
+}
+function intCaixaCompras(B, d, nivel) {
+  const g = INT_GRUPO('compras');
+  const meta = d.ultima?.blocos?._meta || {};
+  const fil = (meta.com_filiais || []).join(', ') || '—';
+  const ini = meta.com_inicio ? intData(meta.com_inicio.replace(/-/g, '')) : '—';
+  const hoje = String(d.hoje || '').replace(/-/g, '');
+  const sub = `Unidade ${fil} · em produção desde ${ini} · ${g.sub}`;
+  return intCaixa('compras', 'Compras × Transmite × Contas a Pagar — o fluxo da unidade', sub, nivel, () =>
+    `<h4 class="text-xs font-semibold text-totvs-petroleo uppercase tracking-wide mb-2">Compras</h4>` +
+    intSub('Pedidos em aberto por aprovação', B.com_pc_resumo, (ls) => intTabela([
+      { rot: 'Aprovação', fmt: l => intComAprov(l.APROVACAO) },
+      { k: 'PEDIDOS', rot: 'Pedidos', dir: 1 }, { k: 'ITENS', rot: 'Itens', dir: 1 },
+      { rot: 'Saldo a receber', dir: 1, fmt: l => intValor(l.SALDO) },
+      { k: 'PEDIDOS_ANTIGOS', rot: 'Pedidos há +5 dias', dir: 1 },
+      { k: 'ENTREGA_VENCIDA', rot: 'Itens c/ entrega vencida', dir: 1 },
+      { k: 'PARCIAIS', rot: 'Atendidos em parte', dir: 1 }, { k: 'EM_PRENOTA', rot: 'Em pré-nota', dir: 1 },
+      { rot: 'Mais antigo', fmt: l => intData(l.MAIS_ANTIGO) }], ls, 'Nenhum pedido em aberto na unidade.')) +
+    intSub('Alçadas aguardando o aprovador (SCR)', B.com_pc_aprov, (ls) => intTabela([
+      { k: 'PEDIDO', rot: 'Pedido' }, { k: 'TIPO', rot: 'Tipo' }, { k: 'NIVEL', rot: 'Nível' },
+      { rot: 'Aprovador', fmt: l => escapeHtml(l.NOME ? `${l.NOME} (${l.APROVADOR})` : (l.APROVADOR || '')) },
+      { rot: 'Desde', fmt: l => intData(l.EMISSAO) },
+      { rot: 'Dias', dir: 1, fmt: l => { const t = String(l.EMISSAO || '');
+          if (!/^\d{8}$/.test(t) || !/^\d{8}$/.test(hoje)) return '—';
+          const dd = Math.round((Date.UTC(+hoje.slice(0,4), +hoje.slice(4,6)-1, +hoje.slice(6,8)) - Date.UTC(+t.slice(0,4), +t.slice(4,6)-1, +t.slice(6,8))) / 864e5);
+          return String(dd); } },
+      { rot: 'Valor', dir: 1, fmt: l => intValor(l.VALOR) }], ls, 'Nenhuma alçada esperando aprovador.')) +
+    intSub('Itens de pedido em aberto, dos mais antigos', B.com_pc_lista, (ls) => intTabela([
+      { k: 'PEDIDO', rot: 'Pedido', ord: 'PEDIDO' }, { k: 'ITEM', rot: 'Item' },
+      { rot: 'Emissão', fmt: l => intData(l.EMISSAO) }, { rot: 'Entrega', fmt: l => intData(l.ENTREGA) },
+      { rot: 'Fornecedor', fmt: l => escapeHtml(`${l.FORNECEDOR || ''}/${l.LOJA || ''} ${l.NOME || ''}`) },
+      { rot: 'Produto', fmt: l => escapeHtml(`${l.PRODUTO || ''} · ${l.DESCRICAO || ''}`) },
+      { rot: 'Saldo', dir: 1, ord: 'SALDO', fmt: l => intValor(l.SALDO) },
+      { rot: 'Aprovação', fmt: l => intComAprov(l.APROVACAO) },
+      { rot: 'Situação', fmt: l => {
+          const a = String(l.APROVACAO || '').trim(), m = [];
+          if (!['B', 'R'].includes(a) && /^\d{8}$/.test(String(l.ENTREGA || '')) && String(l.ENTREGA) < hoje) m.push(intComTag('Entrega vencida', 'warn'));
+          if (+l.QUJE > 0) m.push(intComTag('Atendido em parte'));
+          if (+l.EM_PRENOTA > 0) m.push(intComTag('Em pré-nota'));
+          return m.join(' ') || '—'; } },
+      { k: 'SC', rot: 'SC' }, { k: 'CC', rot: 'C. custo' }], ls, 'Nenhum item em aberto.', { ordId: 'com_pc' })) +
+    `<h4 class="text-xs font-semibold text-totvs-petroleo uppercase tracking-wide mt-4 mb-2 border-t border-slate-100 pt-3">Documento de entrada</h4>` +
+    intSub('Documentos por origem e pedido', B.com_doc_resumo, (ls) => intTabela([
+      { rot: 'Origem', fmt: l => intComTag(INT_COM_ORIGEM[l.ORIGEM] || l.ORIGEM, l.ORIGEM === 'T' ? 'ok' : 'warn') },
+      { rot: 'Tipo NF', fmt: l => escapeHtml(INT_TRA_TIPO_NF[String(l.TIPO || '').trim()] || l.TIPO || '') },
+      { rot: 'Pedido de compra', fmt: l => intComTag(INT_COM_PC[l.PC] || l.PC, l.PC === 'COM' ? 'ok' : 'warn') },
+      { rot: 'Status', fmt: l => escapeHtml(INT_COM_ST_F1[l.STATUS] || l.STATUS || '') },
+      { k: 'QTD', rot: 'Notas', dir: 1 }, { rot: 'Valor', dir: 1, fmt: l => intValor(l.VALOR) },
+      { k: 'SEM_TITULO', rot: 'Sem título', dir: 1 }, { rot: 'Mais antiga', fmt: l => intData(l.MAIS_ANTIGA) }],
+      ls, 'Nenhuma nota digitada na janela.')) +
+    intSub('Documentos fora do fluxo', B.com_doc_lista, (ls) => intTabela([
+      { rot: 'Digitação', fmt: l => intData(l.DIGIT) }, { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC || ''}/${String(l.SERIE || '').trim()}`) },
+      { k: 'ESPECIE', rot: 'Espécie' },
+      { rot: 'Fornecedor', fmt: l => escapeHtml(`${l.FORNECEDOR || ''}/${l.LOJA || ''} ${l.NOME || ''}`) },
+      { rot: 'Valor', dir: 1, fmt: l => intValor(l.VALOR) },
+      { rot: 'Origem', fmt: l => escapeHtml(INT_COM_ORIGEM[l.ORIGEM] || l.ORIGEM || '') },
+      { rot: 'Pedido', fmt: l => escapeHtml(l.PEDIDO || '—') }, { rot: 'Por que está aqui', fmt: intComMotivos }],
+      ls, 'Todas as notas da janela seguiram o fluxo.')) +
+    intSub('XML no Monitor sem documento', B.com_mon_lista, (ls) => intTabela([
+      { rot: 'Documento', fmt: l => escapeHtml(`${l.DOC || ''}/${String(l.SERIE || '').trim()}`) },
+      ...(ls.some(l => 'EMISSAO' in l) ? [{ rot: 'Emissão', fmt: l => intData(l.EMISSAO) }] : []),
+      { rot: 'Fornecedor', fmt: l => escapeHtml(`${l.FORNECEDOR || ''}/${l.LOJA || ''} ${l.NOME || ''}`) },
+      { rot: 'Status no Monitor', fmt: l => intComTag(INT_COM_ST_DS[l.STATUS] || l.STATUS, l.STATUS === 'E' ? 'err' : 'warn') },
+      { rot: 'Já na SF1', fmt: l => String(l.JA_SF1) === '1' ? intComTag('Sim — lançada por fora', 'warn') : 'Não' }],
+      ls, 'Todo XML do Monitor virou documento.')) +
+    `<h4 class="text-xs font-semibold text-totvs-petroleo uppercase tracking-wide mt-4 mb-2 border-t border-slate-100 pt-3">Contas a pagar</h4>` +
+    intSub('Contas a pagar por origem do título', B.com_cp_resumo, (ls) => intTabela([
+      { rot: 'Origem do título', fmt: l => escapeHtml(INT_COM_CLASSE[l.CLASSE] || l.CLASSE || '') },
+      { k: 'ORIGEM', rot: 'E2_ORIGEM' }, { k: 'QTD', rot: 'Títulos', dir: 1 },
+      { rot: 'Valor', dir: 1, fmt: l => intValor(l.VALOR) }, { rot: 'Saldo', dir: 1, fmt: l => intValor(l.SALDO) },
+      { k: 'VENCIDOS', rot: 'Vencidos em aberto', dir: 1 }, { rot: 'Saldo vencido', dir: 1, fmt: l => intValor(l.SALDO_VENCIDO) }],
+      ls, 'Nenhum título na janela.')) +
+    intSub('Títulos do Financeiro e vencidos em aberto', B.com_cp_lista, (ls) => intTabela([
+      { rot: 'Vencimento', fmt: l => intData(l.VENCIMENTO) },
+      { rot: 'Título', fmt: l => escapeHtml(`${String(l.PREFIXO || '').trim()} ${l.NUMERO || ''} ${String(l.PARCELA || '').trim()} ${String(l.TIPO || '').trim()}`) },
+      { rot: 'Fornecedor', fmt: l => escapeHtml(`${l.FORNECEDOR || ''}/${l.LOJA || ''} ${l.NOME || ''}`) },
+      { rot: 'Valor', dir: 1, fmt: l => intValor(l.VALOR) }, { rot: 'Saldo', dir: 1, fmt: l => intValor(l.SALDO) },
+      { rot: 'Origem', fmt: l => escapeHtml(INT_COM_CLASSE[l.CLASSE] || l.CLASSE || '') },
+      { k: 'NATUREZA', rot: 'Natureza' },
+      { rot: 'Situação', fmt: l => String(l.VENCIDO) === '1' ? intComTag('Vencido em aberto', 'warn') : '—' }],
+      ls, 'Nenhum título do Financeiro nem vencido na janela.')) +
+    `<p class="text-xs text-slate-500">Origem <b>Transmite</b> = nota com registro no Monitor do Importador XML (SDS,
+       mesma chave que o SCHEDUPDTRA usa). <b>Pedido</b> = itens da SD1 com D1_PEDIDO. <b>Título de documento</b> =
+       E2_ORIGEM MATA10x que casa com a nota (prefixo, duplicata, fornecedor, loja). Aprovação por C7_CONAPRO; aprovador
+       pendente = SCR com CR_STATUS 02. A unidade é a que entrou em produção — não é parâmetro de tela.</p>`);
 }
 
 /** ⚡ Produção + Teste: coleta nas duas bases, uma depois da outra. Liga na
